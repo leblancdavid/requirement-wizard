@@ -30,7 +30,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 70;
+export const databaseSchemaVersion = 72;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -377,6 +377,30 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader boundary only: preserve original layouts, receipts, drafts and spend.
   // New schedules co-locate explicit question/answer units. Explicit continuation
   // may supplement one frozen blocked verification step without replaying reads.
+} }, { version: 71, name: "pending-question-discovery-and-source-digests", apply(db: Database.Database) {
+  // Lazy exact-byte digests, transactionally invalidated even by non-app SQL.
+  // No historical payload rewrite, eager full-history read or paid-work adoption.
+  db.exec(`CREATE TABLE IF NOT EXISTS portable_source_digests (
+    project_id TEXT NOT NULL, revision INTEGER NOT NULL, digest TEXT NOT NULL,
+    PRIMARY KEY(project_id, revision), FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE TRIGGER IF NOT EXISTS portable_source_digest_insert AFTER INSERT ON revisions BEGIN
+    DELETE FROM portable_source_digests WHERE project_id = NEW.project_id AND revision = NEW.revision;
+  END;
+  CREATE TRIGGER IF NOT EXISTS portable_source_digest_update AFTER UPDATE ON revisions BEGIN
+    DELETE FROM portable_source_digests WHERE (project_id = OLD.project_id AND revision = OLD.revision)
+      OR (project_id = NEW.project_id AND revision = NEW.revision);
+  END;
+  CREATE TRIGGER IF NOT EXISTS portable_source_digest_delete AFTER DELETE ON revisions BEGIN
+    DELETE FROM portable_source_digests WHERE project_id = OLD.project_id AND revision = OLD.revision;
+  END;`);
+} }, { version: 72, name: "background-workspace-publication-generation", apply(db: Database.Database) {
+  if (!(db.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[]).some(column => column.name === "publication_version"))
+    db.exec("ALTER TABLE workspaces ADD COLUMN publication_version INTEGER NOT NULL DEFAULT 0");
+  db.exec(`CREATE TRIGGER IF NOT EXISTS workspace_publication_dirty_generation AFTER UPDATE OF dirty ON workspaces
+    WHEN NEW.dirty = 1 BEGIN
+      UPDATE workspaces SET publication_version = publication_version + 1 WHERE project_id = NEW.project_id;
+    END;`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -425,7 +449,8 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       THEN json_extract(payload, '$.retrievalWork.epicStages') END AS work FROM jobs
       WHERE json_type(payload, '$.retrievalWork.epicStages.completionPolicy') IS NOT NULL
         OR json_type(payload, '$.retrievalWork.epicStages.emptyCompletion') IS NOT NULL
-        OR json_type(payload, '$.retrievalWork.epicStages.linkedEvidence') IS NOT NULL`).iterate() as Iterable<{ work: string | null }>) {
+        OR json_type(payload, '$.retrievalWork.epicStages.linkedEvidence') IS NOT NULL
+        OR json_type(payload, '$.retrievalWork.epicStages.citationCorrections') IS NOT NULL`).iterate() as Iterable<{ work: string | null }>) {
       if (!row.work) throw new Error("Unsupported empty-proposal checkpoint. Saved work was not overwritten.");
       epicStagesSchema.parse(JSON.parse(row.work));
     }

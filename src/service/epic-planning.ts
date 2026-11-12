@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { createHash } from "node:crypto";
+import { digestJSONArray } from "../core/json-digest.js";
 import type { Project, Job, Submission } from "../core/model.js";
 import type { planEpicReview } from "../core/epic-review.js";
 import { ContextBudgetError } from "../core/context.js";
@@ -12,12 +12,15 @@ import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
  * Keep revision width: changing encoded size can change a boundary partition.
  * This is NOT a semantic/model/checkpoint identity and never changes saved calls. */
 export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[]) {
-  return createHash("sha256").update(JSON.stringify(["resolved-prefix-v4", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
+  return digestJSONArray(["resolved-prefix-v6", epicPlanningProjectKey(project), planningJobs(jobs), focusEpicID, submissions]);
+}
+function planningJobs(jobs: Job[]): Job[] {
+  return jobs.map(({ discoveryMetrics: _metrics, telemetry: _telemetry, researchEvidence: _research, sessionID: _session, ...job }) => job);
 }
 /** Packing reads only the project/review, not mutable worker receipts. Inner
  * computation keys still bind the exact review, policy and algorithm inputs. */
 export function epicPlanningContextInputKey(project: Project) {
-  return createHash("sha256").update(JSON.stringify(["context-computation-generation-v1", epicPlanningProjectKey(project)])).digest("hex");
+  return digestJSONArray(["context-computation-generation-v1", epicPlanningProjectKey(project)]);
 }
 
 export type EpicPlan = Omit<ReturnType<typeof planEpicReview>, "tasks">;
@@ -45,12 +48,14 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   const contextInputKey = epicPlanningContextInputKey(project);
   // Lazy adoption of the previous exact-input cache only when its original full
   // inputs still match. These are disposable CPU receipts, never model evidence.
-  const legacyKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v1", project, jobs, focusEpicID, submissions])).digest("hex");
-  const previousKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
-  const v3Key = createHash("sha256").update(JSON.stringify(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
+  const legacyKey = digestJSONArray(["resolved-prefix-v1", project, jobs, focusEpicID, submissions]);
+  const previousKey = digestJSONArray(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
+  const v3Key = digestJSONArray(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
+  const v4Key = digestJSONArray(["resolved-prefix-v4", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
+  const v5Key = digestJSONArray(["resolved-prefix-v5", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
   const resolved = options.loadReceipts?.(inputKey) ?? new Map<string, EpicPlanningCheckpoint>();
   const contexts = options.loadContexts?.(contextInputKey) ?? new Map<string, EpicContextCheckpoint>();
-  for (const generation of [v3Key, previousKey, legacyKey]) {
+  for (const generation of [v5Key, v4Key, v3Key, previousKey, legacyKey]) {
     if (resolved.size) break;
     for (const [key, value] of options.loadReceipts?.(generation) ?? []) {
       if (value.tasks.some(task => task.state !== "reviewed")) continue;
@@ -58,7 +63,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
       options.saveReceipt?.(inputKey, key, value); resolved.set(key, value);
     }
   }
-  for (const generation of [inputKey, v3Key, previousKey, legacyKey]) {
+  for (const generation of [inputKey, v5Key, v4Key, v3Key, previousKey, legacyKey]) {
     if (contexts.size) break;
     for (const [key, value] of options.loadContexts?.(generation) ?? []) {
       options.signal.throwIfAborted();
@@ -66,7 +71,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     }
   }
   options.signal.throwIfAborted();
-  const data = { project, jobs, focusEpicID, submissions, resolved, contexts };
+  const data = { project, jobs: planningJobs(jobs), focusEpicID, submissions, resolved, contexts };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use
   // emitted JS directly and never depend on the dev-only TypeScript loader.

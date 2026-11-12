@@ -1,5 +1,251 @@
 # Data migrations and upgrade compatibility
 
+## Discovery allocation mitigation and portable-save isolation (2026-11-12)
+
+**Source → target: SQLite 72 → 72; portable formats unchanged; disposable
+resolved-prefix scheduling key v5 → v6.** No original decisions, completed checks,
+paid drafts, attempts, IDs or dated evidence are migrated or reset. This supersedes
+the worker-thread publication design below: file-backed browser/desktop publication
+now uses `workspace-publication-process.ts`, an owned child process with a default
+256 MiB old-space cap and small project-ID/status IPC. It is not merely a larger
+heap limit for the app. Desktop startup also selects background publication before
+opening the store, avoiding a synchronous startup save.
+
+A failed child leaves committed SQLite work intact and marks portable saving
+unavailable. Only that child's owned publication leases are released; peer leases
+are preserved. Bulk flush/shutdown does not automatically retry unavailable/conflict
+folders. Explicit folder sync or reopen plus sync can retry publication without a
+model call. Normal shutdown drains the child. An app crash can still interrupt the
+last unsaved model response; this change cannot reconstruct a response never saved.
+
+Planning/publication project out non-authoritative diagnostic fields in SQLite
+before decoding. Publication transfers private decoded job objects rather than
+cloning their complete retained graphs again; default public serialization still
+protects caller-owned objects. Scheduling v6 ignores metrics, telemetry, research
+attachments and session IDs that the planner does not inspect; dispatch reloads the
+selected original job. Legacy scheduling aliases use exact streamed array hashes
+instead of allocating one archive-sized JSON string. Old disposable CPU receipts
+may miss when their old key included omitted diagnostics; that may recompute local
+planning, never renew or replay paid stages. Paid input/checkpoint identities remain.
+
+Context rows are validated one at a time, including other generations/future-format
+rejection. In-memory context/failure pools are each 8 MiB; candidate render caching
+is also bounded. Ordinary and equivalence historical-project windows retain two
+snapshots each; exact proof memoization avoids repeated lazy history loads after
+eviction. These are disposable computation caches, not evidence truncation. Optional
+numeric planning heap samples are backward-compatible diagnostics, not persisted
+authority or a continuous peak-memory measurement.
+
+Qualification: the supplied fatal V8 log does not establish the crashing isolate or
+the exact root cause. Whole-history strings, duplicate graphs and unbounded caches
+were identified as allocation hazards, not reproduced causes of that exact crash.
+A 16 MiB child-failure regression passes: parent/SQLite decisions and paid jobs
+survive, bulk flush does not retry, and normal-cap reopen plus explicit sync saves.
+That regression establishes containment under a constrained child, not the user's
+original crash reproduction. A forced child-exit test also verifies owned-lease
+cleanup and exact preservation of a peer writer's payload/lease.
+
+The synthetic diagnostic-heavy history regression creates 401 planning jobs with
+about 200 MB of original job payloads, then projects/plans and publishes under a
+64 MiB Node heap cap. Exact artifact-equivalence, default caller-ownership,
+streamed Unicode/undefined/hole hash compatibility, cache eviction, saved-stage
+recovery and future-format rejection tests pass. The emitted child-process smoke
+passes under Node and Electron `ELECTRON_RUN_AS_NODE` (exit 0), and the UI/desktop
+build, type check, diff check, workspace-layout and portable browser checks pass.
+The earlier broad focused run had one outdated cache-count expectation (three
+large entries versus the new one-entry byte bound); the corrected planning suite
+and related snapshot/resume tests pass (55 tests). The final workspace/local-approval/
+diagnostics run passes all 50 tests, including the new capped-history and scoped
+lease-failure checks. The Electron visible-startup/close/relaunch regression also
+passes without inference or changes to saved work. The full test command passed
+2,079 tests (955 pretests, 823 main tests and 301 posttests); the final capped-history
+and forced-child-exit additions also passed in the separate 50-test run above.
+No live subscription calls or full user-project crash
+reproduction have been performed.
+
+## Approval responsiveness, refinement packing and citation correction (2026-11-12)
+
+**Source → target: SQLite 71 → 72; conditional portable 45.** This is the first
+implemented pass of the approval/review/discovery optimization work. Broader
+changed-evidence incremental discovery is still outstanding, not silently enabled.
+
+### Local approval and portable saves
+
+Browser startup enables an owned persistent publication worker for file-backed
+stores. SQLite approval and other project/job transactions remain immediate; their
+portable artifacts can be pending independently. Existing local-approval safety
+checks and the distinction between plain approval and notes requesting AI
+interpretation do not change. In-memory fixtures and standalone terminal stores
+retain synchronous publication; terminal/browser share the same durable data.
+The browser already polls and shows pending, saved, conflict or unavailable folder
+status. A pending portable save is not a reason to invent an AI approval request.
+
+SQLite 72 adds `workspaces.publication_version`, independent of project revision
+and schema version. A transactional trigger increments it for every dirty update,
+including same-revision job changes. The worker acquires the existing scoped lease,
+computes outside the browser event loop, and checks the generation/revision and live
+lease before journalling intended hashes. A generation CAS protects both the journal
+and final saved state. Newer work supersedes an in-flight computation and coalesces
+into a later save, never clearing its pending state. Conflicting edits/unavailable
+folders remain explicit stops; peers' live leases are not stolen or polled in a
+tight retry loop. Existing ownership checks, partial-write journals and portable
+file formats remain. Normal browser shutdown drains the worker; a process crash
+leaves committed SQLite work and a dirty/journalled workspace for later recovery.
+
+Migration 71→72 is ordered/transactional and preserves all original workspace/job/
+revision payloads. An interrupted installation rolls back its column, trigger and
+version; reopening retries safely. Startup neither repeats model calls nor changes
+human authority. Older supported stores migrate forward without a reset. Terminal
+compatibility remains, but live cross-process stress and large-project desktop
+shutdown latency are not yet qualified.
+
+### Refinement packing
+
+Only unstarted refinement/pair schedules now pack measured losslessly encoded
+contexts, with the existing 18,000-character draft reserve, conservative counter
+headroom and 96,000-character ceiling. They no longer partition first at 36k raw
+record characters. Every original evidence record and pinned target/support stays
+exact. Saved batch arrays, material/plan keys, receipts, attempts, prompts and
+completed no-change results replay under their original layout. Packing does not
+alter paid protocols, approval semantics, freshness, or portable formats. Legacy
+raw-packed fixtures verify reopen/clone continuation without repeated reads.
+
+### Citation correction
+
+Missing versus unseen citation diagnostics now name the output field and bounded
+offending-reference examples. Staged discovery retains a rejected citation response
+with its exact evidence hash, receipt-prefix hash, frozen-draft hash and charged
+attempt in optional `citationCorrections`. No invalid proposal enters the draft or
+specification. Dispatch-only advice requests a valid replacement for the same exact
+batch; it does not load unseen evidence, echo rejected prose as authority, choose
+new citations for the model, or relax validation. Ordinary malformed/semantic
+failures remain distinct. The original three-attempt step ceiling and per-action
+request/time limits still apply; at most eight rejected replies are retained per
+package, each under the existing 12k response bound. Advice itself must fit the
+request cap; no evidence or rejected body is truncated to authorize work.
+
+Replay authenticates each rejected response and its activation boundary before
+accepting later paid stages or publication. Cancellation retains spend and rejected
+history. A later successful response must pass all normal checks. Exhausted steps
+cannot gain another allowance. Older failed citation jobs with no saved reply may
+receive a generic dispatch-only warning on explicit retry; no missing rejected
+receipt is manufactured and their spent attempts remain charged.
+
+Portable 45 is required only when rejected citation history exists. Older work
+retains formats through 44; downgraded/future metadata rejects without replacing
+saved work. Startup validates the new history and rolls back unsupported envelopes.
+No old valid completed result or assessment is invalidated just by the new workflow.
+
+A later evidence blocker on a step with saved citation rejections cannot stack a
+new supplementation context onto those rejected-context receipts. It remains a
+visible blocker with its ledger/allowance intact; this pass does not relabel prior
+rejected replies against different evidence.
+
+Verification so far: focused local approval/refinement and workspace/citation tests
+passed, including an actual file-backed worker with a responsive parent event loop,
+coalesced revisions, same-revision changes, external-file conflicts, live peer leases,
+interrupted schema upgrade, legacy refinement reopen/clone reuse, citation rejection,
+cancellation, exhaustion, tampering and actual portable-45 clone continuation.
+The synthetic refinement fixture decreased from seven batches to three; this is
+not a live speed guarantee. Type checking, UI/desktop builds, workspace-layout and
+portable browser runners passed. The full test command passed 2,075 tests before
+the final legacy citation-warning regression was added; the final 74-test
+citation/refinement/API follow-up passed, including that regression and explicit
+legacy raw-packed refinement clone reuse. The final 28 approval/workspace tests
+also passed after worker shutdown/restart handling was finalized. The desktop
+build explicitly includes the new dynamically loaded worker; a compiled-worker
+publication smoke under Node passed (not a full Electron/live-project qualification).
+No live model
+calls were made; the previous full-browser Design badge failure and WebSocket 1006
+remain separate unresolved issues.
+
+## Pending-question visibility and warm publication (2026-11-12)
+
+**Source → target: SQLite 70 → 71; conditional portable 44; local resolved-prefix
+computation v4 → v5.** No original payloads, human choices, stable IDs, dated
+assessments, valid completed work or spent model attempts are rewritten. Startup
+does not infer, adopt a new paid protocol, or hash the entire revision history.
+
+### Discovery evidence
+
+New dense schedules declare `pending-question-units-v2`, preserving question/answer
+co-location and pinning the complete exact pending-question inventory for the
+package's selected areas, global project questions, and pending questions already
+in its mandatory union. Text, rationale, options and pending status are retained:
+these records are duplicate-check proposals, not confirmed user preferences. This
+explicitly expands the old evidence union when old preparation omitted pending
+questions entirely. It never omits an original mandatory record. Capacity includes
+the unchanged full draft reserve and 96,000-character ceiling; an oversized pinned
+inventory blocks that dense layout rather than being silently truncated.
+
+Existing paid layouts keep their original grouping and input identities. Explicit
+Discover continuation can supplement a discovery- or validation-stage blocker that
+requests unavailable pending-question wording/options. Prose is only a narrowly
+matched navigation hint. The app supplies the full scope-bound inventory, not
+records selected by model prose, and binds the frozen draft, receipt prefix,
+added IDs and before/after evidence hashes with `pending-questions-v1` support.
+All remaining batch contexts are capacity-checked first. The supplied pending
+inventory remains visible in every subsequent read/check, including verification
+of drafts created after activation; later receipts bind their effective evidence.
+All usual verification/publication gates remain. Saved-work matching also checks
+the supplemented inventory rather than trusting an old plan key that omitted it;
+changed pending wording/options/status cannot silently inherit currentness.
+A validation-only activation
+checks the surviving frozen proposals; it never revives a removed draft.
+
+No new usage allowance is granted: one or two spent current-step attempts qualify,
+and the original three-attempt ceiling remains. Preparation cancellation retains
+the ledger; resumed work charges the next attempt. A further semantic blocker does
+not renew supplementation. Changed/missing evidence or tampered metadata rejects
+replay rather than relabelling old receipts. Original blockers and spent work stay
+saved. Older reviewed local CPU receipts may adopt into v5; pending/blocked CPU
+outcomes are recomputed locally, not treated as model evidence.
+
+Only grouping-v2 or pending-support continuations require portable 44. Unchanged
+older work retains formats through 43. Downgrade/future markers reject without
+overwriting saved work; clone adoption replays the same supplemented evidence.
+
+### Publication computation
+
+SQLite 71 adds disposable `portable_source_digests`, separate from specification
+revision counters, paid evidence and portable files. Digests are lazily computed
+from exact historical source bytes on first use. SQLite INSERT/UPDATE/DELETE
+triggers invalidate the corresponding digest in the source transaction, including
+non-app SQL replacements and rolled-back edits. A reader resolves source digests
+and derived snapshot records in a single SQLite transaction; warm reads need no
+full historical payload read or rehash. Separate source/cache connections retain
+the full-byte path instead of trusting another database's digest. Existing
+generation-1/2/3 snapshot caches remain compatible and retain their content checks,
+bounded memory and rebuild-on-corruption behavior. Digests are local computation,
+not protection against an attacker rewriting the database and its triggers.
+
+Schema installation is ordered and transactional. A failed migration leaves 70
+and original jobs/revisions intact; reopening retries. Interrupted lazy digest
+writes roll back and can retry; absent computation is rebuilt without inference.
+No eager backfill or application-data reset is required. The first post-upgrade
+publication still reads/hashes previously unseen revisions; later publications
+benefit. Continuation selection now deduplicates before cloning paid ledgers and
+does not deep-copy metrics/session diagnostics that portable output omits. This
+does not prune additional history, change freshness rules or change artifact bytes
+for equivalent older state. Numeric diagnostics add optional digest hit/miss
+counts; older missing values remain unknown.
+
+Verification so far: 21 focused recovery/cache tests passed, including pending
+inventory visibility, actual portable-clone continuation with later-draft citations,
+attempt exhaustion, semantic rejection, oversized inventory, tampering, interrupted
+70→71 upgrade/reopen, SQL invalidation and interrupted digest writes. A synthetic
+120-snapshot comparison produced identical historical records/portable artifacts
+and zero warm source-read/hash work; it is not a live 44-second-save speed claim.
+The 116 epic/planning tests, type checking, UI build and diff checking also passed.
+Workspace-layout, portable and workflow-schedule browser checks passed without
+inference. The full `npm test` command passed 2,068 tests; after the final
+pending-evidence matching guard, all 176 focused recovery, epic/planning,
+diagnostics and portable tests passed again. The full browser aggregate was not
+rerun in this cycle; its previously recorded Design badge assertion remains
+unresolved. No live
+provider calls were made. Incremental changed-evidence discovery and the separate
+WebSocket 1006 failure remain outside this change.
+
 ## Linked question/answer discovery evidence (2026-11-12)
 
 **Source → target: SQLite 69 → 70; conditional portable 43; local resolved-prefix

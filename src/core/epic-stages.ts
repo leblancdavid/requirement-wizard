@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { analysisSchema, type Analysis, type Project } from "./model.js";
-import type { ContextPack } from "./context.js";
+import { ContextBudgetError, type ContextPack } from "./context.js";
 import { epicBatchKey, epicReviewBatches, stagedEpicReview, validateEpicReviewFinal } from "./epic-review.js";
 import { guardrailVerdictSchema, isStagedPolicy, type EpicReview } from "./epic-review-types.js";
-import { retrievalEvidenceBasis, epicStagesSchema, type EpicStages } from "./gap-retrieval.js";
+import { retrievalEvidenceBasis, epicStagesSchema, validateGapFinal, GapCitationError, type EpicStages } from "./gap-retrieval.js";
 import { emptyEpicDraft, epicStageContext, epicDraftLimit } from "./epic-stage-context.js";
 import { linkedEvidenceStageBase } from "./epic-linked-evidence.js";
 export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
@@ -70,6 +70,7 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
   if (counts) Object.assign(counts, { draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 });
   for (const [index, receipt] of work.receipts.entries()) {
     const base = linkedEvidenceStageBase(project, work, contexts[receipt.batch]!, index, draft);
+    validateCitationCorrections(project, work, base, index, draft);
     if (receipt.evidenceKey !== retrievalEvidenceBasis(base).key) throw new Error("Staged receipt evidence does not match its exact batch.");
     const before = draft;
     draft = receipt.phase === "discover"
@@ -87,8 +88,44 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
       throw new Error("Empty staged completion must stop at its exact empty receipt boundary.");
   }
   if (key(draft) !== key(work.candidates)) throw new Error("Staged draft differs from its saved exact response history.");
-  if (work.phase === "validate") linkedEvidenceStageBase(project, work, contexts[work.nextBatch]!, work.receipts.length, draft);
+  if (work.phase !== "complete") {
+    const base = linkedEvidenceStageBase(project, work, contexts[work.nextBatch]!, work.receipts.length, draft);
+    validateCitationCorrections(project, work, base, work.receipts.length, draft);
+  }
   return draft;
+}
+
+function validateCitationCorrections(project: Project, work: EpicStages, base: ContextPack, index: number, draft: Analysis) {
+  for (const correction of work.citationCorrections?.filter(c => c.fromReceipt === index) ?? []) {
+    if (correction.evidenceKey !== retrievalEvidenceBasis(base).key || correction.prefixKey !== key(work.receipts.slice(0, index)) || correction.draftKey !== key(draft))
+      throw new Error("Citation correction differs from its original evidence, paid prefix or frozen draft.");
+    let rejected = false;
+    try { validateGapFinal(project, base, correction.response); } catch (error) { if (!(error instanceof GapCitationError)) throw error; rejected = true; }
+    if (!rejected) throw new Error("Citation correction must retain a rejected response, never authorize a valid response without its normal checks.");
+  }
+}
+
+/** Dispatch-only repair advice. Invalid model text is retained as rejected history,
+ * not echoed as authoritative evidence or merged into the surviving draft. */
+export function epicCitationCorrectionContext(project: Project, context: ContextPack, work: EpicStages, legacyWarning = false): ContextPack {
+  const correction = work.citationCorrections?.filter(c => c.fromReceipt === work.receipts.length).at(-1);
+  if (!correction && (!legacyWarning || work.phase !== "discover")) return context;
+  let problems: string[] = [];
+  if (correction) {
+    try { validateGapFinal(project, context, correction.response); } catch (error) { if (!(error instanceof GapCitationError)) throw error; problems = error.issues; }
+  } else problems = ["An earlier attempt was rejected for missing or out-of-context evidence. Its response body is unavailable; no rejected receipt or valid proposal is inferred from that diagnostic."];
+  const data = context.data as Record<string, unknown>;
+  data.citationCorrection = { ...(correction ? { attempt: correction.attempt } : { legacyWarning: true }), problems: problems.join(" ").slice(0, 1600),
+    instruction: "The previous response was rejected and applied nothing. Generate a valid replacement for this same batch. New proposals may cite only exact records detailed in this request; navigation IDs and unseen draft citations are not evidence. Questions in a scanned project require evidenceIDs. Do not guess citations, load records, change the saved draft or treat this diagnostic as a product decision. Return reviewBlocked if the exact displayed evidence cannot support a safe response." };
+  context.manifest.characters = JSON.stringify(data).length;
+  if (context.manifest.characters > context.manifest.budget) throw new ContextBudgetError(context.manifest);
+  if (context.manifest.epicContextBudget) {
+    const characters = context.manifest.characters, headroom = 96000 - characters;
+    context.manifest.epicContextBudget = { ...context.manifest.epicContextBudget, characters, headroom,
+      aboveTarget: characters > 72000, evidenceReserve: Math.min(24000, headroom) };
+  }
+  context.manifest.sectionCharacters = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length]));
+  return context;
 }
 
 /** Publication authority is the explicit union of completed exact batches, never a single-stage claim. */
@@ -96,7 +133,8 @@ export function epicStagePublicationContext(contexts: ContextPack[], work: EpicS
   epicStagesSchema.parse(work);
   if (work.phase !== "complete" || work.batches !== contexts.length || !work.emptyCompletion && work.receipts.length !== contexts.length * 2) throw new Error("Partial staged review cannot publish proposals.");
   const context = epicStageContext(contexts.at(-1)!, work);
-  context.manifest.includedIDs = [...new Set(contexts.flatMap((c) => c.manifest.includedIDs))];
+  context.manifest.includedIDs = [...new Set([...contexts.flatMap((c) => c.manifest.includedIDs),
+    ...(work.linkedEvidence?.flatMap(s => s.addedIDs) ?? [])])];
   context.manifest.omittedIDs = context.manifest.omittedIDs.filter((id) => !context.manifest.includedIDs.includes(id));
   context.manifest.selectionReason = work.emptyCompletion
     ? "All discovery batches were read; no proposals survived. Remaining proposal checks were not requested or credited. This empty outcome establishes no completeness, readiness or implementation approval."

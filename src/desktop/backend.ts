@@ -18,7 +18,7 @@ let closing: Promise<void> | undefined;
 
 async function start() {
   const progress = (phase: StartupPhase) => port.postMessage({ type: "startup", phase });
-  store = new ProjectStore(join(directory, "projects.sqlite"), progress);
+  store = new ProjectStore(join(directory, "projects.sqlite"), progress, { publication: "background" });
   progress("recovering-work");
   store.recoverExpiredJobs();
   progress("starting-workspace");

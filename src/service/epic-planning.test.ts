@@ -12,6 +12,14 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
+import { digestJSONArray } from "../core/json-digest.js";
+
+test("streamed scheduling digest preserves exact JSON array bytes, holes, nulls and Unicode", () => {
+  for (const value of [[], [undefined, null, , "é😀\ud800", [undefined, { omitted: undefined, exact: "\n" }]],
+    ["resolved-prefix-v5", { nested: [1, false, null] }, Array.from({ length: 1000 }, (_, i) => ({ id: i, text: "Exact evidence" }))]]) {
+    assert.equal(digestJSONArray(value), createHash("sha256").update(JSON.stringify(value)).digest("hex"));
+  }
+});
 import { contextPreparationIndex, planContext } from "../core/working-set.js";
 import { rememberEpicContext, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { epicReviewContext, stagedEpicReview, epicBatchKey } from "../core/epic-review.js";
@@ -29,6 +37,28 @@ import { expandedEvidence } from "../core/gap-retrieval.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("planning projections and publication ownership transfer preserve paid evidence and exact artifact bytes", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 2);
+    const done = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(done.status, "completed", done.diagnostic);
+    const project = store.get(p.id), full = store.epicReviewHistory(p.id), projected = store.epicReviewPlanningHistory(p.id);
+    assert.ok(full[0]!.discoveryMetrics);
+    assert.equal(projected[0]!.discoveryMetrics, undefined);
+    assert.deepEqual(projected[0]!.retrievalWork, full[0]!.retrievalWork);
+    assert.equal(epicPlanningInputKey(project, full, "orders", []), epicPlanningInputKey(project, projected, "orders", []));
+    assert.deepEqual(planEpicReview(project, full, "orders"), planEpicReview(project, projected, "orders"));
+    const jobs = store.jobs(p.id), before = structuredClone(jobs), snapshot = (revision: number) => store.get(p.id, revision);
+    const standard = continuationState(project, jobs, [], snapshot);
+    const transferred = continuationState(project, structuredClone(jobs), [], snapshot, snapshot, snapshot, undefined, { transferJobs: true });
+    assert.deepEqual(renderWorkspace(project, emptyExecution(), transferred), renderWorkspace(project, emptyExecution(), standard));
+    assert.deepEqual(jobs, before, "The default serializer still protects caller-owned evidence");
+    assert.deepEqual(store.getJob(done.id), done, "Planning/publication cannot rewrite the durable original job");
+  } finally { store.close(); }
+});
 
 test("completed exact-record checks survive lossless ordering and rebatching, but never changed evidence or unverified history", async () => {
   const store = new ProjectStore(":memory:");
@@ -317,12 +347,12 @@ test("small partition failures survive successful-context eviction in SQLite and
       const key = n.toString(16).padStart(64, "0");
       rememberEpicContext(contexts, key, large); store.saveEpicPlanningContext(p.id, p.revision, input, key, large);
     }
-    assert.equal(contexts.size, 153, "Byte-bound eviction retains three large contexts plus all 150 small failed probes");
-    assert.equal(store.epicPlanningContexts(p.id, input).size, 153);
+    assert.equal(contexts.size, 151, "The reduced byte bound retains one large context plus all 150 small failed probes");
+    assert.equal(store.epicPlanningContexts(p.id, input).size, 151);
     const oversized: EpicContextCheckpoint = { ...value, context: { ...value.context, data: { fixture: "x".repeat(16 * 1024 * 1024) } } };
     rememberEpicContext(contexts, "f".repeat(64), oversized);
     store.saveEpicPlanningContext(p.id, p.revision, input, "f".repeat(64), oversized);
-    assert.equal(contexts.size, 153); assert.equal(store.epicPlanningContexts(p.id, input).size, 153);
+    assert.equal(contexts.size, 151); assert.equal(store.epicPlanningContexts(p.id, input).size, 151);
   } finally { store.close(); }
 });
 
@@ -979,8 +1009,8 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
     const files = renderWorkspace(p, emptyExecution(), projection);
     const portable = decodePortable(files, p.model);
     if (linkedNotes === 10) {
-      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 43);
-      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 43/);
+      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 44);
+      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 44/);
     }
     assert.deepEqual(portable.continuation.jobs[0]!.retrievalWork!.epicStages, paused.retrievalWork!.epicStages);
     assert.deepEqual(portable.continuation.jobs[0]!.context!.epicReview, paused.context!.epicReview);

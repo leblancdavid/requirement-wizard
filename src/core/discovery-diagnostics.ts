@@ -49,6 +49,7 @@ export const planningProgressSchema = z.object({ format: z.literal(1), phase: z.
   examinedStates: z.object({ reviewed: count, waiting: count, blocked: count, pending: count }).strict().optional(),
   blockerSummary: planningBlockersSchema.optional(), closureRenderAttempts: count.optional(), reusedClosures: count.optional(),
   completedEquivalenceChecks: count.optional(), equivalentCompletedPackages: count.optional(),
+  memory: z.object({ heapUsedBytes: count, heapPeakBytes: count, heapLimitBytes: count }).strict().optional(),
 }).strict();
 export type PlanningProgress = z.infer<typeof planningProgressSchema>;
 export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.enum(["recording", "finished"]),
@@ -119,7 +120,7 @@ const workspacePublicationSchema = z.object({ format: z.literal(1), revision: co
     serializedRecords: count, digestComputations: count, digestHits: count,
     snapshotCache: z.object({ sourceReadMs: duration, sourceHashMs: duration, cacheReadMs: duration, inflateMs: duration,
       parseMs: duration, normalizeMs: duration, cacheWriteMs: duration, hits: count, misses: count, upgrades: count,
-      objectReads: count, objectHits: count }).optional() }).optional() });
+      objectReads: count, objectHits: count, sourceDigestHits: count.optional(), sourceDigestMisses: count.optional() }).optional() }).optional() });
 export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePublication?: unknown) {
   if (!rows.length || rows.length > 20) throw new Error("Select between one and twenty discovery runs.");
   const packages = new Map<string, string>();

@@ -8,11 +8,21 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
+import { migrateDatabase } from "./migrations.js";
 import { StaleRevisionError, type Project } from "../core/model.js";
 
 const parent = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "private-account" } as const;
+
+test("diagnostic-heavy discovery history larger than a capped heap still plans and publishes", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", "tsx", "scripts/check-discovery-memory.ts"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim()) as { archiveBytes: number; projectedJobs: number; portableSaved: boolean };
+  assert.ok(report.archiveBytes > 64 * 1024 * 1024); assert.equal(report.projectedJobs, 401); assert.equal(report.portableSaved, true);
+});
+
 function fixture() {
   const directory = mkdtempSync(join(parent, "workspace-"));
   const database = join(directory, "projects.sqlite");
@@ -28,6 +38,108 @@ function generate(store: ProjectStore, project: Project) {
     requirements: [{ statement: "Save jobs locally", rationale: "Retain work", sourceIDs: [project.sources[0]!.id], acceptance: ["Saved jobs survive restart"] }] });
   return store.get(project.id);
 }
+
+test("background publication preserves external edits and other workers' live leases without a retry loop", async () => {
+  const f = fixture();
+  try {
+    const project = generate(f.store, f.project); f.store.connectWorkspace(project.id, project.revision, f.path);
+    const file = join(f.path, workspaceFolder, "requirements.md"), edited = readFileSync(file, "utf8") + "\nHuman external edit\n";
+    writeFileSync(file, edited); f.store.enableBackgroundWorkspacePublication();
+    const changed = f.store.note(project.id, project.revision, "Immediate durable decision");
+    await f.store.flushWorkspacePublication();
+    assert.equal(f.store.workspace(project.id)!.status, "conflict"); assert.equal(readFileSync(file, "utf8"), edited);
+    assert.equal(f.store.get(project.id).revision, changed.revision);
+    const db = new Database(f.database);
+    try {
+      db.prepare("UPDATE workspaces SET owner='peer-writer', lease_until=?, dirty=1 WHERE project_id=?").run(Date.now() + 60000, project.id);
+      const before = db.prepare("SELECT owner, lease_until FROM workspaces WHERE project_id=?").get(project.id);
+      await f.store.flushWorkspacePublication();
+      assert.deepEqual(db.prepare("SELECT owner, lease_until FROM workspaces WHERE project_id=?").get(project.id), before);
+    } finally { db.close(); }
+  } finally { await f.store.stopWorkspacePublication(); f.cleanup(); }
+});
+
+test("heap-capped publication failure preserves SQLite work, stops automatic retries and permits normal reopen", { timeout: 30000 }, async () => {
+  const f = fixture();
+  const project = generate(f.store, f.project);
+  f.store.connectWorkspace(project.id, project.revision, f.path);
+  f.store.close();
+  const store = new ProjectStore(f.database, undefined, { publication: "background", publicationHeapMb: 16 });
+  try {
+    const changed = store.note(project.id, project.revision, "Retain this decision even if portable saving exhausts its heap");
+    const originalJobs = store.jobs(project.id);
+    await store.flushWorkspacePublication();
+    assert.equal(store.workspace(project.id)!.status, "unavailable");
+    assert.match(store.workspace(project.id)!.diagnostic!, /isolated portable-save process stopped/);
+    assert.deepEqual(store.get(project.id), changed);
+    assert.deepEqual(store.jobs(project.id), originalJobs);
+    const db = new Database(f.database);
+    try {
+      const before = db.prepare("SELECT owner, lease_until, publication_version FROM workspaces").get();
+      assert.equal((before as { owner: unknown }).owner, null);
+      await store.flushWorkspacePublication();
+      assert.deepEqual(db.prepare("SELECT owner, lease_until, publication_version FROM workspaces").get(), before);
+    } finally { db.close(); }
+  } finally { await store.stopWorkspacePublication(); store.close(); }
+  const recovered = new ProjectStore(f.database, undefined, { publication: "background" });
+  try {
+    recovered.syncWorkspace(project.id);
+    await recovered.flushWorkspacePublication();
+    assert.equal(recovered.workspace(project.id)!.status, "saved", recovered.workspace(project.id)!.diagnostic ?? undefined);
+    assert.equal(recovered.get(project.id).revision, project.revision + 1);
+    assert.equal(recovered.jobs(project.id).length, 1);
+  } finally { await recovered.stopWorkspacePublication(); recovered.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("publication child exit releases only its own lease and never changes a peer writer", async () => {
+  const f = fixture();
+  try {
+    const peer = f.store.create("Peer lease", "Preserve this writer", selection), peerFolder = join(f.directory, "peer"); mkdirSync(peerFolder);
+    f.store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    f.store.connectWorkspace(peer.id, peer.revision, peerFolder);
+    f.store.enableBackgroundWorkspacePublication();
+    f.store.note(f.project.id, f.project.revision, "Child-owned save");
+    f.store.note(peer.id, peer.revision, "Peer-owned save");
+    f.store.syncWorkspace(f.project.id); f.store.syncWorkspace(peer.id);
+    const child = (f.store as unknown as { publicationWorker: { spawnargs: string[]; kill(): boolean } }).publicationWorker;
+    const owner = child.spawnargs.at(-1)!;
+    const db = new Database(f.database);
+    try {
+      db.prepare("UPDATE workspaces SET owner=?, lease_until=? WHERE project_id=?").run(owner, Date.now() + 60000, f.project.id);
+      db.prepare("UPDATE workspaces SET owner='live-peer', lease_until=? WHERE project_id=?").run(Date.now() + 60000, peer.id);
+      const before = db.prepare("SELECT payload, owner, lease_until FROM workspaces WHERE project_id=?").get(peer.id);
+      child.kill(); await f.store.flushWorkspacePublication();
+      assert.equal(f.store.workspace(f.project.id)!.status, "unavailable");
+      assert.equal((db.prepare("SELECT owner FROM workspaces WHERE project_id=?").get(f.project.id) as { owner: unknown }).owner, null);
+      assert.deepEqual(db.prepare("SELECT payload, owner, lease_until FROM workspaces WHERE project_id=?").get(peer.id), before);
+    } finally { db.close(); }
+  } finally { await f.store.stopWorkspacePublication(); f.cleanup(); }
+});
+
+test("71 to 72 installs publication generations transactionally and retains original workspace/job payloads", () => {
+  const f = fixture();
+  try {
+    f.store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    const db = new Database(f.database);
+    try {
+      db.exec("DROP TRIGGER workspace_publication_dirty_generation; ALTER TABLE workspaces DROP COLUMN publication_version; DELETE FROM migration_history WHERE version>=72; PRAGMA user_version=71");
+      const before = db.prepare("SELECT payload FROM workspaces").all(), jobs = db.prepare("SELECT payload FROM jobs").all();
+      db.exec("CREATE TRIGGER fail_72 BEFORE INSERT ON migration_history WHEN NEW.version=72 BEGIN SELECT RAISE(ABORT, 'Interrupted publication upgrade'); END");
+      assert.throws(() => migrateDatabase(db), /Interrupted publication upgrade/);
+      assert.equal(db.pragma("user_version", { simple: true }), 71);
+      assert.equal((db.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[]).some(c => c.name === "publication_version"), false);
+      db.exec("DROP TRIGGER fail_72"); migrateDatabase(db); migrateDatabase(db);
+      assert.deepEqual(db.prepare("SELECT payload FROM workspaces").all(), before);
+      assert.deepEqual(db.prepare("SELECT payload FROM jobs").all(), jobs);
+      const generation = () => (db.prepare("SELECT publication_version AS value FROM workspaces").get() as { value: number }).value;
+      assert.equal(generation(), 0);
+      db.prepare("UPDATE workspaces SET dirty=1").run(); assert.equal(generation(), 1);
+      db.prepare("UPDATE workspaces SET dirty=1").run(); assert.equal(generation(), 2, "Same-revision changes cannot clear a newer pending save");
+      assert.throws(() => db.transaction(() => { db.prepare("UPDATE workspaces SET dirty=1").run(); throw new Error("Rollback dirty generation"); })());
+      assert.equal(generation(), 2);
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
 
 test("continuous-action publication defers only its own workspace, retains SQLite revisions and flushes once on release", async () => {
   const f = fixture();

@@ -11,7 +11,8 @@ import { runAnswerGroup } from "./answer-group.js";
 import { answerIntegrationSchema, type AnswerIntegrationDiagnostic } from "../core/answer-integration-diagnostics.js";
 import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
-import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
+import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, GapCitationError, type RetrievalWork } from "../core/gap-retrieval.js";
+import { createHash } from "node:crypto";
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
@@ -23,7 +24,7 @@ import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQu
 import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
-import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages } from "../core/epic-stages.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext } from "../core/epic-stages.js";
 import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -538,7 +539,7 @@ export class DiscoveryService {
       const generalExploration = !options.readinessQuestions && !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
-      const epicHistory = options.gapMode ? this.store.epicReviewHistory(projectID) : [];
+      const epicHistory = options.gapMode ? this.store.epicReviewPlanningHistory(projectID) : [];
       const epicPlan = options.gapMode ? await prepareEpicReview(project, epicHistory, options.focusEpicID, this.store.submissions(projectID), {
         signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
         loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
@@ -730,7 +731,7 @@ export class DiscoveryService {
       controller.signal.throwIfAborted();
       if (epicPlan?.task) {
         const review = epicPlan.task.review;
-        const prior = epicPlan.task.prior;
+        const prior = epicPlan.task.prior ? this.store.getJob(epicPlan.task.prior.id) : undefined;
         const work: RetrievalWork = prior?.retrievalWork ? { ...structuredClone(prior.retrievalWork), originJobID: prior.id }
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
         const proposalCounts = { draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 };
@@ -781,7 +782,7 @@ export class DiscoveryService {
             validateEpicStages(project, review, staged, batches, proposalCounts);
             context = epicStageContext(linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates), staged);
             checkpoint();
-            report("Continuing the saved draft with its missing linked question/answer evidence. Completed stages and spent attempts are retained; a new check must resolve the evidence blocker before publication.");
+            report("Continuing the saved draft with its missing linked question/answer or pending-question evidence. Completed stages and spent attempts are retained; a new response and every remaining check are required before publication.");
           }
           stagedRun = true;
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
@@ -793,7 +794,9 @@ export class DiscoveryService {
           while (staged.phase !== "complete") {
             controller.signal.throwIfAborted();
             const stageBase = linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates);
-            context = epicStageContext(stageBase, staged);
+            context = epicCitationCorrectionContext(project, epicStageContext(stageBase, staged), staged,
+              staged.receipts.length === prior?.retrievalWork?.epicStages?.receipts.length
+                && !!prior?.diagnostic?.startsWith("Gap proposals require evidence in the current detailed working context"));
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
             if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
@@ -812,9 +815,20 @@ export class DiscoveryService {
             const phase = staged.phase, batch = staged.nextBatch;
             const response = phase === "discover" ? parseDiscoveryAnalysis(raw).result : raw;
             const beforeDraft = staged.candidates;
-            staged.candidates = phase === "discover"
-              ? mergeEpicDraft(project, batches[batch]!, staged.candidates, response as import("../core/model.js").Analysis, batch)
-              : applyGuardrailVerdict(staged.candidates, response);
+            try {
+              staged.candidates = phase === "discover"
+                ? mergeEpicDraft(project, stageBase, staged.candidates, response as import("../core/model.js").Analysis, batch)
+                : applyGuardrailVerdict(staged.candidates, response);
+            } catch (error) {
+              if (!(error instanceof GapCitationError) || phase !== "discover" || (staged.citationCorrections?.length ?? 0) >= 8) throw error;
+              const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+              (staged.citationCorrections ??= []).push({ fromReceipt: staged.receipts.length, attempt: work.attempts,
+                prefixKey: hash(staged.receipts), draftKey: hash(beforeDraft), evidenceKey: retrievalEvidenceBasis(stageBase).key,
+                response: response as import("../core/model.js").Analysis });
+              checkpoint();
+              report(`Citation validation rejected this response; the original draft and paid stages are unchanged. ${error.issues.join(" ")} Correction uses the same three-attempt stage allowance.`);
+              continue;
+            }
             proposalCounts.draftedQuestions += Math.max(0, staged.candidates.questions.length - beforeDraft.questions.length);
             proposalCounts.draftedRequirements += Math.max(0, staged.candidates.requirements.length - beforeDraft.requirements.length);
             proposalCounts.removedQuestions += Math.max(0, beforeDraft.questions.length - staged.candidates.questions.length);

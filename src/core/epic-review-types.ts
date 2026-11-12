@@ -7,7 +7,7 @@ export const epicReviewSchema = z.object({
   recordIDs: z.array(z.string().min(1)).min(1).max(6),
   epicIDs: z.array(z.string().min(1)).min(1).max(2),
   contextPolicy: z.enum(["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5", "current-spec-v1"]).optional(),
-  recordGrouping: z.literal("question-answer-units-v1").optional(),
+  recordGrouping: z.enum(["question-answer-units-v1", "pending-question-units-v2"]).optional(),
   guardrailBatches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(16).optional(),
 }).strict().refine((r) => isStagedPolicy(r.contextPolicy) === !!r.guardrailBatches, "Staged reviews require explicit guardrail batches.")
   .refine(r => !r.recordGrouping || r.contextPolicy === "staged-dense-records-v5", "Question/answer grouping requires the dense record protocol.");

@@ -29,7 +29,12 @@ export const epicStagesSchema = z.object({
   candidates: analysisSchema,
   completionPolicy: z.literal("empty-proposals-v1").optional(),
   emptyCompletion: z.literal("no-surviving-proposals").optional(),
-  linkedEvidence: z.array(z.object({ format: z.literal(1), fromReceipt: z.number().int().min(1).max(31),
+  citationCorrections: z.array(z.object({ fromReceipt: z.number().int().min(0).max(15), attempt: z.number().int().min(1).max(3),
+    evidenceKey: z.string().regex(/^[a-f0-9]{64}$/), prefixKey: z.string().regex(/^[a-f0-9]{64}$/),
+    draftKey: z.string().regex(/^[a-f0-9]{64}$/), response: analysisSchema,
+  }).strict()).min(1).max(8).optional(),
+  linkedEvidence: z.array(z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(31),
+    kind: z.literal("pending-questions-v1").optional(),
     addedIDs: z.array(z.string().min(1).max(200)).min(1).max(32).refine(ids => new Set(ids).size === ids.length, "Duplicate supporting records"),
     prefixKey: z.string().regex(/^[a-f0-9]{64}$/), draftKey: z.string().regex(/^[a-f0-9]{64}$/),
     beforeEvidenceKey: z.string().regex(/^[a-f0-9]{64}$/), afterEvidenceKey: z.string().regex(/^[a-f0-9]{64}$/),
@@ -49,10 +54,17 @@ export const epicStagesSchema = z.object({
       || (r.phase === "validate") !== ("guardrailVerdict" in r.response))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid staged epic checkpoint sequence or draft bound." });
   }
-  if (work.linkedEvidence?.some((support, index, all) => support.fromReceipt < work.batches
+  if (work.linkedEvidence?.some((support, index, all) => !support.kind && support.fromReceipt < work.batches
     || support.fromReceipt >= work.batches * 2 || support.fromReceipt > work.receipts.length
+    || work.phase === "complete" && support.fromReceipt === work.receipts.length
     || index > 0 && support.fromReceipt <= all[index - 1]!.fromReceipt))
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Linked evidence recovery must bind a unique reached verification step." });
+  if (work.citationCorrections?.some((correction, index, all) => correction.fromReceipt >= work.batches || correction.fromReceipt > work.receipts.length
+    || JSON.stringify(correction.response).length > 12000
+    || index > 0 && (correction.fromReceipt < all[index - 1]!.fromReceipt
+      || correction.fromReceipt === all[index - 1]!.fromReceipt && correction.attempt <= all[index - 1]!.attempt)
+    || work.receipts[correction.fromReceipt] && work.receipts[correction.fromReceipt]!.attempts <= correction.attempt))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid citation-correction history or spent-attempt sequence." });
 });
 export type EpicStages = z.infer<typeof epicStagesSchema>;
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
@@ -83,6 +95,8 @@ export const retrievalWorkSchema = z.object({ format: z.literal(1),
   final: z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: analysisSchema,
     revision: z.number().int().positive().optional(), evidenceBasis: evidenceBasisSchema.optional() }).strict().optional(),
 }).strict().superRefine((work, ctx) => {
+  if (work.epicStages?.citationCorrections?.some(correction => correction.fromReceipt === work.epicStages!.receipts.length && correction.attempt > work.attempts))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Rejected citation requests cannot lose their spent attempts." });
   if (work.stagedRun && !work.epicStages)
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Staged run metadata requires staged work." });
   if (work.epicStages && (work.stages.length || work.continuation || work.research || work.final && work.epicStages.phase !== "complete")) {
@@ -175,17 +189,28 @@ export function checkpointEvidenceBasis(checkpoint: { contextKey: string; eviden
 }
 
 /** Reject unseen references before considering a final response recoverable. */
+export class GapCitationError extends Error {
+  constructor(readonly issues: string[]) {
+    super(`Gap proposals require evidence in the current detailed working context; unseen navigation links cannot be cited or changed. No proposals applied. ${issues.join(" ")}`);
+  }
+}
+
 export function validateGapFinal(project: Project, context: ContextPack, output: Analysis) {
   if (output.specificationUpdates?.changes.length) throw new Error("Gap exploration cannot activate or revise the specification without current human input.");
   const detailed = new Set(context.manifest.includedIDs);
-  if (output.questions.some((q) => project.scans.length && !q.evidenceIDs?.length
-    || q.evidenceIDs?.some((id) => !detailed.has(id)))
-    || output.requirements.some((r) => r.sourceIDs.some((id) => !detailed.has(id)))
-    || output.retireQuestions.some((q) => !detailed.has(q.questionID))
-    || output.refinements?.some((r) => !detailed.has(r.requirementID)
-      || project.requirements.find((item) => item.id === r.requirementID)?.sourceIDs.some((id) => !detailed.has(id)))) {
-    throw new Error("Gap proposals require evidence in the current detailed working context; unseen navigation links cannot be cited or changed. No proposals applied.");
-  }
+  const issues: string[] = [];
+  const unseen = (field: string, ids: string[]) => {
+    const missing = ids.filter(id => !detailed.has(id));
+    if (missing.length) issues.push(`${field}: ${missing.length} reference(s) are not detailed in this request (${missing.slice(0, 2).map(id => id.slice(0, 200)).join(", ")}).`);
+  };
+  output.questions.forEach((q, index) => {
+    if (project.scans.length && !q.evidenceIDs?.length) issues.push(`questions[${index}].evidenceIDs: missing required evidence for a scanned project.`);
+    unseen(`questions[${index}].evidenceIDs`, q.evidenceIDs ?? []);
+  });
+  output.requirements.forEach((r, index) => unseen(`requirements[${index}].sourceIDs`, r.sourceIDs));
+  output.retireQuestions.forEach((q, index) => unseen(`retireQuestions[${index}].questionID`, [q.questionID]));
+  output.refinements?.forEach((r, index) => unseen(`refinements[${index}]`, [r.requirementID, ...project.requirements.find(item => item.id === r.requirementID)?.sourceIDs ?? []]));
+  if (issues.length) throw new GapCitationError(issues);
 }
 
 function displayedRecordIDs(data: unknown): Set<string> {

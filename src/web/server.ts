@@ -59,6 +59,7 @@ const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
 
 export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; catalog?: CatalogSource; port?: number; staticDir?: string }) {
+  options.store.enableBackgroundWorkspacePublication();
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
@@ -640,7 +641,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
          implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(),
       ]);
       server.closeAllConnections();
-      await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
+       await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
+       await options.store.stopWorkspacePublication();
       // Help failures are already persisted by the service; teardown failures are actionable.
       for (const result of cleanup.slice(-5)) if (result.status === "rejected") throw result.reason;
     })();
@@ -656,7 +658,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const port = Number(values.port ?? "4317");
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid port.");
     const startupAt = Date.now();
-    const store = new ProjectStore(join(directory, "projects.sqlite"), (phase) => console.info(`Startup: ${phase} (${Date.now() - startupAt} ms)`));
+    const store = new ProjectStore(join(directory, "projects.sqlite"), (phase) => console.info(`Startup: ${phase} (${Date.now() - startupAt} ms)`), { publication: "background" });
     store.recoverExpiredJobs();
     try {
       const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));

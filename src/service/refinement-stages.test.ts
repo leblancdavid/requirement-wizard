@@ -42,6 +42,25 @@ function adapter(f: ReturnType<typeof fixture>, seen = new Set<string>()): Disco
       : context.manifest.refinementStage!.step === 0 ? f.output() : { refinementKeep: true };
   } };
 }
+
+test("measured refinement packing reduces new batches while legacy receipts retain exact paid contexts and attempts", () => {
+  const f = fixture();
+  try {
+    const m = refinementMaterials(f.project, f.requirementID), old = planRefinementStages(m, "legacy"), measured = planRefinementStages(m);
+    assert.ok(measured.batches.length < old.batches.length);
+    assert.deepEqual(new Set(measured.batches.flat()), new Set(old.batches.flat()));
+    const draft = empty(), job = f.store.beginJob(f.project.id, f.project.revision).job;
+    old.attempts = 1; acceptRefinementStage(m, old, draft, f.output(), job); old.attempts = 1;
+    const before = structuredClone(old);
+    assert.deepEqual(replayRefinementStages(m, old).draft, f.output());
+    assert.deepEqual(old, before);
+    for (const batch of measured.batches) {
+      const context = refinementStageContext(m, { ...measured, batches: [batch] }, draft);
+      assert.ok(context.manifest.characters + 18000 + 64 <= 96000);
+    }
+    console.log(JSON.stringify({ fixtureOnly: true, legacyRefinementBatches: old.batches.length, measuredRefinementBatches: measured.batches.length }));
+  } finally { f.store.close(); }
+});
 test("oversized needs-review refinement uses exact batches and publishes only a proposal after all checks", async () => {
   const f = fixture(), seen = new Set<string>(); const queue = new DiscoveryQueue(new DiscoveryService(f.store, adapter(f, seen)));
   try {
@@ -110,7 +129,7 @@ test("older saved no-change reads finish with zero new requests after repeated s
   const dir = mkdtempSync(resolve(".reqwizit-state/refinement-no-change-upgrade-")), file = join(dir, "state.sqlite");
   const f = fixture(file); let store = f.store;
   try {
-    const m = refinementMaterials(f.project, f.requirementID), w = planRefinementStages(m);
+    const m = refinementMaterials(f.project, f.requirementID), w = planRefinementStages(m, "legacy");
     const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
     let draft = empty();
     while (refinementStep(w) < w.batches.length) {

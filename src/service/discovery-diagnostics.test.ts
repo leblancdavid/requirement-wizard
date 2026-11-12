@@ -44,6 +44,12 @@ test("latest workspace publication diagnostics are numeric, separately scoped, r
     continuationProfile: { ...profile, snapshotCache: { ...snapshotCache, path: "PRIVATE path", source: "PRIVATE input" } } });
   assert.deepEqual(cached.workspacePublication!.continuationProfile!.snapshotCache, snapshotCache);
   assert.ok(!JSON.stringify(cached).includes("PRIVATE"));
+  assert.equal(cached.workspacePublication!.continuationProfile!.snapshotCache!.sourceDigestHits, undefined, "Old missing measurements remain unknown");
+  const warmed = discoveryDiagnosticReport([row], { format: 1, revision: 99, continuationProfile: { ...profile,
+    snapshotCache: { ...snapshotCache, sourceDigestHits: 412, sourceDigestMisses: 1, digest: "PRIVATE source hash" } } });
+  assert.equal(warmed.workspacePublication!.continuationProfile!.snapshotCache!.sourceDigestHits, 412);
+  assert.equal(warmed.workspacePublication!.continuationProfile!.snapshotCache!.sourceDigestMisses, 1);
+  assert.ok(!JSON.stringify(warmed).includes("PRIVATE"));
 });
 
 test("diagnostics export retains clarification/inspection/comparison receipt positions without exposing bodies or granting progress", async () => {

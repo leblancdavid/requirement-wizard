@@ -26,9 +26,11 @@ export type SnapshotCacheProfile = {
   sourceReadMs: number; sourceHashMs: number; cacheReadMs: number; inflateMs: number; parseMs: number;
   normalizeMs: number; cacheWriteMs: number; hits: number; misses: number; upgrades: number;
   objectReads: number; objectHits: number;
+  sourceDigestHits: number; sourceDigestMisses: number;
 };
 export const snapshotCacheProfile = (): SnapshotCacheProfile => ({ sourceReadMs: 0, sourceHashMs: 0, cacheReadMs: 0,
-  inflateMs: 0, parseMs: 0, normalizeMs: 0, cacheWriteMs: 0, hits: 0, misses: 0, upgrades: 0, objectReads: 0, objectHits: 0 });
+  inflateMs: 0, parseMs: 0, normalizeMs: 0, cacheWriteMs: 0, hits: 0, misses: 0, upgrades: 0, objectReads: 0, objectHits: 0,
+  sourceDigestHits: 0, sourceDigestMisses: 0 });
 
 /** Publication-local, bounded exact-string sharing. Never retains mutable records
  * or trusts a snapshot without checking its original revision bytes. */
@@ -56,10 +58,21 @@ export function createPortableSnapshotReader(db: Database.Database, projectID: s
     if (digest(text) !== key) throw new Error("Corrupt disposable record");
     remember(key, text); return text;
   };
-  return (revision) => {
-    const source = measure("sourceReadMs", () => originals.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { payload: string } | undefined;
-    if (!source) throw new Error("Project or revision not found.");
-    const sourceDigest = measure("sourceHashMs", () => digest(source.payload));
+  const read = (revision: number) => {
+    // Only the same database can prove trigger-based invalidation. A separate
+    // originals connection retains full-byte authentication, never trusts a cache
+    // belonging to another database or races its source with a digest write.
+    const saved = db === originals ? measure("cacheReadMs", () => db.prepare(
+      "SELECT digest FROM portable_source_digests WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { digest: string } | undefined : undefined;
+    let sourceDigest: string;
+    if (saved && /^[a-f0-9]{64}$/.test(saved.digest)) { sourceDigest = saved.digest; profile.sourceDigestHits++; }
+    else {
+      profile.sourceDigestMisses++;
+      const source = measure("sourceReadMs", () => originals.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { payload: string } | undefined;
+      if (!source) throw new Error("Project or revision not found.");
+      sourceDigest = measure("sourceHashMs", () => digest(source.payload));
+      if (db === originals) measure("cacheWriteMs", () => db.prepare("INSERT OR REPLACE INTO portable_source_digests VALUES (?, ?, ?)").run(projectID, revision, sourceDigest));
+    }
     const cached = measure("cacheReadMs", () => db.prepare("SELECT generation, source_digest, payload_digest, payload FROM portable_snapshot_cache WHERE project_id = ? AND revision = ?")
       .get(projectID, revision)) as { generation: number; source_digest: string; payload_digest: string; payload: Buffer } | undefined;
     let records: PortableSnapshotRecords | undefined;
@@ -111,5 +124,12 @@ export function createPortableSnapshotReader(db: Database.Database, projectID: s
       memo.clear(); memoBytes = 0; throw error;
     }
     return records;
+  };
+  // Keep the source read/digest/cache resolution in one SQLite snapshot. A source
+  // replacement cannot commit between authentication and use of its derived data.
+  const transactionalRead = db.transaction(read);
+  return revision => {
+    try { return transactionalRead(revision); }
+    catch (error) { memo.clear(); memoBytes = 0; throw error; }
   };
 }

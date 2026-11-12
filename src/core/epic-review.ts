@@ -13,7 +13,7 @@ import { reusablePlanningCheckpoint, rememberEpicContext } from "./epic-planning
 import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js";
 import { epicPlanningProjectKey } from "./epic-planning-input.js";
 import { completedRecordStagesEquivalent, recordStagePolicy } from "./epic-stage-reuse.js";
-import { questionAnswerUnitIDs, planLinkedEvidenceRecovery } from "./epic-linked-evidence.js";
+import { questionAnswerUnitIDs, pendingQuestionIDs, planLinkedEvidenceRecovery, pendingEvidenceCompatible } from "./epic-linked-evidence.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -62,6 +62,23 @@ export function epicReviewInputChanges(previous: Project, project: Project, prio
   return changes;
 }
 type Candidate = { review: EpicReview; context?: ContextPack; batches?: ContextPack[]; batchKey?: string; error?: ContextBudgetError; batchLimit?: StagedBatchLimitError };
+const candidateSizes = new WeakMap<Candidate, number>();
+/** Disposable packing cache only. Historical retries must not retain every
+ * rendered partition in addition to the separate bounded context memo. */
+function rememberCandidate(cache: Map<string, Candidate>, key: string, candidate: Candidate) {
+  const size = candidateSizes.get(candidate) ?? JSON.stringify(candidate).length * 4;
+  candidateSizes.set(candidate, size);
+  if (size > 8 * 1024 * 1024) return;
+  cache.delete(key); cache.set(key, candidate);
+  let bytes = 0;
+  for (const value of cache.values()) {
+    const known = candidateSizes.get(value) ?? JSON.stringify(value).length * 4;
+    candidateSizes.set(value, known); bytes += known;
+  }
+  while (cache.size > 64 || bytes > 8 * 1024 * 1024) {
+    const first = cache.keys().next().value!; bytes -= candidateSizes.get(cache.get(first)!)!; cache.delete(first);
+  }
+}
 export type EpicPlanningOptions = {
   firstPending?: boolean;
   /** Invocation-local only, including retries to load immutable historical revisions. */
@@ -321,6 +338,8 @@ function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () =
   catch (error) { if (!(error instanceof ContextBudgetError)) throw error; original = error.manifest; }
   const ids = new Set([...original.includedIDs, ...original.decisionProjection?.omittedReviewSourceIDs ?? [],
     ...original.decisionProjection?.projectedReceiptSourceIDs ?? []]);
+  if (base.recordGrouping === "pending-question-units-v2")
+    for (const id of questionAnswerUnitIDs(project, pendingQuestionIDs(project, base, ids))) ids.add(id);
   const requiredFiles = new Set([...original.includedIDs, ...base.recordIDs]);
   const graph = preparation?.graph ?? evidenceGraph(project);
   // Restore exact human provenance hidden only by canonical review projection.
@@ -332,7 +351,8 @@ function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () =
   if (closed.missingIDs.length) throw new Error("Record-staged review has missing mandatory evidence; no record was omitted.");
   const records = (["sources", "questions", "requirements", "research"] as const).flatMap((field) => project[field].filter((r) => ids.has(r.id)).map((record) => ({ field, record })));
   if (records.length !== ids.size) throw new Error("Record-staged review cannot reconstruct every mandatory record.");
-  const pins = new Set([...base.recordIDs, ...project.sources.filter((s) => s.kind === "initial" && ids.has(s.id)).map((s) => s.id)]);
+  const pins = new Set([...base.recordIDs, ...project.sources.filter((s) => s.kind === "initial" && ids.has(s.id)).map((s) => s.id),
+    ...(base.recordGrouping === "pending-question-units-v2" ? project.questions.filter(q => q.status === "pending" && ids.has(q.id)).map(q => q.id) : [])]);
   const dense = base.contextPolicy === "staged-dense-records-v5";
   const review: EpicReview = { ...base, contextPolicy: dense ? "staged-dense-records-v5" : "staged-records-v4", guardrailBatches: [] };
   const render = (seeds: string[]): ContextPack => {
@@ -491,7 +511,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
           : new StagedBudgetError(savedFailure.kind, manifest);
         error.message = savedFailure.message;
       }
-      const candidate = { review, error, batchLimit }; candidates.set(cacheKey, candidate); return candidate;
+      const candidate = { review, error, batchLimit }; rememberCandidate(candidates, cacheKey, candidate); return candidate;
     }
     // This caches only deterministic packing, never pending model authority.
     // The full exact project key includes revision and every planning input.
@@ -502,7 +522,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       const copied = structuredClone(savedStaged);
       for (const batch of copied.contexts) batch.manifest.epicReview = copied.review;
       const candidate = { review: copied.review, context: copied.contexts[0]!, batches: copied.contexts, batchKey: epicBatchKey(copied.contexts) };
-      candidates.set(cacheKey, candidate); return candidate;
+      rememberCandidate(candidates, cacheKey, candidate); return candidate;
     }
     try {
       const staged = isStagedPolicy(contextPolicy) ? during(activity === "saved-policy" ? "saved-policy" : "staging",
@@ -539,13 +559,14 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     // failed compatibility candidate, not permission to abort the whole catalog
     // or discard old stages. Cache it so repeated historical jobs do not retry
     // the same deterministic >16-batch preparation within this invocation.
-    const candidate = { review, context, batches, batchKey, error, batchLimit }; candidates.set(cacheKey, candidate); return candidate;
+    const candidate = { review, context, batches, batchKey, error, batchLimit }; rememberCandidate(candidates, cacheKey, candidate); return candidate;
   };
   const equivalentCompleted = options.completedEquivalence ?? new Map<string, boolean>();
   const completedInventories = new WeakMap<ContextPack[], Set<string>>();
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID) return false;
+    if (!pendingEvidenceCompatible(project, j.retrievalWork?.epicStages, candidate.batches)) return false;
     if (j.context.epicReview.inputKey !== review.inputKey) {
       if (!readRevision || !candidate.batches || j.status !== "completed" || !j.result || !j.retrievalWork?.final
         || j.retrievalWork.epicStages?.phase !== "complete" || !recordStagePolicy(review.contextPolicy)
@@ -573,7 +594,12 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       if (j.retrievalWork?.final) return j.retrievalWork.final.evidenceBasis?.key === retrievalEvidenceBasis(current).key;
       if (!extra.length || j.expectedRevision === project.revision) return true;
       if (!readRevision) return true;
-      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare, undefined, contextMemo)).key === retrievalEvidenceBasis(current).key;
+      const proofKey = JSON.stringify(["loaded-epic-evidence-v1", j.id, review.inputKey, retrievalEvidenceBasis(current).key]);
+      if (equivalentCompleted.has(proofKey)) return equivalentCompleted.get(proofKey)!;
+      let matching = false;
+      try { matching = retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare, undefined, contextMemo)).key === retrievalEvidenceBasis(current).key; }
+      catch (error) { if (!(error instanceof ContextBudgetError)) throw error; }
+      equivalentCompleted.set(proofKey, matching); return matching;
     } catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
   const add = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
@@ -644,7 +670,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         && epicIDs.every((id) => records.some((record) => record.epicID === id));
       const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-dense-records-v5"] as const;
       for (const policy of policies) {
-        staged = build(epicID, epicIDs, kind, records, policy, policy === "staged-dense-records-v5" ? "question-answer-units-v1" : undefined);
+        staged = build(epicID, epicIDs, kind, records, policy, policy === "staged-dense-records-v5" ? "pending-question-units-v2" : undefined);
         stageFailure = staged.batchLimit?.message; stageLimit = !!staged.batchLimit;
         if (staged.context) break;
         if (staged.batchLimit) staged = undefined;

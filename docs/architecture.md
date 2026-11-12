@@ -1,5 +1,39 @@
 # Architecture outline
 
+File-backed browser stores publish through the owned
+`src/storage/workspace-publication-process.ts` child process (256 MiB old-space cap), leaving SQLite decisions durable
+without waiting for portable history/rendering. SQLite 72 introduces a dirty
+publication-generation counter separate from specification revisions; lease and
+generation checks/CAS prevent clearing newer project or same-revision job changes.
+Existing file ownership/journalling remains, and browser shutdown drains the child.
+This supersedes worker-thread publication to contain fatal publication allocations.
+Planning also streams scheduling hashes, projects diagnostics before decoding and
+bounds disposable context/candidate/history caches. The original reported crashing
+isolate remains unknown; see [memory mitigation](migrations.md#discovery-allocation-mitigation-and-portable-save-isolation-2026-11-12).
+In-memory and standalone terminal publication remains synchronous. See
+[upgrade and qualification](migrations.md#approval-responsiveness-refinement-packing-and-citation-correction-2026-11-12).
+
+New refinement schedules use actual encoded-size packing with the existing full
+draft reserve; old paid schedules retain their arrays/keys. Staged citation failures
+can retain authenticated rejected replies and request bounded corrections using
+the same step allowance. Conditional portable 45 preserves this history, never
+authorizing an invalid proposal. Broader changed-evidence incremental discovery
+still needs an explicit baseline/impact contract and is not implemented here.
+
+SQLite 71 adds lazily backfilled exact-source digests with SQLite-trigger
+invalidation and transaction-scoped snapshot resolution. Warm portable publication
+avoids reading/hashing unchanged historical payloads, while retaining snapshot
+content validation and the full-byte fallback for separate source/cache connections.
+Continuation selection deduplicates before sanitization and omits diagnostic
+fields before deep-copying. Paid evidence, selection semantics and older artifact
+bytes are unchanged; see [upgrade contract](migrations.md#pending-question-visibility-and-warm-publication-2026-11-12).
+
+Dense grouping-v2 pins exact scope-bound pending questions/options alongside linked
+question/answer units. Explicit legacy-blocker recovery can activate authenticated
+pending evidence during discovery or validation; it remains visible in every
+remaining request and its effective hashes are replayed before publication.
+Conditional portable 44 preserves this capability; old layouts remain exact.
+
 `src/core/epic-linked-evidence.ts` closes explicit question/answer units for new
 dense schedules and authenticates bounded supplementation of existing blocked
 validation steps. Replay and dispatch share the same effective evidence hash;
@@ -13,7 +47,7 @@ from batch layout. `src/core/epic-stage-reuse.ts` authenticates original v4/v5
 read/check ledgers against their historical revision and compares the complete
 expanded record union plus every displayed guidance field with today's candidate.
 Only fully completed published work qualifies; changed evidence and partial work
-retain existing checks. Local resolved-prefix keys now use v4 without changing paid
+retain existing checks. Local resolved-prefix keys now use v5 without changing paid
 protocols or portable formats. Numeric diagnostics distinguish equivalence proofs
 and draft removals; see [compatibility and remaining scope](migrations.md#exact-dependency-equivalent-completed-discovery-2026-11-12).
 

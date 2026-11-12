@@ -1,5 +1,46 @@
 # Browser workspace, epics, and estimated completeness
 
+## Approval and wording-review responsiveness (2026-11-12)
+
+Plain approval without an added note still records a human decision locally without
+AI. File-backed browser workspaces now render/save portable history in an owned,
+heap-capped child process, so that save need not hold the browser server's event loop. The decision is
+durable in SQLite while the folder can still show **Saving project files…**. Wait
+for **Saved to project folder** before relying on that portable copy on another
+machine. Conflicting external edits and unavailable folders remain visible rather
+than overwritten. Normal shutdown waits for owned publication to finish. If the
+save process stops, SQLite work remains intact and folder saving shows unavailable;
+retry folder sync rather than resetting the project or rerunning model stages.
+The precise cause of the reported fatal discovery allocation is not yet reproduced.
+
+New wording-review schedules pack exact encoded requests more densely; existing
+paid layouts/checks remain reusable. Staged discovery now distinguishes missing
+citations from unseen ones and can correct a rejected response within its original
+three-attempt stage allowance. Failed replies never publish. Older failures without
+a saved reply receive only a generic warning on explicit retry, not an invented
+model receipt. Restart the backend to load these changes; no reset is needed.
+
+This first pass does not yet replace broad discovery passes with incremental
+changed-decision review. Approvals with interpretive notes and other saved-response
+checks may still require model work. See [compatibility and actual checks](migrations.md#approval-responsiveness-refinement-packing-and-citation-correction-2026-11-12).
+
+## Pending questions and warm workspace saves (2026-11-12)
+
+New dense discovery packages keep the full relevant pending-question wording and
+options visible, not just a count. These are existing AI proposals to compare for
+duplicates, not settled preferences. An eligible saved blocker requesting those
+questions can continue explicitly with its original stages, draft and attempts.
+The exact inventory stays visible through all remaining checks; genuine blockers
+and exhausted budgets still stop publication. Restart the backend, then continue
+Discover for the affected feature—do not reset or re-enter answers.
+
+Workspace saving can now reuse transactionally invalidated digests instead of
+reading/hashing every old revision again. The first save after upgrading lazily
+warms this local computation, so it can still take the old amount of time. Later
+diagnostic exports report source-digest hits/misses; no live latency improvement
+is claimed yet. Original paid work, assessments and portable artifacts remain
+intact. See [upgrade and verification](migrations.md#pending-question-visibility-and-warm-publication-2026-11-12).
+
 ## Linked evidence discovery continuation (2026-11-12)
 
 Restart the backend, then explicitly continue Discover for the affected feature.

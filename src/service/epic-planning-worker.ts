@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { performance } from "node:perf_hooks";
+import { getHeapStatistics } from "node:v8";
 import { planEpicReview, type EpicPlanningOptions } from "../core/epic-review.js";
 import type { Project, Job, Submission } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
@@ -26,6 +27,7 @@ let blockerSummary: PlanningBlockers = { contextLimit: 0, stagedTarget: 0, stage
   savedBlocker: 0, attemptLimit: 0, unknown: 0, largestCharacters: null, smallestBudget: null };
 let activity: PlanningActivity = "catalog", lastActivity = performance.now();
 let phase: PlanningProgress["phase"] = "indexing";
+let heapPeakBytes = 0;
 let examinedStates = { reviewed: 0, waiting: 0, blocked: 0, pending: 0 };
 const activityMs = { catalog: 0, savedPolicy: 0, staging: 0, splitting: 0, newPackage: 0 };
 const activityField = { catalog: "catalog", "saved-policy": "savedPolicy", staging: "staging", splitting: "splitting", "new-package": "newPackage" } as const;
@@ -34,10 +36,12 @@ const accumulate = () => {
 };
 const progress = (next: PlanningProgress["phase"]) => {
   phase = next; accumulate();
+  const memory = getHeapStatistics(); heapPeakBytes = Math.max(heapPeakBytes, memory.used_heap_size);
   port.postMessage({ type: "progress", value: { format: 1, phase, examinedPackages, contextPreparations,
     checkpoints: ++checkpoints, revisionsLoaded: loadedRevisions.size, reusedGroups, resolvedGroups,
     reusedContexts, preparedContexts, examinedStates, activity, activityMs, reusedClosures, closureRenderAttempts, blockerSummary,
-    completedEquivalenceChecks, equivalentCompletedPackages } });
+    completedEquivalenceChecks, equivalentCompletedPackages,
+    memory: { heapUsedBytes: memory.used_heap_size, heapPeakBytes, heapLimitBytes: memory.heap_size_limit } } });
 };
 class MissingRevision extends Error { constructor(readonly revision: number, readonly scope?: "equivalence") { super("Historical revision required."); } }
 function run() {
@@ -89,7 +93,10 @@ port.on("message", (message: { revision: number; project: Project; scope?: "equi
   if (message.scope === "equivalence") {
     equivalenceSnapshots.set(message.revision, message.project);
     while (equivalenceSnapshots.size > 2) equivalenceSnapshots.delete(equivalenceSnapshots.keys().next().value!);
-  } else snapshots.set(message.revision, message.project);
+  } else {
+    snapshots.set(message.revision, message.project);
+    while (snapshots.size > 2) snapshots.delete(snapshots.keys().next().value!);
+  }
   run();
 });
 run();

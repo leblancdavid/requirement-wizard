@@ -16,6 +16,21 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Plain browser approvals no longer need to wait for portable history rendering:
+file-backed stores publish in an owned, heap-capped child process while SQLite decisions remain durable.
+New wording-review schedules pack measured encoded requests more densely, and staged
+discovery can correct invalid citations within its existing attempt ceiling. Restart
+the backend; no reset is needed. Broad incremental discovery remains outstanding.
+See [upgrade and verification boundaries](docs/migrations.md#approval-responsiveness-refinement-packing-and-citation-correction-2026-11-12).
+
+New dense discovery schedules also repeat relevant pending questions/options, so
+duplicate checking does not depend on unseen proposals. Eligible saved blockers
+can explicitly continue with this exact evidence, retaining paid stages and spent
+attempts. Warm workspace publication now avoids full historical source reads and
+hashing through transactionally invalidated local digests; the first publication
+backfills them lazily. No project reset or repeated assessment is required. See
+[compatibility and verification limits](docs/migrations.md#pending-question-visibility-and-warm-publication-2026-11-12).
+
 New dense discovery schedules keep linked questions/options and answers together.
 Explicit Discover continuation can also supply missing linked evidence to a saved
 blocked check without repeating completed stages or resetting spent attempts.

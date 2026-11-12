@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import { fork, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createPortableSnapshotReader, snapshotCacheProfile } from "./portable-snapshots.js";
 import { readRefinementEvidence } from "./refinement-evidence.js";
 import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
@@ -90,7 +92,7 @@ import { assertRefinementEvidence } from "../core/refinement-context.js";
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
-import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, epicPlanningCacheLimits, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, epicPlanningCacheLimits, rememberEpicContext, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { readinessQuestionTaskSchema, submissionQuestionBlock, validateReadinessQuestions } from "../core/readiness-questions.js";
@@ -232,6 +234,9 @@ function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outp
 export class ProjectStore {
   private readonly db: Database.Database;
   private readonly deferredWorkspaceSync = new Map<string, number>();
+  private publicationWorker?: ChildProcess;
+  private readonly publicationTasks = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+  private closing = false;
   // Content-addressed derived drafts, not model-call results or new authority.
   // Keep four unowned assessments plus active workers' pinned origins (at most
   // sixteen per candidate); never retain the historical request bodies.
@@ -239,7 +244,8 @@ export class ProjectStore {
   private readonly definitionCheckpointOwners = new Map<string, Set<string>>();
   private readonly workflowCheckpointViews = new Map<string, { stamp: string; rows: Map<string, { jobID: string; inputRevision: number; inputKey: string; acceptedStages: number }> }>();
 
-  constructor(path: string, private readonly startupProgress?: StartupProgress) {
+  constructor(private readonly path: string, private readonly startupProgress?: StartupProgress,
+    private readonly options: { publication?: "background" | "manual"; publicationOwner?: string; publicationHeapMb?: number } = {}) {
     reportStartup(startupProgress, "opening-data");
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
@@ -292,10 +298,91 @@ export class ProjectStore {
       }
       if (binding.formatVersion !== 3 || existsSync(join(binding.path, ".requirement-wizard"))) this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
     }
-    this.syncWorkspaces();
+    if (this.options.publication !== "manual") this.syncWorkspaces();
   }
 
-  close() { this.syncWorkspaces(); this.db.close(); }
+  close() {
+    if (this.options.publication !== "manual") this.syncWorkspaces();
+    this.closing = true;
+    if (this.publicationWorker?.connected) this.publicationWorker.send({ close: true });
+    this.db.close();
+  }
+
+  /** Browser shutdown can await portable writes without blocking its event loop.
+   * SQLite decisions are already durable even if a process exits before flushing. */
+  async flushWorkspacePublication() {
+    this.syncWorkspaces();
+    while (this.publicationTasks.size) await Promise.all([...this.publicationTasks.values()].map(task => task.promise));
+  }
+
+  async stopWorkspacePublication() {
+    await this.flushWorkspacePublication();
+    this.closing = true;
+    const worker = this.publicationWorker;
+    if (!worker) return;
+    const exited = new Promise<void>(resolve => worker.once("exit", () => resolve()));
+    worker.ref(); worker.channel?.ref(); if (worker.connected) worker.send({ close: true }); await exited;
+  }
+
+  enableBackgroundWorkspacePublication() {
+    if (this.db.open && this.path !== ":memory:") { this.closing = false; this.options.publication = "background"; }
+  }
+
+  workspacePublicationCanRetry(id: string) {
+    return !!this.db.prepare("SELECT 1 FROM workspaces WHERE project_id = ? AND dirty = 1 AND (owner IS NULL OR lease_until <= ?)").get(id, Date.now())
+      && !this.deferredWorkspaceSync.has(id) && !this.discoveryActive(id) && !this.executionActive(id);
+  }
+
+  private scheduleWorkspacePublication(id: string) {
+    if (this.closing || this.publicationTasks.has(id)) return;
+    if (!this.publicationWorker) {
+      // A native V8 allocation failure in a worker thread can abort Electron's
+      // entire process. Publication gets an owned, capped child process instead;
+      // only small project-ID/status messages cross its IPC boundary.
+      const source = import.meta.url.endsWith(".ts"), owner = randomUUID();
+      const entry = fileURLToPath(new URL(`./workspace-publication-process.${source ? "ts" : "js"}`, import.meta.url));
+      const heap = Math.max(16, Math.min(512, this.options.publicationHeapMb ?? 256));
+      const worker = this.publicationWorker = fork(entry, [this.path, owner], {
+        execArgv: [`--max-old-space-size=${heap}`, ...(source ? ["--import", "tsx"] : [])],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "json",
+      });
+      worker.on("message", ({ projectID, retry }: { projectID: string; retry: boolean }) => {
+        if (this.publicationWorker !== worker) return;
+        const task = this.publicationTasks.get(projectID);
+        this.publicationTasks.delete(projectID); task?.resolve();
+        if (!this.closing && this.db.open && retry) this.syncWorkspace(projectID);
+        if (!this.publicationTasks.size) { worker.unref(); worker.channel?.unref(); }
+      });
+      let failed = false;
+      const failure = () => {
+        if (failed || this.publicationWorker !== worker) return; failed = true;
+        if (this.db.open) for (const id of this.publicationTasks.keys()) {
+          const lease = this.db.prepare("SELECT owner FROM workspaces WHERE project_id = ?").get(id) as { owner: string | null } | undefined;
+          if (lease?.owner && lease.owner !== owner) continue;
+          const binding = this.workspace(id);
+          if (binding) { binding.status = "unavailable"; binding.diagnostic = "The isolated portable-save process stopped before finishing (possibly memory pressure). Committed SQLite decisions and checkpoints are retained. Retry folder sync; no model call will be repeated by publication.";
+            this.db.prepare("UPDATE workspaces SET payload = ?, dirty = 1, owner = NULL, lease_until = NULL WHERE project_id = ? AND (owner IS NULL OR owner = ?)")
+              .run(JSON.stringify(binding), id, owner); }
+        }
+        for (const task of this.publicationTasks.values()) task.resolve(); this.publicationTasks.clear();
+        if (this.publicationWorker === worker) this.publicationWorker = undefined;
+      };
+      worker.on("error", () => {
+        if (worker.pid && worker.exitCode === null && !worker.killed) worker.kill(); else failure();
+      });
+      worker.on("exit", () => {
+        if (this.publicationWorker !== worker) return;
+        if (this.publicationTasks.size) failure();
+        if (this.publicationWorker === worker) this.publicationWorker = undefined;
+        for (const task of this.publicationTasks.values()) task.resolve(); this.publicationTasks.clear();
+      });
+    }
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    this.publicationTasks.set(id, { promise, resolve });
+    this.publicationWorker.ref(); this.publicationWorker.channel?.ref(); this.publicationWorker.send({ projectID: id });
+  }
 
   projectRevision(id: string) {
     const row = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number } | undefined;
@@ -588,11 +675,16 @@ export class ProjectStore {
     // Workers checkpoint immediately in SQLite. Do not repeatedly rebuild the
     // portable evidence set while a scan/discovery/implementation request owns it.
     if (this.deferredWorkspaceSync.has(id) || this.db.inTransaction || this.executionActive(id) || this.discoveryActive(id)) return this.workspace(id);
-    const owner = randomUUID();
+    if (this.options.publication === "background" && this.path !== ":memory:") {
+      if (this.db.prepare("SELECT 1 FROM workspaces WHERE project_id = ? AND dirty = 1").get(id)) this.scheduleWorkspacePublication(id);
+      return this.workspace(id);
+    }
+    const owner = this.options.publicationOwner ?? randomUUID();
     const acquired = this.db.prepare("UPDATE workspaces SET owner = ?, lease_until = ? WHERE project_id = ? AND (owner IS NULL OR lease_until <= ?)")
       .run(owner, Date.now() + 300_000, id, Date.now()).changes;
     if (!acquired) return this.workspace(id);
     const binding = this.workspace(id)!;
+    const generation = (this.db.prepare("SELECT publication_version AS version FROM workspaces WHERE project_id = ?").get(id) as { version: number }).version;
     const publicationStarted = performance.now();
     let publicationMetrics: Workspace["publicationMetrics"];
     try {
@@ -605,7 +697,7 @@ export class ProjectStore {
       if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 3) return binding;
       const metrics: NonNullable<Workspace["publicationMetrics"]> = publicationMetrics = binding.publicationMetrics = { format: 1, revision: project.revision };
       let started = performance.now();
-      const jobs = this.jobs(id), submissions = this.submissions(id);
+      const jobs = this.publicationJobs(id), submissions = this.submissions(id);
       metrics.historyMs = performance.now() - started; started = performance.now();
       metrics.continuationProfile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0,
         serializedRecords: 0, digestComputations: 0, digestHits: 0, snapshotCache: snapshotCacheProfile() };
@@ -613,18 +705,24 @@ export class ProjectStore {
         metrics.continuationProfile.snapshotCache);
       const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
         historicalRecords,
-        (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile);
+        (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile, { transferJobs: true });
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       const files = renderWorkspace(project, this.execution(id), continuation);
       metrics.renderMs = performance.now() - started; started = performance.now();
+      // Worker computation can overlap newer decisions or same-revision job
+      // checkpoints. Never publish a mixed snapshot or clear their pending save.
+      const current = this.db.prepare("SELECT publication_version AS version, owner, lease_until AS lease FROM workspaces WHERE project_id = ?").get(id) as { version: number; owner: string; lease: number } | undefined;
+      if (!current || current.owner !== owner || current.lease <= Date.now()) throw new Error("Workspace publication lease changed or expired. Saved decisions remain in SQLite.");
+      if (current.version !== generation || this.projectRevision(id) !== project.revision) return this.workspace(id);
       checkWorkspace(binding, Object.keys(files));
       binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
       // Retain every recognized intermediate write until the whole publication succeeds.
       for (const [name, content] of Object.entries(files)) binding.pendingHashes[name] = [...new Set([...(binding.pendingHashes[name] ?? []), hash(content)])];
       binding.status = "pending"; binding.diagnostic = null;
       // Commit the intended hashes before touching files: partial writes can be recovered.
-      this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
+       if (!this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ? AND publication_version = ?")
+         .run(JSON.stringify(binding), id, owner, generation).changes) return this.workspace(id);
       publishWorkspace(directory, files, binding.pendingRemovals);
       metrics.filesMs = performance.now() - started;
       binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
@@ -632,9 +730,11 @@ export class ProjectStore {
       binding.portableBase ??= portableDigest(JSON.parse(files["manifest.json"]!).hashes);
       binding.savedRevision = project.revision; binding.status = "saved";
       metrics.elapsedMs = performance.now() - publicationStarted;
-      this.db.prepare("UPDATE workspaces SET payload = ?, dirty = CASE WHEN (SELECT revision FROM projects WHERE id = ?) = ? THEN 0 ELSE 1 END WHERE project_id = ? AND owner = ?")
-        .run(JSON.stringify(binding), id, project.revision, id, owner);
+      this.db.prepare("UPDATE workspaces SET payload = ?, dirty = 0 WHERE project_id = ? AND owner = ? AND publication_version = ? AND (SELECT revision FROM projects WHERE id = ?) = ?")
+        .run(JSON.stringify(binding), id, owner, generation, id, project.revision);
     } catch (error) {
+      const current = this.db.prepare("SELECT publication_version AS version FROM workspaces WHERE project_id = ?").get(id) as { version: number } | undefined;
+      if (current && current.version !== generation) return this.workspace(id);
       if (publicationMetrics) publicationMetrics.elapsedMs = performance.now() - publicationStarted;
       // An unfinished continuation profile is not a complete phase measurement.
       if (publicationMetrics?.continuationMs === undefined) delete publicationMetrics?.continuationProfile;
@@ -646,7 +746,7 @@ export class ProjectStore {
       this.db.prepare("UPDATE workspaces SET owner = NULL, lease_until = NULL WHERE project_id = ? AND owner = ?").run(id, owner);
       if (binding.status === "saved" && this.workspace(id)?.status === "pending") {
         // Another process may have committed a newer revision during publication.
-        queueMicrotask(() => { if (this.db.open) this.syncWorkspaces(); });
+        if (this.options.publication !== "manual") queueMicrotask(() => { if (this.db.open) this.syncWorkspaces(); });
       }
     }
     return this.workspace(id);
@@ -669,7 +769,7 @@ export class ProjectStore {
 
   syncWorkspaces() {
     if (this.db.inTransaction) return;
-    for (const row of this.db.prepare("SELECT project_id FROM workspaces WHERE dirty = 1").all() as Array<{ project_id: string }>) this.syncWorkspace(row.project_id);
+    for (const row of this.db.prepare("SELECT project_id FROM workspaces WHERE dirty = 1 AND json_extract(payload, '$.status') NOT IN ('unavailable', 'conflict')").all() as Array<{ project_id: string }>) this.syncWorkspace(row.project_id);
   }
 
   setImplementation(id: string, revision: number, requirementID: string, raw: unknown) {
@@ -1594,6 +1694,15 @@ export class ProjectStore {
     return limit === undefined ? jobs : jobs.reverse();
   }
 
+  /** Publication-private ownership: omitted fields were never portable. Project
+   * them in SQLite before decoding, then transfer these disposable objects to the
+   * serializer rather than cloning the entire paid archive a second time. */
+  private publicationJobs(projectID: string): Job[] {
+    const rows = this.db.prepare(`SELECT json_remove(payload, '$.diagnostic', '$.discoveryMetrics', '$.telemetry', '$.sessionID') AS payload
+      FROM jobs WHERE project_id = ? ORDER BY rowid`).iterate(projectID) as Iterable<{ payload: string }>;
+    return Array.from(rows, row => readStoredJob(row.payload));
+  }
+
   /** Exact original records used by coordinator scheduling/proofs, never a
    * truncated archive or a projected record masquerading as a complete job.
    * Definition/retrieval/scan ledgers are loaded by their own dispatch paths. */
@@ -1826,8 +1935,18 @@ export class ProjectStore {
 
   /** Keep the epic planner independent of potentially large legacy navigation/output history. */
   epicReviewHistory(projectID: string): Job[] {
-    return (this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid")
-      .all(projectID) as { payload: string }[]).map((row) => readStoredJob(row.payload));
+    const rows = this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid")
+      .iterate(projectID) as Iterable<{ payload: string }>;
+    return Array.from(rows, row => readStoredJob(row.payload));
+  }
+
+  /** A scheduling projection, never a full job or portable evidence archive.
+   * The selected prior is reloaded from its exact durable job before dispatch. */
+  epicReviewPlanningHistory(projectID: string): Job[] {
+    const rows = this.db.prepare(`SELECT json_remove(payload, '$.discoveryMetrics', '$.telemetry', '$.researchEvidence', '$.sessionID') AS payload
+      FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid`)
+      .iterate(projectID) as Iterable<{ payload: string }>;
+    return Array.from(rows, row => readStoredJob(row.payload));
   }
 
   /** Derived scheduling only, not exported evidence. Input keys bind workflow
@@ -1873,9 +1992,13 @@ export class ProjectStore {
     this.assertPlanningContextFormats(projectID);
     // Validate all generations before a later write can replace an old one.
     const rows = this.db.prepare("SELECT input_key, context_key, payload FROM epic_planning_contexts WHERE project_id = ? ORDER BY rowid")
-      .all(projectID) as { input_key: string; context_key: string; payload: string }[];
-    const parsed = rows.map((row) => ({ ...row, value: epicContextCheckpointSchema.parse(JSON.parse(row.payload)) as EpicContextCheckpoint }));
-    return new Map(parsed.filter((row) => row.input_key === inputKey).map((row) => [row.context_key, row.value]));
+      .iterate(projectID) as Iterable<{ input_key: string; context_key: string; payload: string }>;
+    const contexts = new Map<string, EpicContextCheckpoint>();
+    for (const row of rows) {
+      const value = epicContextCheckpointSchema.parse(JSON.parse(row.payload)) as EpicContextCheckpoint;
+      if (row.input_key === inputKey) rememberEpicContext(contexts, row.context_key, value);
+    }
+    return contexts;
   }
 
   private assertPlanningContextFormats(projectID: string) {

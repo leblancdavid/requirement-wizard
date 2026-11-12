@@ -61,8 +61,8 @@ export type EpicContextCheckpoint = { format: 1; outcome: "context"; context: Co
 /** Small failed probes must not be evicted by large successful wire contexts.
  * Otherwise restarting a long partition thrashes the same 128-entry cache. */
 export const epicPlanningCacheLimits = {
-  context: { entries: 128, bytes: 16 * 1024 * 1024 },
-  failure: { entries: 4096, bytes: 64 * 1024 * 1024 },
+  context: { entries: 128, bytes: 8 * 1024 * 1024 },
+  failure: { entries: 4096, bytes: 8 * 1024 * 1024 },
 } as const;
 const checkpointBytes = new WeakMap<EpicContextCheckpoint, number>();
 export function rememberEpicContext(contexts: Map<string, EpicContextCheckpoint>, key: string, value: EpicContextCheckpoint) {

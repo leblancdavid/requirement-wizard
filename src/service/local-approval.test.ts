@@ -26,6 +26,37 @@ async function idle(queue: DiscoveryQueue, id: string) {
   while (queue.isActive(id)) { assert.ok(Date.now() < deadline, "Queue did not finish"); await new Promise((done) => setTimeout(done, 5)); }
 }
 
+test("file-backed approval commits immediately while its owned workspace process coalesces portable publication", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "approval-publication-")), folder = join(directory, "repo"); mkdirSync(folder);
+  const store = new ProjectStore(join(directory, "projects.sqlite"));
+  const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Approval/publication must not call a model"); } }));
+  try {
+    const original = seed(store); store.connectWorkspace(original.id, original.revision, folder);
+    store.enableBackgroundWorkspacePublication();
+    let project = original;
+    for (let index = 0; index < 12; index++) project = store.note(project.id, project.revision, `Coalesced exact human note ${index}`);
+    const approval = queue.submit(project.id, response(project));
+    assert.equal(approval.status, "completed"); assert.equal(approval.applied, true);
+    const approved = store.get(project.id);
+    assert.equal(approved.requirements[0]!.status, "accepted");
+    assert.equal(store.workspace(project.id)!.status, "pending");
+    assert.equal(store.workspace(project.id)!.savedRevision, original.revision, "Approval must not wait for portable rendering");
+    let heartbeat = false;
+    const timer = setTimeout(() => { heartbeat = true; }, 0);
+    await store.flushWorkspacePublication(); clearTimeout(timer);
+    assert.equal(heartbeat, true, "The parent event loop remains available during worker initialization/rendering");
+    assert.equal(store.workspace(project.id)!.status, "saved", store.workspace(project.id)!.diagnostic ?? undefined);
+    assert.equal(store.workspace(project.id)!.savedRevision, approved.revision);
+    assert.deepEqual(store.get(project.id), approved); assert.equal(store.jobs(project.id).length, 1);
+    // A second dirty generation at the same specification revision must also save.
+    const work = store.beginJob(project.id, approved.revision).job; store.claimJob(work.id, Date.now() + 60000);
+    store.failJob(work.id, "cancelled", "Deterministic job-only change");
+    await store.flushWorkspacePublication();
+    assert.equal(store.workspace(project.id)!.status, "saved");
+  } finally { await queue.close(); await store.stopWorkspacePublication(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 for (const paused of [false, true]) test(`plain approval completes locally with automatic processing ${paused ? "paused" : "enabled"}`, async () => {
   const store = new ProjectStore(":memory:");
   const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Plain approval must not call AI"); } }));

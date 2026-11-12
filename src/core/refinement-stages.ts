@@ -106,9 +106,37 @@ export function refinementStageContext(m: RefinementMaterials, w: RefinementWork
   if (manifest.characters > stageLimit) throw new ContextBudgetError(manifest);
   return { data, manifest };
 }
-export function planRefinementStages(m: RefinementMaterials): RefinementWork {
+export function planRefinementStages(m: RefinementMaterials, packing: "measured" | "legacy" = "measured"): RefinementWork {
   const w: RefinementWork = { format: m.pair ? 2 : 1, policy: m.pair ? "exact-resolution-batches-v1" : "exact-refinement-batches-v1", ...(m.pair ? { pair: m.pair } : {}), requirementID: m.requirementID, materialKey: m.materialKey,
     planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
+  if (packing === "measured") {
+    const records = m.records.filter(r => !m.pins.has(r.record.id));
+    const fits = (batch: string[]) => {
+      try {
+        // Full draft reserve, plus conservative room for the read/check label
+        // and two-digit step/batch counters. Evidence is never size-estimated.
+        return refinementStageContext(m, { ...w, batches: [batch] }, empty()).manifest.characters + draftLimit + 64 <= stageLimit;
+      } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return false; }
+    };
+    if (!records.length) {
+      const batch = [...m.pins].filter(id => m.evidenceIDs.includes(id));
+      if (!fits(batch)) throw new Error("An exact refinement record plus full target evidence and draft reserve cannot fit. No evidence was truncated and no model call started.");
+      w.batches.push(batch);
+    }
+    for (let offset = 0; offset < records.length;) {
+      let low = offset + 1, high = records.length, end = offset;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        if (fits(records.slice(offset, middle).map(r => r.record.id))) { end = middle; low = middle + 1; }
+        else high = middle - 1;
+      }
+      if (end === offset) throw new Error("An exact refinement record plus full target evidence and draft reserve cannot fit. No evidence was truncated and no model call started.");
+      w.batches.push(records.slice(offset, end).map(r => r.record.id)); offset = end;
+      if (w.batches.length > 32) throw new Error("Refinement needs more than 32 exact batches. No evidence was discarded and no request started.");
+    }
+    w.planKey = hash([w.policy, w.materialKey, w.batches]); refinementWorkSchema.parse(w);
+    return w;
+  }
   let batch: string[] = [], bytes = 0;
   for (const { record } of m.records.filter((r) => !m.pins.has(r.record.id))) {
     const size = JSON.stringify(record).length;

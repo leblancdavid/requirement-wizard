@@ -181,7 +181,7 @@ test("68 to 69 upgrade shares authenticated exact records, preserves old computa
       assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
       assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), jobs);
     }
-    const first = (db.prepare("SELECT digest FROM portable_record_cache LIMIT 1").get() as { digest: string }).digest;
+    const first = hash(old.fields.find(([key]) => key === "name")![1] as string);
     db.prepare("UPDATE portable_record_cache SET payload=? WHERE digest=?").run(deflateSync("corrupt exact bytes"), first);
     assert.deepEqual(portableSnapshotRecords(db, seed.id, seed.revision, () => { calls++; return normalize(seed.revision); }), old);
     assert.equal(calls, 2, "Cold later snapshot and corrupt object each normalize once");
@@ -190,4 +190,105 @@ test("68 to 69 upgrade shares authenticated exact records, preserves old computa
     assert.equal(calls, 3, "Missing objects rebuild from originals, never silently omit evidence");
     assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("70 to 71 source-digest upgrade is lazy, transactional and preserves exact history across interrupted startup/reopen", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "source-digest-upgrade-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  const p = store.create("Digest upgrade", "Exact historical evidence", { providerID: "openai", modelID: "fixture" });
+  store.beginJob(p.id, p.revision); store.note(p.id, p.revision, "Later evidence"); store.close();
+  let db = new Database(path);
+  try {
+    const before = db.prepare("SELECT * FROM revisions ORDER BY revision").all(), jobs = db.prepare("SELECT * FROM jobs").all();
+    db.exec(`DROP TRIGGER portable_source_digest_insert; DROP TRIGGER portable_source_digest_update; DROP TRIGGER portable_source_digest_delete;
+      DROP TABLE portable_source_digests; DELETE FROM migration_history WHERE version>=71; PRAGMA user_version=70;
+      CREATE TRIGGER fail_71 BEFORE INSERT ON migration_history WHEN NEW.version=71 BEGIN SELECT RAISE(ABORT, 'Interrupted source-digest upgrade'); END;`);
+    assert.throws(() => migrateDatabase(db), /Interrupted source-digest upgrade/);
+    assert.equal(db.pragma("user_version", { simple: true }), 70);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='portable_source_digests'").get(), undefined);
+    db.exec("DROP TRIGGER fail_71"); migrateDatabase(db);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM portable_source_digests").get() as { n: number }).n, 0, "Startup never hashes the whole history");
+    const normalized = projectSchema.parse(JSON.parse((before[0] as { payload: string }).payload));
+    assert.deepEqual(portableSnapshotRecords(db, p.id, p.revision, () => normalized), portableRecords(normalized));
+    for (let reopen = 0; reopen < 2; reopen++) {
+      db.close(); db = new Database(path); migrateDatabase(db);
+      const profile = snapshotCacheProfile();
+      assert.deepEqual(createPortableSnapshotReader(db, p.id, () => assert.fail("Warm reopen cannot normalize"), db, profile)(p.revision), portableRecords(normalized));
+      assert.equal(profile.sourceDigestHits, 1); assert.equal(profile.sourceReadMs, 0); assert.equal(profile.sourceHashMs, 0);
+      assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), before);
+      assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), jobs);
+    }
+  } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("source digests skip warm full-payload reads and invalidate on SQL update, replace, rollback and deletion", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "source-digest-invalidation-")), path = join(directory, "state.sqlite");
+  const disk = new ProjectStore(path);
+  const project = disk.create("Source authentication", "Keep original exact bytes", { providerID: "openai", modelID: "fixture" }); disk.close();
+  const source = new Database(path); let calls = 0;
+  const raw = () => (source.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=?").get(project.id, project.revision) as { payload: string }).payload;
+  const normalize = () => { calls++; return projectSchema.parse(JSON.parse(raw())); };
+  try {
+    const original = raw(), first = portableSnapshotRecords(source, project.id, project.revision, normalize);
+    const profile = snapshotCacheProfile(), warm = createPortableSnapshotReader(source, project.id, normalize, source, profile);
+    assert.deepEqual(warm(project.revision), first); assert.equal(calls, 1);
+    assert.equal(profile.sourceDigestHits, 1); assert.equal(profile.sourceReadMs, 0); assert.equal(profile.sourceHashMs, 0);
+    const digestBefore = source.prepare("SELECT * FROM portable_source_digests").all();
+    assert.throws(() => source.transaction(() => {
+      source.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(original + " ", project.id, project.revision);
+      assert.equal((source.prepare("SELECT COUNT(*) AS n FROM portable_source_digests").get() as { n: number }).n, 0);
+      throw new Error("Interrupted original replacement");
+    })(), /Interrupted original replacement/);
+    assert.deepEqual(source.prepare("SELECT * FROM portable_source_digests").all(), digestBefore);
+    const external = new Database(path);
+    try { external.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(original + " ", project.id, project.revision); }
+    finally { external.close(); }
+    assert.deepEqual(warm(project.revision), first); assert.equal(calls, 2);
+    assert.equal(profile.sourceDigestMisses, 1);
+    source.prepare("INSERT OR REPLACE INTO revisions(project_id, revision, reason, payload) VALUES (?, ?, ?, ?)").run(project.id, project.revision, "Replacement fixture", original);
+    assert.deepEqual(warm(project.revision), first); assert.equal(profile.sourceDigestMisses, 2);
+    source.exec("CREATE TRIGGER fail_source_digest BEFORE INSERT ON portable_source_digests BEGIN SELECT RAISE(ABORT, 'Interrupted digest write'); END");
+    source.prepare("DELETE FROM portable_source_digests").run();
+    assert.throws(() => warm(project.revision), /Interrupted digest write/);
+    assert.equal((source.prepare("SELECT COUNT(*) AS n FROM portable_source_digests").get() as { n: number }).n, 0);
+    assert.equal(raw(), original);
+    source.exec("DROP TRIGGER fail_source_digest"); assert.deepEqual(warm(project.revision), first);
+    source.prepare("DELETE FROM revisions WHERE project_id=? AND revision=?").run(project.id, project.revision);
+    assert.throws(() => warm(project.revision), /not found/);
+  } finally { source.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("many warm historical snapshots avoid every full source read/hash while preserving all portable bytes", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "source-digest-history-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  const p = store.create("History fixture", "Exact source text. ".repeat(600), { providerID: "openai", modelID: "fixture" }); store.close();
+  const db = new Database(path), originals = new Database(path);
+  try {
+    const write = db.prepare("INSERT INTO revisions(project_id, revision, reason, payload) VALUES (?, ?, ?, ?)");
+    const history = Array.from({ length: 120 }, (_, index) => projectSchema.parse({ ...p, revision: index + 2,
+      sources: Array.from({ length: 8 }, (_, n) => ({ ...p.sources[0]!, id: `source-${n}`, text: `${n} ` + p.sources[0]!.text })),
+      summary: `Exact revision ${index}` }));
+    db.transaction(() => { for (const snapshot of history) write.run(p.id, snapshot.revision, "Synthetic history", JSON.stringify(snapshot)); })();
+    const normalize = (revision: number) => history.find(p => p.revision === revision)!;
+    const cold = createPortableSnapshotReader(db, p.id, normalize);
+    for (const snapshot of history) cold(snapshot.revision);
+    const directProfile = snapshotCacheProfile(), warmProfile = snapshotCacheProfile();
+    const direct = createPortableSnapshotReader(db, p.id, () => assert.fail("Warm normalization must not repeat"), originals, directProfile);
+    const warm = createPortableSnapshotReader(db, p.id, () => assert.fail("Warm normalization must not repeat"), db, warmProfile);
+    for (const snapshot of history) assert.deepEqual(warm(snapshot.revision), direct(snapshot.revision));
+    assert.equal(warmProfile.sourceDigestHits, 120); assert.equal(warmProfile.sourceDigestMisses, 0);
+    assert.equal(warmProfile.sourceReadMs, 0); assert.equal(warmProfile.sourceHashMs, 0);
+    assert.equal(directProfile.sourceDigestHits, 0); assert.equal(directProfile.sourceDigestMisses, 120);
+    const current = history.at(-1)!;
+    const jobs = history.slice(0, -1).map((snapshot, index) => ({ id: `job-${index}`, projectID: p.id, expectedRevision: snapshot.revision,
+      model: p.model, status: "interrupted" as const, leaseUntil: null, context: { revision: snapshot.revision, focusEpicID: null, characters: 1,
+        budget: 96000, includedIDs: [], omittedIDs: [], refinementOnly: true } }));
+    assert.deepEqual(renderWorkspace(current, undefined, continuationState(current, jobs, [], normalize, warm)),
+      renderWorkspace(current, undefined, continuationState(current, jobs, [], normalize, direct)));
+    console.log(JSON.stringify({ fixtureOnly: true, snapshots: 120, fullReadPathMs: directProfile.sourceReadMs + directProfile.sourceHashMs,
+      warmSourceReadAndHashMs: warmProfile.sourceReadMs + warmProfile.sourceHashMs, sourceDigestHits: warmProfile.sourceDigestHits }));
+  } finally { originals.close(); db.close(); rmSync(directory, { recursive: true, force: true }); }
 });
