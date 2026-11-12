@@ -7,6 +7,14 @@ export type LogRecord = { id: string; title: string; detail: string; source: str
   atLabel?: "Started" | "Created" | "Recorded" | "Submitted"; finishedAt?: string; durationMs?: number; epicID?: string; revision?: number; summary?: string };
 export const logLimit = 250;
 
+/** Explicitly bounded, loaded-view export; never claim a full receipt archive. */
+export function exportLogRecords(records: LogRecord[]): string {
+  return JSON.stringify({ format: 1, scope: "Loaded matching logs only; older tasks and full model receipts are not included.",
+    containsProjectInformation: true, truncated: records.length > logLimit,
+    records: records.slice(0, logLimit).map(record => Object.fromEntries(Object.entries(record).map(([key, value]) =>
+      [key, typeof value === "string" ? key === "detail" ? logPreview(value) : redactLog(value) : value]))) }, null, 2) + "\n";
+}
+
 export function logTiming(record: LogRecord) {
   const valid = (value?: string) => value && Number.isFinite(Date.parse(value)) ? value : undefined;
   const at = valid(record.at), end = valid(record.finishedAt);
@@ -52,7 +60,7 @@ export function projectLogs(jobs: Job[], submissions: Submission[], execution?: 
   const records: LogRecord[] = jobs.map((job) => ({ id: job.id, projectID: job.projectID, source: job.kind === "definition-joint-review" || job.kind === "definition-scope-review" || job.kind === "definition-mixed-review" || job.context?.definitionAssessment ? "Definition review" : job.helpRequest ? "Question help" : job.kind === "scan" ? "Folder scan" : "Discovery", title: job.kind === "definition-mixed-review" ? "Mixed finding check" : job.kind === "definition-scope-review" ? "Scoped finding review" : job.kind === "definition-joint-review" ? "Joint finding check" : job.context?.definitionAssessment ? "Definition review" : job.helpRequest ? "Question help" : job.kind === "scan" ? "Folder scan" : "Project review", status: job.status,
     at: job.startedAt ?? job.createdAt, atLabel: job.startedAt ? "Started" : "Created", finishedAt: job.finishedAt, durationMs: job.discoveryMetrics?.elapsedMs ?? undefined, epicID: job.context?.definitionAssessment?.epicID ?? job.context?.focusEpicID ?? undefined, revision: job.expectedRevision,
     summary: definitionRunOutcome(job.discoveryMetrics?.requests.length, job.definitionBlock?.reason),
-    detail: JSON.stringify({ diagnostic: job.diagnostic, context: job.context, definitionBlock: job.definitionBlock, definition: job.definitionWork ? { batches: job.definitionWork.batches.length, savedSteps: job.definitionWork.receipts.length, attempts: job.definitionWork.attempts, exactSubdivisions: job.definitionWork.continuation?.splits.length ?? 0 } : undefined, interruption: job.definitionInterruption, metrics: job.discoveryMetrics, gapReport: job.gapReport, workflowReport: job.epicReviewReport, retrieval: job.retrievalWork, scanProgress: job.scanProgress }, null, 2) }));
+    detail: JSON.stringify({ diagnostic: job.diagnostic, context: job.context, definitionBlock: job.definitionBlock, definition: job.definitionWork ? { batches: job.definitionWork.batches.length, savedSteps: job.definitionWork.receipts.length, attempts: job.definitionWork.attempts, exactSubdivisions: job.definitionWork.continuation?.splits.length ?? 0 } : undefined, interruption: job.definitionInterruption, metrics: job.discoveryMetrics, answerGroupProgress: job.answerGroupProgress, submissionProgress: job.submissionProgress, refinementStageProgress: job.refinementStageProgress, readinessProgress: job.readinessProgress, submissionAllowance: job.submissionAllowance, gapReport: job.gapReport, workflowReport: job.epicReviewReport, retrieval: job.retrievalWork, scanProgress: job.scanProgress }, null, 2) }));
   for (const item of submissions) if (item.diagnostic) records.push({ id: item.id, projectID: item.projectID, title: "Saved-response review", source: "Responses", status: item.status, at: item.submittedAt, atLabel: "Submitted", detail: item.diagnostic });
   for (const run of execution?.assessmentRuns ?? []) records.push({ id: run.id, title: "Code assessment", source: "Implementation", status: run.status, at: run.startedAt, finishedAt: run.finishedAt, revision: run.revision, detail: JSON.stringify(run, null, 2) });
   for (const run of [...(execution?.history ?? []), ...(execution?.run ? [execution.run] : [])]) records.push({ id: run.id, title: "Coding & delivery", source: "Implementation", status: run.status, at: run.createdAt, detail: JSON.stringify({ diagnostic: run.diagnostic, progress: run.progress, units: run.units }, null, 2) });

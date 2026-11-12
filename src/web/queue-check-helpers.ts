@@ -1,9 +1,10 @@
 import type { Page, Locator } from "@playwright/test";
+import { processingQueue, closeTechnicalViews } from "./menu-check-helpers.js";
 
 export async function advancedQueue(page: Page) {
   const { expect } = await import("@playwright/test");
   const dialog = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-  if (!await dialog.isVisible()) await page.locator(".topbar .queue-trigger").click();
+  if (!await dialog.isVisible()) await processingQueue(page);
   const details = dialog.locator("details").filter({ has: page.locator(":scope > summary", { hasText: /^More actions$/ }) });
   await expect(details).toHaveCount(1);
   if (!await details.evaluate((element) => (element as HTMLDetailsElement).open)) await details.locator(":scope > summary").click();
@@ -15,7 +16,7 @@ export async function runQueueAction(page: Page, name: string) {
   await dialog.getByRole("button", { name, exact: true }).click();
   // Retained-input actions close the drawer themselves; older resume controls
   // keep it open. Do not wait for a close control removed by the action.
-  if (await dialog.isVisible()) await dialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await closeTechnicalViews(page);
 }
 
 export async function specificationActions(panel: Locator) {
@@ -28,8 +29,7 @@ export async function specificationActions(panel: Locator) {
 
 export async function discoveryActions(page: Page) {
   const { expect } = await import("@playwright/test");
-  const details = page.locator('details[aria-label="More discovery actions"]');
-  await expect(details).toHaveCount(1);
-  if (!await details.evaluate((element) => (element as HTMLDetailsElement).open)) await details.locator(":scope > summary").click();
-  return details;
+  const footer = page.getByRole("contentinfo", { name: "Discovery controls", exact: true });
+  await expect(footer).toBeVisible();
+  return footer;
 }

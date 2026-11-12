@@ -12,7 +12,7 @@ export function BlockingInputList({ availability, submissions, open }: {
   const items = submissions.filter(s => availability.submissionIDs.includes(s.id));
   if (!items.length) return null;
   return <section aria-label="Responses blocking this review"><h4>Saved responses to review first</h4>
-    <p>This is unfinished processing, not proof of a conflict or duplicate. Do not remove a requirement to clear it.</p>
+    <p>These answers are already saved. Their review must finish before this requirement can change.</p>
     <PagedList items={items} itemID={s => s.id} label="Blocking responses">{s => <article className="queue-item">
       <strong>{s.input.type === "answer" ? s.input.questionText : s.input.type === "review" ? s.input.requirementText : "Saved project information"}</strong>
       <p className="source-excerpt">{s.input.type === "answer" ? s.input.answer.text : s.input.type === "review" ? s.input.note || "Review decision saved without a note" : s.input.text}</p>
@@ -29,7 +29,7 @@ export function ItemProcessingNotice({ submission, error, resume, disabled }: {
   return <section className="error item-processing-error" aria-label="Item processing error">
     <DiagnosticNotice detail={error || submission?.diagnostic} summary={submission?.status === "needs-attention" ? submission.contextBlock ? "Your response is saved, but there is too much related information to review in one step." : "Your response is saved, but its review needs attention." : undefined} alert />
     {submission?.status === "needs-attention" && submission.conflict && <p>Review the current item and any linked decisions before submitting again. Logs describe the earlier attempt, not necessarily the current blocker.</p>}
-    {submission?.status === "needs-attention" && !submission.conflict && <><p>{submission.contextBlock ? "Your response is saved. Resume processing to recheck the size limit; supported targeted reviews can use saved evidence batches without resubmitting your decision. Other size blockers remain explained in Logs." : "You don’t need to submit your response again. Resume processing to retry its review."}</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
+    {submission?.status === "needs-attention" && !submission.conflict && <><p>Your answer and progress are saved. Continue its review without entering the answer again. Uses your AI plan.</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Continue review</button>}</>}
   </section>;
 }
 

@@ -21,7 +21,7 @@ import { definitionDecisionPrefix, definitionDecisions } from "../core/definitio
 import { definitionInputKey } from "../core/definition-identity.js";
 import { DefinitionDecisionCard } from "./definition-decisions.js";
 import { dimensions } from "../core/epics.js";
-import { currentSharedConflicts, sharedAnswerDecision, sharedConflictJob } from "./shared-answer-decision.js";
+import { currentSharedConflicts, sharedReviewCards, sharedAnswerDecision, sharedConflictJob } from "./shared-answer-decision.js";
 import { SharedConflictNotice } from "./shared-conflict-notice.js";
 import { SharedAnswerClarification } from "./shared-answer-clarification.js";
 import { BlockingInputList } from "./decision-recovery.js";
@@ -86,7 +86,7 @@ test("blocked review identifies original responses and opens exact recovery with
     submittedAt: "2026-11-11T00:00:00Z", diagnostic: "Publication failed <script>", input: { type: "note", epicID: "inbox", text: "Preserve all existing benefits <script>" } };
   const html = renderToStaticMarkup(createElement(BlockingInputList, { availability: { state: "waiting", submissionIDs: [input.id], jobIDs: [] },
     submissions: [input, { ...input, id: "unrelated", input: { type: "note", epicID: "inbox", text: "Unrelated private note" } }], open() { assert.fail("Never open on render"); } }));
-  assert.match(html, /not proof of a conflict or duplicate/); assert.match(html, /View &amp; resolve saved response/);
+  assert.match(html, /answers are already saved/); assert.match(html, /View &amp; resolve saved response/);
   assert.match(html, /Preserve all existing benefits &lt;script&gt;/);
   assert.doesNotMatch(html, /Unrelated private note|<script>/);
 });
@@ -142,9 +142,25 @@ test("workspace conflict action selects only current owned cohorts, collapsing s
     assert.deepEqual(currentSharedConflicts(project, [job], [submissions[0]!, { ...submissions[1]!, ...change } as Submission]), []);
   assert.deepEqual(currentSharedConflicts(project, [job], submissions.slice(0, 1)), []);
   const html = renderToStaticMarkup(createElement(SharedConflictNotice, { conflicts: selected, open: () => {} }));
-  assert.match(html, /Resolve saved-answer conflict/); assert.match(html, /Play cannot make this choice/);
+  assert.match(html, /Resolve saved-answer conflict/); assert.match(html, /exception in Specification/);
   assert.equal((html.match(/<button/g) ?? []).length, 1);
   assert.equal(renderToStaticMarkup(createElement(SharedConflictNotice, { conflicts: [], open: () => {} })), "");
+});
+
+test("saved shared decisions retain their inline progress without becoming another decision or reviving historical work", () => {
+  const project = fixture();
+  const job = { id: "current", projectID: project.id, expectedRevision: project.revision, status: "running",
+    context: { submissionIDs: ["one", "two"] }, answerGroupClarification: { jobID: "current", conflictIDs: ["a", "b"], reason: "Saved", savedText: "Use the mission-end exception" } } as Job;
+  const submissions = ["one", "two"].map(id => ({ id, projectID: project.id, jobID: job.id, applied: true, status: "processing" })) as Submission[];
+  const before = structuredClone({ project, job, submissions });
+  assert.deepEqual(sharedReviewCards(project, [job], submissions), [{ jobID: job.id, submissionID: "one" }]);
+  assert.deepEqual(currentSharedConflicts(project, [job], submissions), [], "Applying a saved choice is not another human decision");
+  for (const change of [{ expectedRevision: project.revision - 1 }, { status: "completed" }, { projectID: "other" },
+    { answerGroupClarification: { ...job.answerGroupClarification!, savedText: undefined } }])
+    assert.deepEqual(sharedReviewCards(project, [{ ...job, ...change } as Job], submissions), []);
+  for (const change of [{ jobID: "other" }, { applied: false }, { archivedAt: 1 }, { conflict: true }, { status: "completed" }])
+    assert.deepEqual(sharedReviewCards(project, [job], [submissions[0]!, { ...submissions[1]!, ...change } as Submission]), []);
+  assert.deepEqual({ project, job, submissions }, before);
 });
 
 test("saved blocked assessments appear in Specification without manufacturing a question, approval or product gap", () => {
@@ -184,7 +200,8 @@ test("saved blocked assessments appear in Specification without manufacturing a 
     input: { type: "note", epicID: "inbox", text: definitionDecisionPrefix(findings[0]!) + "One trick earns both rewards; replaces the earlier two-trick minimum." } };
   const pending = renderToStaticMarkup(createElement(DefinitionDecisionCard, { finding: stale, project: p, submissions: [saved], submit: async () => true, disabled: false }));
   assert.match(pending, /Your clarification is saved/);
-  assert.match(pending, /Saving alone does not resolve/);
+  assert.match(pending, /Choose Continue to review your saved clarification and update the specification/);
+  assert.equal(saved.status, "saved", "Rendering a saved clarification does not complete its review");
   assert.doesNotMatch(pending, /<textarea/);
 });
 
@@ -220,7 +237,7 @@ test("typed evidence lookup blockers stay outside product-decision counts and ca
   assert.match(html, /Needs your decision <span>0/);
   assert.match(html, /Review evidence problems — not product decisions/);
   assert.match(html, /Review blocked by evidence lookup/);
-  assert.match(html, /Refresh definition coverage/);
+  assert.match(html, /refresh definition coverage/i);
   assert.doesNotMatch(html, /Clarify in Design|Save clarification|Your decision or correction|<textarea/);
   assert.equal(JSON.stringify({ p, job }), before);
   const product = { ...job, definitionBlock: { ...job.definitionBlock!, kind: "product-decision" as const } };
@@ -351,8 +368,9 @@ test("gap continuation status shows the durable six-request limit and never gran
   const continued = () => assert.fail("Rendering must not grant requests");
   assert.equal(renderToStaticMarkup(createElement(GapContinuation, { job, available: false, disabled: false, continueExploration: continued })), "");
   const offered = renderToStaticMarkup(createElement(GapContinuation, { job: { ...job, retrievalWork: { ...job.retrievalWork!, attempts: 3, continuation: undefined } }, available: true, disabled: false, continueExploration: continued }));
-  assert.match(offered, /Continue exploration/); assert.match(offered, /Choosing Resume alone won’t allow more requests/);
-  assert.doesNotMatch(offered, /Allow up to 3 more requests/, "cost confirmation requires a user action first");
+  assert.match(offered, /Continue exploration/); assert.match(offered, /up to three additional AI requests/);
+  assert.match(offered, /Not now/); assert.match(offered, /<details><summary>Details/);
+  assert.doesNotMatch(offered, /Choosing Resume|type="checkbox"/, "Consent is one direct action with usage disclosed beforehand");
 });
 
 test("page windows bound large lists and clamp empty, negative and shortened pages", () => {
@@ -436,14 +454,15 @@ test("refinement review places duplicate removal next to the keep action in the 
   assert.match(html, /<div class="button-row"><button[^>]*>Approve refinement<\/button><button[^>]*>Keep current wording<\/button><button[^>]*>Remove as duplicate…<\/button><\/div>/);
 });
 
-test("Review initially collapses a 500-item pending list without limiting its counts or mutating evidence", () => {
+test("Review opens the first decision while bounding a 500-item list and preserving counts and evidence", () => {
   const p = fixture();
   p.refinements = [];
   p.requirements = Array.from({ length: 500 }, (_, index) => ({ ...p.requirements[1]!, id: `pending-${index}`, statement: `Pending behavior ${index}` }));
   const before = structuredClone(p);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
     refine: () => assert.fail("Paging must not invoke a model"), submit: async () => true, reviewRefinement: async () => true }));
-  assert.equal((html.match(/class="question-card review-card"/g) ?? []).length, 0);
+  assert.equal((html.match(/class="question-card review-card"/g) ?? []).length, 25);
+  assert.equal((html.match(/class="review-card-heading" aria-expanded="true"/g) ?? []).length, 1);
   assert.match(html, /500 requirements/);
   assert.match(html, /Specification epics pages/);
   assert.ok(!html.includes("Pending behavior 25<"));
@@ -563,7 +582,7 @@ test("review readiness distinguishes linked decisions, pending processing and st
   assert.equal(p.questions[0]!.status, "pending");
 });
 
-test("Review shows readiness counts while collapsed and inline questions when explicitly focused, without submitting", () => {
+test("Review opens a ready decision first and shows inline questions when explicitly focused, without submitting", () => {
   const p = fixture(); p.refinements = [];
   p.questions.push({ id: "linked", text: "Which aim behavior?", whyItMatters: "Required choice", options: [], epicID: "inbox", status: "deferred", evidenceIDs: ["aim"] });
   const before = structuredClone(p);
@@ -571,7 +590,7 @@ test("Review shows readiness counts while collapsed and inline questions when ex
   const html = renderToStaticMarkup(createElement(ReviewQueue, props));
   assert.match(html, /Ready to review <span>1<\/span>/);
   assert.match(html, /Needs a decision <span>1<\/span>/);
-  assert.doesNotMatch(html, /aria-expanded="true"/);
+  assert.match(html, /class="review-card-heading" aria-expanded="true"/);
   p.requirements = p.requirements.filter((r) => r.id !== "pause");
   const inline = renderToStaticMarkup(createElement(ReviewQueue, { ...props, focusItemID: "requirement:aim", renderClarification: (q) => createElement("p", null, `Inline: ${q.text}`) }));
   assert.match(inline, /Decisions needed before approval/);

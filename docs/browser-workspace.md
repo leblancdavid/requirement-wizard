@@ -1,5 +1,65 @@
 # Browser workspace, epics, and estimated completeness
 
+## Saved review waiting on linked evidence (2026-11-11)
+
+Saving an answer and applying its AI review are separate durable operations. A
+queued answer can already be saved even when an earlier review blocks processing.
+An older fully checked review could repeatedly fail its final publication with
+“Refinement requires the detailed requirement and all supporting evidence” when
+a background requirement's linked file had not been part of the original review.
+
+Explicit continuation now checks the missing supporting evidence against the
+unchanged saved draft without repeating its completed batches. That additional
+check uses AI allowance within the existing action limits. It must pass before
+requirements/proposals change; cancellation, rejection and failed attempts retain
+the original answer and paid work. Reload alone never starts it. See the
+[SQLite 67→68 / portable 42 compatibility entry](migrations.md#saved-response-publication-support-recovery-2026-11-11).
+
+## Question-focused Design (2026-11-11)
+
+Design opens directly on the question filters and current questions, without the
+introductory heading, routine folder status, specification-change summary or bulk
+question tools. A persistent bottom bar offers **All epics** or a specific epic
+and **Discover**, with an AI-usage reminder. The selection also scopes the visible
+questions, using the existing feature filter. Other tabs keep their feature filter;
+the discovery footer is absent in Settings and outside Design.
+
+Saved-answer problems, required usage permissions, initialization and folder
+conflicts remain visible when relevant. Add information and previous-answer filters
+remain available. Bulk question actions/history move to Logs' retained technical
+controls; specification-change notices belong in Specification.
+
+This is presentation-only: discovery still uses the existing epic-gap request,
+revision, permission and busy-state checks. No persisted data, saved preferences,
+assessment validity or paid progress changes; no migration is required.
+
+Verification: 61 focused review/recovery/snapshot unit tests, UI build and the
+workspace-layout browser runner passed, including all-epic/focused request bodies,
+tab visibility, unchanged saved project data and a 390px mobile footer screenshot
+(`.reqwizit-state/browser-design-footer-mobile.png`). Model-selection and assessment
+tools browser runners also passed. Type checking is currently blocked by an
+unrelated possibly-undefined value in `src/core/submission-stages.ts:435`.
+The main browser runner (including 500 requirements), portable runner and focused
+assistance runner passed. The full suite stopped at an old assertion expecting the
+specification-update summary in Design; after moving that assertion to Specification,
+the focused specification runner passed. Later full-suite runners were not rerun.
+The optional epic-review runner still contains legacy header/navigation assertions;
+the reliability runner stopped at its stale-coordinate tooltip test. Neither is
+reported as passing qualification of this change.
+
+## Project-focused assistance (2026-11-11)
+
+The header now offers **Continue**, **Pause** and **Cancel current work**, with
+project-level status instead of internal processing counts. Conflicting saved answers
+are resolved directly at the top of Specification; additional saved-review usage is
+authorized directly in Design. Requirement links open their exact Specification
+record rather than a recovery dialog. Modes, tuning, technical queue and advanced
+processing controls move to Logs, which also supports a bounded redacted loaded-log
+download. Existing permissions and saved work are unchanged.
+
+See [the interaction contract, implemented scope and verification limits](project-focused-workspace.md).
+The dated descriptions below retain their historical labels/destinations.
+
 ## One place to resolve overlapping requirements (2026-11-11)
 
 This replaces the earlier pair of keep/remove buttons and duplicate selectors in

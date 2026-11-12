@@ -4,6 +4,7 @@ import { z } from "zod";
 import { definitionChangeReceiptSchema, definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { definitionChangeGroupWorkSchema, definitionChangeGroupMarkerSchema } from "../core/definition-change-group.js";
 import { answerGroupWorkSchema, answerGroupStageSchema } from "../core/answer-group.js";
+import { submissionWorkSchema } from "../core/submission-stages.js";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
@@ -28,7 +29,7 @@ import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-p
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema } from "../core/gap-retrieval.js";
 
-export const databaseSchemaVersion = 67;
+export const databaseSchemaVersion = 68;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -355,6 +356,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 67, name: "empty-proposal-staged-completion", apply() {
   // Reader boundary only: legacy ledgers retain every original call and check.
   // New schedules explicitly bind an empty-result policy; no startup adoption.
+} }, { version: 68, name: "saved-response-publication-support", apply() {
+  // Reader boundary only. Explicit continuation can add a bounded evidence check
+  // to an unchanged paid draft; startup never adopts it or rewrites old receipts.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -387,6 +391,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.publicationSupport') AS BLOB)) <= 8192
+      THEN json_extract(payload, '$.submissionWork.publicationSupport') END AS support FROM jobs
+      WHERE json_type(payload, '$.submissionWork.publicationSupport') IS NOT NULL`).iterate() as Iterable<{ support: string | null }>) {
+      if (!row.support) throw new Error("Unsupported saved-response supporting-evidence checkpoint. Saved work was not overwritten.");
+      submissionWorkSchema.shape.publicationSupport.unwrap().parse(JSON.parse(row.support));
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.retrievalWork.epicStages') END AS work FROM jobs
       WHERE json_type(payload, '$.retrievalWork.epicStages.completionPolicy') IS NOT NULL

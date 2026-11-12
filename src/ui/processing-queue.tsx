@@ -25,7 +25,7 @@ import { openLogs } from "./log-access.js";
 import { processableSavedResponses, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 import { DefinitionBaselineNotice } from "./definition-progress.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, reusedClarification, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, reusedClarification, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision, diagnostics = false }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
@@ -42,6 +42,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   maintenance?: MaintenanceView; configureMaintenance?: (action: MaintenanceAction) => void;
   maintenanceSettings?: () => void; openRequest?: number;
   workflow?: WorkflowView; configureWorkflow?: WorkflowConfigure; openWorkflowDecision?: (decision: WorkflowDecision) => void;
+  diagnostics?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   useEffect(() => { if (openRequest) setOpen(true); }, [openRequest]);
@@ -101,6 +102,15 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     </article>);
   }
 
+  if (!diagnostics) return <ActionScope><div className="queue-header" aria-label="Project assistance">
+    <div className="round-status project-status">{working && <Spinner />}<span className="status-copy" role="status" aria-live="polite"><strong>{working ? "Updating your project…" : attentionCount || workflow?.phase === "needs-decision" ? "Your project needs attention" : workflow?.phase === "blocked" ? "Review paused—your work is saved" : "Your work is saved"}</strong><small>{working ? "You can keep reading and answering questions." : "Questions in Design · Decisions in Specification"}</small></span>{working && <ActivityBar label="Project work" />}</div>
+    {workflow && configureWorkflow ? <>
+      <button className="primary queue-header-action" disabled={disabled || working} title="Review saved answers and update your specification using your AI plan. Does not start coding, read files or research the web." onClick={() => exhausted && extendSavedResponse ? openIssue?.(exhausted.item.id) : clarificationResume ? continueClarification?.() : refinementResume ? continueRefinement?.(refinementJob!.id) : configureWorkflow("play")}>Continue</button>
+      {workflow.active && <button className="secondary queue-header-action" disabled={stopDisabled || workflow.paused} onClick={() => configureWorkflow("pause")}>Pause</button>}
+      {(active || workflow.active) && <button className="quiet queue-header-action" disabled={stopDisabled} onClick={() => active && !workflow.active ? stop() : configureWorkflow("stop")}>Cancel current work</button>}
+    </> : working ? <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>Cancel current work</button> : <button className="primary queue-header-action" disabled={disabled} onClick={exhausted && extendSavedResponse ? () => openIssue?.(exhausted.item.id) : clarificationResume ? continueClarification : refinementResume ? () => continueRefinement!(refinementJob!.id) : processingFirst ? processSavedResponses : canResume ? resume : discover}>Continue</button>}
+  </div></ActionScope>;
+
   return <ActionScope>
     <div className="queue-header">
       <button className="round-status queue-trigger" aria-label={`Processing & queue: ${headline} · ${waiting.length} waiting${attentionCount ? ` · ${attentionCount} need attention` : ""}`}
@@ -123,7 +133,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{actionablePause && !active ? lastJob?.context?.definitionAssessment ? " · Definition processing paused" : " · Discovery paused" : ""}</p>}>
         {error && error !== jobDiagnostic && <DiagnosticNotice detail={error} alert />}
-        {workflow && configureWorkflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={stopDisabled} configure={configureWorkflow}
+        {workflow && configureWorkflow && <WorkflowControls showTechnical workflow={workflow} disabled={disabled} pending={stopDisabled} configure={configureWorkflow}
           standaloneActive={active} stopStandalone={stop} openDecision={openWorkflowDecision && ((decision) => { setOpen(false); openWorkflowDecision(decision); })} />}
            <p>Work across your project appears here. Compatible new answers in the same feature can be integrated together; already-started or separately scoped responses keep their original paths.</p>
            {openIssue && jobs.filter(j => j.answerGroupClarification).map(job => {

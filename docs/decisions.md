@@ -2,6 +2,15 @@
 
 ## Confirmed product direction
 
+**Project-focused responsibilities (2026-11-11).** Users answer questions, approve
+requirements only when needed and resolve conflicts with clear choices directly in
+their responsible tab. Internal batching, scheduling, checks and safe technical
+recovery belong to the app; diagnostic detail belongs in exportable Logs. Necessary
+lower-level authorization uses a high-level project explanation, clear consequence
+and one approval action with optional Details. Simplification must not silently
+expand usage, disclosure, coding or publication permission. See
+[contract, first implementation and remaining work](project-focused-workspace.md).
+
 **Guarded joint-input exception (2026-11-09).** After read-only selected-model capacity
 investigation, the user approved **200,000 characters** as an exception ceiling for
 indivisible joint evidence, with **96,000 as the ordinary packing target**. A larger

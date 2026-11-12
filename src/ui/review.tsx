@@ -166,7 +166,7 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>{label}</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, resolvePair, openQuestion, renderClarification, renderInputConflict, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, clarifyDefinition }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, resolvePair, openQuestion, renderClarification, renderInputConflict, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, clarifyDefinition, navigation }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
@@ -181,6 +181,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   focusRequirementID?: string; focusItemID?: string; openIssue?: (submissionID: string) => void;
   draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
   clarifyDefinition?: (epicID: string) => Promise<void>;
+  navigation?: { itemID: string; request: number };
 }) {
   const allDefinitionFindings = useMemo(() => definitionDecisions(project, jobs).filter((f) => epicID === "all" || f.epicID === epicID), [project, jobs, epicID]);
   const definitionFindings = useMemo(() => allDefinitionFindings.filter((f) => !f.evidenceIssue), [allDefinitionFindings]);
@@ -223,6 +224,13 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded" && !resolvedAttempts.has(s.id));
   const reviewed = useMemo(() => reviewItems(project, submissions, "reviewed", epicID), [project, submissions, epicID]);
   const current = useMemo(() => reviewItems(project, submissions, "current", epicID), [project, submissions, epicID]);
+  useEffect(() => {
+    if (!navigation) return;
+    filterChosen.current = true;
+    setFilter(reviewItems(project, submissions, "pending").some(item => item.id === navigation.itemID) ? "pending" : navigation.itemID.startsWith("refinement:") ? "refinements" : reviewItems(project, submissions, "current").some(item => item.id === navigation.itemID) ? "current" : reviewItems(project, submissions, "reviewed").some(item => item.id === navigation.itemID) ? "reviewed" : "pending");
+    if (navigation.itemID.startsWith("requirement:")) setRecoveryTarget(navigation.itemID.slice("requirement:".length));
+    setSearch(""); setReadinessFilter("all"); setExpanded(navigation.itemID);
+  }, [navigation]);
   useEffect(() => { if (!filterChosen.current) setFilter(pending.length || definitionFindings.length ? "pending" : "current"); }, [pending.length, definitionFindings.length]);
   const readinessByID = useMemo(() => new Map(pending.map((item) => {
     const draft = item.kind === "requirement" ? drafts.current[item.requirement.id] : undefined;
@@ -254,6 +262,11 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   useEffect(() => {
     if (focusNext.current) { list.current?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')?.focus(); focusNext.current = false; }
   }, [active, expanded, project.revision, message]);
+  useEffect(() => {
+    if (!isVisible || !navigation || active !== navigation.itemID) return;
+    const heading = list.current?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]');
+    heading?.scrollIntoView({ block: "start" }); heading?.focus({ preventScroll: true });
+  }, [isVisible, navigation, active]);
   const advance = (id: string) => {
     const matching = groups.flatMap((group) => group.items).flatMap((entry) => entry.item ? [entry.item] : []);
     const index = matching.findIndex((item) => item.id === id);
@@ -452,7 +465,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   };
   return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
     {disabled && disabledReason && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason} You can keep reading and writing notes. A paused click will not queue a decision; review the result and choose again when available.</p>}
-    {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
+    {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} include={item => item.input.type === "review"} open={openIssue} />}
     {!focusRequirementID && <>
       <div className="filter-row" aria-label="Review filters">{([ ["current", "Current specification", current.length], ["pending", "Needs your decision", pending.length + definitionFindings.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "History", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { filterChosen.current = true; setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
       {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length + definitionFindings.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length + (state === "attention" ? definitionFindings.length : 0)}</span></button>)}</div>}
@@ -467,7 +480,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     {!focusRequirementID && <p role="status" aria-label="Specification results">Showing {groups.reduce((total, group) => total + group.items.length, 0)} requirement results in {groups.length} {groups.length === 1 ? "feature" : "features"}{visibleFindings.length ? `, plus ${visibleFindings.length} definition review ${visibleFindings.length === 1 ? "finding" : "findings"}` : ""}.</p>}
     {!!search.trim() && !groups.length && !visibleFindings.length && <p className="empty-card">No requirements match this search and the selected filters. <button type="button" className="secondary" onClick={() => setSearch("")}>Clear search</button></p>}
     {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
-    <div ref={list}><EpicRequirements groups={groups} scope={`${project.id}:${epicID}:${filter}:${readinessFilter}:${search}`} label="Specification" itemID={(entry) => entry.id} target={expanded || focusRequirementID ? active : undefined}>{(entry) => entry.item ? renderItem(entry.item) : entry.submission ? renderSubmission(entry.submission) : null}</EpicRequirements></div>
+    <div ref={list}><EpicRequirements groups={groups} scope={`${project.id}:${epicID}:${filter}:${readinessFilter}:${search}`} label="Specification" itemID={(entry) => entry.id} target={active}>{(entry) => entry.item ? renderItem(entry.item) : entry.submission ? renderSubmission(entry.submission) : null}</EpicRequirements></div>
     {!focusRequirementID && <div className="review-toolbar">
       <p className="view-intro">Your answers keep the requirements up to date. Clear decisions are recorded automatically; uncertain choices, conflicting information and existing proposals stay under Needs your decision. You can read or request changes to any requirement. Updating requirements never starts coding.</p>
       <details className="scoped-actions" aria-label="More specification actions"><summary>More actions</summary>

@@ -13,9 +13,15 @@ not a change to specification authority, consent, assessment identity or process
 | Implement | Build authorization/configuration, assessment findings, delivery and manual implementation records. |
 | Overall progress | Definition explanations/evidence, missing-decision review results, scores and explicit refresh. |
 | Activity | Saved changes and outcomes, before/after evidence and links to current items. |
-| Processing & queue | Running/waiting/paused/blocked work, Stop and explicit continuation/recovery. |
-| Logs (application menu) | Technical diagnostics, current processing messages and discovery diagnostic exports. |
-| Settings | Connections, project folder/rescan and automation configuration. |
+| Project assistance (header) | High-level saved/working status, Continue, active-work Pause and Cancel. |
+| Logs (application menu) | Technical diagnostics, processing queue/retained preferences, current processing messages and diagnostic/log exports. |
+| Settings | Connections, appearance and project folder/rescan. |
+
+The [project-focused first pass](project-focused-workspace.md) moves technical
+processing controls into Logs and puts current shared-answer choices directly in
+Specification. Additional usage is authorized in the input's owning tab: Design
+for answers/notes, Specification for requirement-review input. Older queue references
+below describe the retained technical viewer, not a required user journey.
 
 Project map is no longer a separate tab or requirement editor. Existing internal
 map/recovery navigation routes to Specification. **Organize features** retains

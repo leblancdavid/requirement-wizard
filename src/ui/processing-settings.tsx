@@ -7,7 +7,7 @@ import type { ProcessingPolicy, ProcessingPolicyChange } from "../core/processin
 
 /** Explicit project consent over existing workers. Rendering/selection never
  * changes preferences, arms work or grants an allowance. */
-export function ProcessingSettings({ policy, configurePolicy, workflow, maintenance, auto, setAuto, disabled, pending, configureWorkflow, configureMaintenance, openQueue }: {
+export function ProcessingPreferences({ policy, configurePolicy, workflow, maintenance, auto, setAuto, disabled, pending, configureWorkflow, configureMaintenance, openQueue }: {
   policy?: ProcessingPolicy; configurePolicy?: (change: ProcessingPolicyChange) => Promise<boolean>;
   workflow?: WorkflowView; maintenance?: MaintenanceView; auto: boolean; setAuto: (value: boolean) => void;
   disabled: boolean; pending: boolean; configureWorkflow: WorkflowConfigure;
@@ -28,7 +28,7 @@ export function ProcessingSettings({ policy, configurePolicy, workflow, maintena
     {guided ? <>
       <p role="status">Guided processing is selected for this project. Continue specification explicitly to start or resume a bounded allowance. Saving this mode starts no AI requests.</p>
       <p>New responses are eligible for coordinated follow-up, even when this browser's separate saved-input preference is off. New continuous runs collect answers without AI work while waiting for decisions; choose Submit saved responses when ready. Older grants retain their original behavior until explicit continuation. After Stop, a limit or restarting, continue explicitly.</p>
-      {workflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={pending} configure={configureWorkflow} settings guided />}
+      {workflow && <WorkflowControls showTechnical workflow={workflow} disabled={disabled} pending={pending} configure={configureWorkflow} settings guided />}
       <details><summary>Retained separate-task preferences (held by Guided processing)</summary>
         <p>Browser-wide automatic saved-input processing: {auto ? "on" : "off"}. This preference has not changed and still applies to other projects using existing permissions.</p>
         <p>Separate automatic definition updates: {maintenance?.enabled ? "enabled" : "off"}. Its original opt-in, queued tasks and attempts are retained but held. Automatic definition follow-up uses only the coordinated workflow allowance.</p>
@@ -45,7 +45,7 @@ export function ProcessingSettings({ policy, configurePolicy, workflow, maintena
       <button type="button" className="secondary" onClick={openQueue}>Open Processing &amp; queue</button>
     </> : <>
     <p>Choose coordinated specification work, or use separate settings for saved responses and changed-area reviews. These permissions are not interchangeable. Opening Settings grants no permission and does not pause work already authorized.</p>
-    {workflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={pending} configure={configureWorkflow} settings />}
+    {workflow && <WorkflowControls showTechnical workflow={workflow} disabled={disabled} pending={pending} configure={configureWorkflow} settings />}
     {workflow?.enabled ? <>
       <p>Coordinated specification work is enabled. Newly saved input is eligible for follow-up only within an authorized workflow allowance. Pausing, reaching the limit or restarting does not grant more calls. Earlier saved-only input still needs explicit continuation.</p>
       <details><summary>Retained separate-task preferences (inactive)</summary>
@@ -63,5 +63,14 @@ export function ProcessingSettings({ policy, configurePolicy, workflow, maintena
     </>}
     </>}
     <p>Discover missing decisions, Improve requirements and Refresh definition coverage are explicit tasks with their own scopes and usage limits. Implementation planning, coding, delivery, research and folder scans retain separate controls and permissions.</p>
+  </section>;
+}
+
+/** Routine use never requires choosing an engine or scheduling mode. Existing
+ * permissions remain available in Logs and are not changed by this presentation. */
+export function ProcessingSettings(props: React.ComponentProps<typeof ProcessingPreferences>) {
+  return <section aria-label="Project assistance"><h3>Project assistance</h3>
+    <p>Answer questions in Design. Review requirements and resolve conflicting choices in Specification. Continue when you are ready for the app to review your saved answers.</p>
+    <p>Uses your selected AI plan. Coding, reading project files and web research require their own authorization. Your existing automatic-work permissions are unchanged.</p>
   </section>;
 }

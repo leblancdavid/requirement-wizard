@@ -5,6 +5,11 @@
 .topbar .queue-trigger { text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
 .topbar .queue-trigger:hover { background: var(--soft); }
 .queue-trigger .status-copy { flex: 1; }
+.project-status { flex: 1; min-width: 0; padding: 10px 12px 15px; position: relative; }
+.topbar .queue-header .project-status { order: 0; flex: 1 1 0; }
+.project-status .status-copy { flex: 1; min-width: 0; }
+.project-status > .activity-bar { position: absolute; bottom: 4px; left: 12px; width: calc(100% - 24px); }
+.project-status .status-copy strong, .project-status .status-copy small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .queue-trigger .status-copy strong, .queue-trigger .status-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-trigger .queue-chevron { margin-left: auto; flex-shrink: 0; }
 .topbar .queue-trigger { position: relative; padding-bottom: 15px; }

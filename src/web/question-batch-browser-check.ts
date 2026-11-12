@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { startApp } from "./server.js";
-import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails, processingQueue, closeTechnicalViews } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { questionBatchLimits, workflowReviewInputKey } from "../core/workflow.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
@@ -45,7 +45,7 @@ try {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: "Question collection browser", exact: true }).click();
-  await page.locator(".topbar .queue-trigger").click();
+  await processingQueue(page);
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await queue.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => topics.length).toBe(2);
@@ -55,7 +55,7 @@ try {
   await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
   assert.equal(store.get(p.id).questions.length, 1); const retained = store.workflow(p.id).questionBatch!;
   const interrupted = store.jobs(p.id).at(-1)!; assert.equal(interrupted.retrievalWork!.attempts, 1);
-  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  await page.reload(); await processingQueue(page);
   await expect(batch).toContainText("1 questions ready"); assert.equal(topics.length, 2); assert.deepEqual(store.workflow(p.id).questionBatch, retained);
   hold = false;
   await queue.getByRole("region", { name: "Project workflow", exact: true }).getByRole("button", { name: "Continue specification", exact: true }).click();
@@ -68,7 +68,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-question-batch-mobile.png", fullPage: true });
-  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await closeTechnicalViews(page);
   const originalCalls = topics.length;
   // A slow/stale workspace read must not hold a response's durable save open.
   const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve; });
@@ -88,8 +88,21 @@ try {
     assert.equal(topics.length, originalCalls);
   }
   assert.ok(store.submissions(p.id).every(s => s.status === "queued"));
+  await page.getByRole("button", { name: /^Submitted/ }).click();
+  const queuedQuestion = store.get(p.id).questions[0]!;
+  const queuedCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: queuedQuestion.text, exact: true }) });
+  for (const correction of [`Retry ${queuedQuestion.epicID}`, "Keep both players at departure together"]) {
+    await queuedCard.getByRole("button", { name: "Edit answer", exact: true }).click();
+    await queuedCard.getByRole("textbox", { name: `Your answer to ${queuedQuestion.text}`, exact: true }).fill(correction);
+    const previous = store.submissions(p.id).find(s => s.input.type === "answer" && s.input.questionID === queuedQuestion.id && s.status === "queued")!;
+    await queuedCard.getByRole("button", { name: "Save changes →", exact: true }).click();
+    await expect(queuedCard.getByRole("textbox")).toHaveCount(0);
+    await expect(queuedCard.locator(".answer-preview")).toHaveText(correction);
+    assert.equal(store.submissions(p.id).find(s => s.id === previous.id)!.status, "superseded");
+    assert.equal(topics.length, originalCalls, "Editing a queued answer never starts its review");
+  }
   releaseRefresh(); await clearRoutes();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeVisible();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
    console.log("Question collection browser passed: multi-topic collection, automatic bounded-window continuation, owned Pause/reload/explicit resume, retained paid work, mobile, five durable save-only answers while workspace refresh is held, stale-reply protection and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }

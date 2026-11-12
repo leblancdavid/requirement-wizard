@@ -5,6 +5,7 @@ import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissio
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
+import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -52,13 +53,45 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   for (;;) {
     current();
     const done = submissionStep(w) === submissionTotalSteps(w);
+    const supportContext = done ? local("context", () => prepareSubmissionPublicationSupport(m, w, draft)) : undefined;
+    if (supportContext) {
+      const support = w.publicationSupport!;
+      if (support.receipt) local("validation", () => validateSubmissionPublicationSupport(m, w, draft));
+      else {
+        local("checkpoint", () => store.checkpointSubmission(job.id, w, supportContext.manifest));
+        if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline))
+          return store.pauseSubmission(job.id, "Your saved review needs one additional supporting-evidence check. Original completed work is retained; continue explicitly.");
+        if (support.attempts >= 4) throw new Error("Supporting-evidence check exhausted its four-request allowance. Original paid work and spent attempts remain saved; unchanged retry cannot renew this allowance.");
+        support.attempts++; calls++;
+        local("checkpoint", () => store.checkpointSubmission(job.id, w, supportContext.manifest));
+        progress("Checking missing supporting evidence before applying your saved review. Earlier completed reviews are retained, not repeated.");
+        const signal = AbortSignal.any([options.signal, AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())))]);
+        let abort: () => void = () => {};
+        try {
+          const interrupted = new Promise<never>((_resolve, reject) => { abort = () => reject(signal.reason); signal.addEventListener("abort", abort, { once: true }); });
+          const request = () => adapter.analyze(project, { context: supportContext, signal, research: false,
+            onSession: id => { if (!signal.aborted) store.attachSession(job.id, id); },
+            onTelemetry: value => { if (!signal.aborted) store.attachTelemetry(job.id, value); },
+            onResearch: evidence => { if (evidence.length) throw new Error("Supporting-evidence check forbids research."); }, onProgress: options.onProgress ?? (() => {}) });
+          if (calls === 1) options.measurement?.planned(supportContext);
+          const raw = await Promise.race([options.measurement ? options.measurement.request(request, supportContext, signal) : request(), interrupted]);
+          signal.throwIfAborted(); current();
+          const response = submissionStageResponseSchema.parse(raw);
+          if (!("submissionCheck" in response)) throw new Error("Supporting-evidence review must check the unchanged saved draft; it cannot rewrite it.");
+          support.receipt = { contextKey: support.contextKey, attempt: support.attempts, atRevision: project.revision, jobID: job.id,
+            model: { providerID: job.model.providerID, modelID: job.model.modelID }, verdict: response.submissionCheck };
+          local("checkpoint", () => store.checkpointSubmission(job.id, w, supportContext.manifest));
+          local("validation", () => validateSubmissionPublicationSupport(m, w, draft));
+        } finally { signal.removeEventListener("abort", abort); }
+      }
+    }
     const context = local("context", () => done ? submissionStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft) : submissionStageContext(m, w, draft));
     context.manifest.reviewSourceIDs = item.input.type === "review" ? [item.appliedSourceID!] : [];
     context.manifest.scopedAnswerSourceIDs = item.answerScope ? [item.appliedSourceID!] : [];
     context.manifest.reviewChangeSourceIDs = item.input.type === "review" && item.input.action !== "changes-requested" && item.input.note.trim() ? [item.appliedSourceID!] : [];
     if (done) {
-      context.manifest.includedIDs = m.evidenceIDs; context.manifest.omittedIDs = [];
-      context.manifest.selectionReason = "Publication authorized only by replay of all exact saved-response read/check batches; original input is not reapplied.";
+      context.manifest.includedIDs = submissionPublicationEvidence(m, w, draft); context.manifest.omittedIDs = [];
+      context.manifest.selectionReason = "Publication authorized by replay of all exact saved-response batches and any required additional supporting-evidence check; original input is not reapplied.";
     }
     local("checkpoint", () => store.checkpointSubmission(job.id, w, context.manifest));
     if (done) {

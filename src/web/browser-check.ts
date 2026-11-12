@@ -1,4 +1,4 @@
-import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
+import { applicationMenu, workspaceMenu, technicalProcessing, processingQueue, closeTechnicalViews, automaticInputs, implementationTools } from "./menu-check-helpers.js";
 import { advancedQueue, runQueueAction, specificationActions, discoveryActions } from "./queue-check-helpers.js";
 import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
@@ -544,7 +544,7 @@ try {
   await expect(progressDialog).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1000 });
   assert.equal(store.list().length, 1);
-  await expect(page.locator(".workspace-status")).toContainText("Saved");
+  await expect(page.locator(".workspace-status")).toHaveCount(0);
   assert.equal(store.workspace(store.list()[0]!.id)?.path, workspaceDirectory);
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
@@ -560,14 +560,14 @@ try {
   await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
   await page.getByLabel("AI connection", { exact: true }).selectOption("fixture-account");
   await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alt");
-  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeHidden();
+  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeHidden();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, undefined);
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
   await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
   await discoveryActions(page);
-  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeDisabled();
+  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
   assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
   await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
   await page.getByRole("button", { name: "Save model", exact: true }).click();
@@ -576,7 +576,7 @@ try {
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await expect(page.locator(".topbar")).toContainText("Active connection: Direct ChatGPT plan");
   await page.getByRole("button", { name: "Back to workspace" }).click();
-  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeEnabled();
+  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeEnabled();
   await expect(page.locator(".insight-column")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
   await expect(page.locator(".question-card.expanded")).toHaveCount(1);
@@ -702,7 +702,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: ".reqwizit-state/browser-desktop.png", fullPage: true });
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByLabel("Automatically process saved inputs").uncheck();
+  await automaticInputs(page, false);
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Owner only.*Keeps account/ }).click();
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
@@ -749,6 +749,7 @@ try {
   await expect(recoveryReview.getByRole("region", { name: "Item processing error" })).toContainText("Your response is saved, but its review needs attention");
   await expect(recoveryReview.getByLabel("Anything to add? (optional)")).toHaveValue("Saving jobs is essential.");
   await recoveryReview.getByRole("button", { name: /^Submitted/ }).click();
+  await expandReviewEpics();
   await expect(recoveryReview.getByRole("region", { name: "Current review recovery" })).toContainText("earlier blocker is no longer active");
   await recoveryReview.getByRole("button", { name: "View logs", exact: true }).last().click();
   const reviewLogs = page.getByRole("dialog", { name: "Logs", exact: true });
@@ -802,18 +803,18 @@ try {
    await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
    await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeDisabled();
   await expect(implementationPanel.getByRole("button", { name: "Verify main & refresh delivery", exact: true })).toHaveCount(0);
-  await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Save implementation settings below before assessing");
+  await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Review and save the build setup");
    const unavailableCheck = implementationPanel.getByRole("button", { name: "Check progress", exact: true });
   await expect(unavailableCheck).toHaveAttribute("aria-describedby", /\S+/);
   await unavailableCheck.focus();
-  await expect(page.getByRole("tooltip")).toContainText("Save implementation settings below before assessing");
-  await expect(unavailableCheck).toHaveAccessibleDescription(/Save implementation settings below before assessing/);
+  await expect(page.getByRole("tooltip")).toContainText("Review and save the build setup");
+  await expect(unavailableCheck).toHaveAccessibleDescription(/Review and save the build setup/);
   await page.keyboard.press("Escape"); await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.getByRole("tab", { name: /Implement/ }).focus();
   // Escape dismisses an existing hover. Keyboard focus does not move the pointer;
   // guarantee a real leave/enter instead of hovering an already-hovered trigger.
   await page.mouse.move(0, 0);
-  await unavailableCheck.hover(); await expect(page.getByRole("tooltip")).toContainText("Save implementation settings");
+  await unavailableCheck.hover(); await expect(page.getByRole("tooltip")).toContainText("Review and save the build setup");
   // Hover's trial checks current visibility/stability/hit target without requiring
   // enabled=true. Tap must bypass only that intended aria-disabled condition;
   // it still resolves current coordinates, unlike a saved bounding box.
@@ -840,14 +841,19 @@ try {
   await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run custom-verification");
   await implementationPanel.getByRole("button", { name: "Use suggested commands", exact: true }).click();
    await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run check\nnpm run test");
-   await implementationPanel.getByText(/Assessment reuse boundaries ·/, { exact: false }).click();
-   const boundarySelector = implementationPanel.getByLabel("Assessment boundary to configure", { exact: true });
-   await boundarySelector.selectOption((await boundarySelector.locator("option").nth(1).getAttribute("value"))!);
-   await implementationPanel.getByLabel("Shared assessment paths", { exact: true }).fill("src/shared");
-   await implementationPanel.getByLabel("Reviewed assessment paths", { exact: true }).fill("src/jobs\ntests/jobs");
-   await implementationPanel.getByRole("button", { name: "Apply boundary to 1 requirements", exact: true }).click();
-   await expect(implementationPanel.getByText(/Assessment reuse boundaries ·/, { exact: false })).toContainText("1 / 1 scoped");
    await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
+   await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeEnabled();
+   const boundaryTools = await implementationTools(page);
+   await boundaryTools.locator(".implementation-settings > summary").click();
+   await boundaryTools.getByText(/Assessment reuse boundaries ·/, { exact: false }).click();
+   const boundarySelector = boundaryTools.getByLabel("Assessment boundary to configure", { exact: true });
+   await boundarySelector.selectOption((await boundarySelector.locator("option").nth(1).getAttribute("value"))!);
+   await boundaryTools.getByLabel("Shared assessment paths", { exact: true }).fill("src/shared");
+   await boundaryTools.getByLabel("Reviewed assessment paths", { exact: true }).fill("src/jobs\ntests/jobs");
+   await boundaryTools.getByRole("button", { name: "Apply boundary to 1 requirements", exact: true }).click();
+   await expect(boundaryTools.getByText(/Assessment reuse boundaries ·/, { exact: false })).toContainText("1 / 1 scoped");
+   await boundaryTools.getByRole("button", { name: "Save implementation settings", exact: true }).click();
+   await closeTechnicalViews(page);
    await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
     await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeEnabled();
      const implementationActions = implementationPanel.getByRole("region", { name: "Implementation actions", exact: true });
@@ -856,8 +862,7 @@ try {
      await expect(implementationActions.getByRole("button")).toHaveCount(1);
     await expect(implementationActions.getByRole("status", { name: "Implementation next step" })).toContainText("Check progress");
      await expect(preparation).toContainText("Plan scope: all approved requirements");
-    await expect(implementationPanel.getByRole("button", { name: "Preview changes", exact: true })).toBeHidden();
-    await implementationPanel.getByText("Check options", { exact: true }).click();
+    await expect(implementationPanel.getByRole("button", { name: "Preview changes", exact: true })).toHaveCount(0);
    const featureFilter = page.getByRole("combobox", { name: "Filter by feature", exact: true });
    const forcedFeature = await featureFilter.inputValue();
    assert.notEqual(forcedFeature, "all", "Earlier feature selection is retained in the implementation view");
@@ -867,18 +872,21 @@ try {
     implementationCheckRequest = route.request().postDataJSON();
     await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
    }, { times: 5 });
-    await implementationPanel.getByRole("button", { name: "Preview changes", exact: true }).click();
+    await (await implementationTools(page)).getByRole("button", { name: "Preview changes", exact: true }).click();
+    await closeTechnicalViews(page);
    await expect.poll(() => implementationCheckRequest?.preview).toBe(true);
    assert.equal(implementationCheckRequest?.operation, "assess"); assert.equal(implementationCheckRequest?.force, undefined);
    await implementationPanel.getByRole("button", { name: "Check progress", exact: true }).click();
   await expect.poll(() => implementationCheckRequest?.operation).toBe("check");
    assert.equal(typeof implementationCheckRequest?.revision, "number");
    assert.equal(implementationCheckRequest?.force, undefined, "Normal check is incremental");
-    await implementationPanel.getByRole("button", { name: "Recheck everything", exact: true }).click();
+    await (await implementationTools(page)).getByRole("button", { name: "Recheck everything", exact: true }).click();
+    await closeTechnicalViews(page);
    await expect.poll(() => implementationCheckRequest?.force).toBe(true);
    assert.equal(implementationCheckRequest?.requirementID, undefined); assert.equal(implementationCheckRequest?.epicID, undefined);
    await featureFilter.selectOption(forcedFeature);
-    await implementationPanel.getByRole("button", { name: "Recheck feature", exact: true }).click();
+    await (await implementationTools(page)).getByRole("button", { name: "Recheck feature", exact: true }).click();
+    await closeTechnicalViews(page);
    await expect.poll(() => implementationCheckRequest?.epicID).toBe(forcedFeature);
    assert.equal(implementationCheckRequest?.force, true);
    await featureFilter.selectOption("all");
@@ -901,10 +909,13 @@ try {
    await expect.poll(() => typeof implementationCheckRequest?.requirementID).toBe("string");
    assert.equal(implementationCheckRequest?.force, true); assert.equal(implementationCheckRequest?.epicID, undefined);
    await expect(implementationPanel.locator(".requirement-detail .badge")).toHaveText("Not assessed");
-   await implementationPanel.locator(".requirement-detail").getByText("Mark for reassessment", { exact: true }).first().click();
-   await implementationPanel.getByLabel("Reason (optional)", { exact: true }).fill("External behavior changed");
-   await implementationPanel.getByRole("button", { name: "Mark for reassessment", exact: true }).click();
-   await expect(implementationPanel.getByText("Manual reassessment requested: External behavior changed", { exact: true })).toBeVisible();
+   const markTools = await implementationTools(page);
+   await markTools.getByLabel("Requirement to recheck", { exact: true }).selectOption(implementationCheckRequest!.requirementID!);
+   await markTools.getByText("Mark for reassessment", { exact: true }).first().click();
+   await markTools.getByLabel("Reason (optional)", { exact: true }).fill("External behavior changed");
+   await markTools.getByRole("button", { name: "Mark for reassessment", exact: true }).click();
+   await closeTechnicalViews(page);
+   await expect(implementationPanel.getByText("This requirement is marked for another code check. External behavior changed", { exact: true })).toBeVisible();
   await page.screenshot({ path: ".reqwizit-state/browser-implementation.png", fullPage: true });
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await appearance.getByRole("button", { name: "Midnight theme", exact: true }).click();
@@ -943,7 +954,7 @@ try {
   await page.reload();
   await expect(page.getByRole("heading", { name: "Browser sample", exact: true })).toBeVisible();
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(page.getByLabel("Automatically process saved inputs")).not.toBeChecked();
+  assert.equal(await automaticInputs(page), false);
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await card.getByRole("button", { name: "Edit answer", exact: true }).click();
@@ -957,7 +968,7 @@ try {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveValue("Owner and office team");
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByLabel("Automatically process saved inputs").check();
+  await automaticInputs(page, true);
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
   // The approval above has already completed through the canonical saved-input
@@ -969,10 +980,10 @@ try {
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   await expect.poll(() => releases.length).toBe(1);
   const headerStatus = page.locator(".topbar .round-status");
-  await expect(headerStatus.locator("strong")).toHaveText("Processing 1 response");
-  await expect(headerStatus.locator("small")).toContainText("Reviewing saved responses");
+  await expect(headerStatus.locator("strong")).toHaveText("Updating your project…");
+  await expect(headerStatus.locator("small")).toContainText("You can keep reading and answering questions");
   await expect(headerStatus.locator(".activity-spinner")).toBeVisible();
-  await expect(headerStatus.getByRole("progressbar", { name: "Background task progress" })).toBeVisible();
+  await expect(headerStatus.getByRole("progressbar", { name: "Project work" })).toBeVisible();
   assert.equal(await headerStatus.getByRole("progressbar").getAttribute("aria-valuenow"), null, "Unknown duration is indeterminate");
   await expect(page.locator(".round-status")).toHaveCount(1);
   const header = page.locator(".topbar");
@@ -981,7 +992,7 @@ try {
   assert.ok(Math.abs(headerBounds.x) < 1, "Header starts at viewport edge without a sidebar");
   assert.ok(Math.abs(headerBounds.x + headerBounds.width - 1440) < 1, "Header fills available width");
   const queueBounds = await page.locator(".queue-header").boundingBox();
-  assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
+  assert.ok(queueBounds && queueBounds.x >= headerBounds.x && queueBounds.x + queueBounds.width <= headerBounds.x + headerBounds.width, "Project controls fit within the header");
   for (const width of [1440, 2666, 1000, 390]) {
     await page.setViewportSize({ width, height: 700 });
     await assertCenteredContent(page, ".workspace-content");
@@ -1052,29 +1063,27 @@ try {
     }
     if (width >= 1440) assert.ok((await header.boundingBox())!.height < 220, "Desktop header uses a compact summary instead of a narrow, tall progress card");
     assert.ok((await workspaceTabs.boundingBox())!.y >= (await page.locator(".queue-header").boundingBox())!.y + (await page.locator(".queue-header").boundingBox())!.height, "Workspace tabs sit below current processing controls");
-    await expect(header.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
+    await expect(header.getByRole("button", { name: "Cancel current work", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });
-    await headerStatus.click();
-    const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+    await (await applicationMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
+    const drawer = page.getByRole("dialog", { name: "Logs", exact: true });
     await expect(drawer).toBeVisible();
     const modalBounds = (await drawer.boundingBox())!;
     assert.ok(modalBounds.x >= 0 && modalBounds.x + modalBounds.width <= width, "Wide modals stay within the viewport");
     assert.ok(Math.abs(modalBounds.width - (width <= 540 ? width : width * 0.6)) < 1, "Modals use 60% of the viewport width, or full-screen on phones");
     const viewportHeight = page.viewportSize()!.height;
     assert.ok(Math.abs(modalBounds.height - (width <= 540 ? viewportHeight : viewportHeight * 0.6)) < 1, "Modals use 60% of the viewport height, or full-screen on phones");
-    await expect(drawer.getByRole("progressbar")).toBeVisible();
-    await expect(drawer.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
-    await expect(drawer.getByRole("button", { name: "Close processing queue" })).toBeFocused();
+    await expect(drawer.getByRole("button", { name: "Close logs" })).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     assert.ok(await drawer.evaluate((element) => element.contains(document.activeElement)), "Keyboard focus stays inside the modal queue");
     await page.keyboard.press("Tab");
-    await expect(drawer.getByRole("button", { name: "Close processing queue" })).toBeFocused();
+    await expect(drawer.getByRole("button", { name: "Close logs" })).toBeFocused();
     assert.equal(await drawer.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Queue fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/queue-${width}.png`) });
     await page.keyboard.press("Escape");
     await expect(drawer).toHaveCount(0);
-    await expect(headerStatus).toBeFocused();
+    await expect(page.getByRole("button", { name: "Application menu", exact: true })).toBeFocused();
     assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "running", "Closing queue leaves processing running");
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -1105,7 +1114,7 @@ try {
   await detailsCard.getByRole("button", { name: "Save changes" }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await headerStatus.click();
+  await processingQueue(page);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 1 waiting");
   await expect(page.getByRole("region", { name: "Waiting next · submission order", exact: true })).toContainText("What job details should be saved?");
   assert.ok(store.submissions(safetyProjectID).some((s) => s.input.type === "answer" && s.input.answer.text === "Corrected job details" && s.status === "queued"));
@@ -1113,24 +1122,24 @@ try {
   await expect(page.getByText(/^Replaced responses/)).toHaveCount(0);
   await expect(details).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveCount(0);
-   await expect(page.getByRole("tab", { name: "Design" })).toContainText("1");
+   await expect(page.getByRole("tab", { name: "Design" })).toContainText("2"); // One unanswered question plus the retained failed answer.
   // A round result and polling must not replace another question's draft.
   releases[0]!();
   await expect.poll(() => releases.length).toBe(2);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 0 waiting");
   await expect(details).toHaveCount(0);
-  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await closeTechnicalViews(page);
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
   await expect(offline).toHaveValue("An unfinished offline draft");
   await offline.fill("Keep offline work locally");
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What should happen offline?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await expect(headerStatus).toContainText("1 waiting");
+  await expect(headerStatus).toContainText("Updating your project");
   await page.reload();
   await expect(page.getByRole("heading", { name: "Your responses are in the queue.", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await headerStatus.click();
+  await processingQueue(page);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 1 waiting");
   await expect(page.getByRole("region", { name: "Waiting next · submission order", exact: true })).toContainText("What should happen offline?");
   assert.ok(store.submissions(safetyProjectID).some((s) => s.input.type === "answer" && s.input.answer.text === "Keep offline work locally" && s.status === "queued"));
@@ -1145,27 +1154,27 @@ try {
   releases[2]!();
   await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.status === "completed").length).toBe(completedBeforeLayout + 3);
   await expect(page.getByText(/^Recent completed work/)).toHaveCount(0);
-  await page.mouse.click(10, 10);
+  await closeTechnicalViews(page);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   const headerControls = page.locator(".queue-header");
   // Submission completion may precede the end of its background follow-up.
   // Stop the still-active work rather than trying to start a concurrent round.
-  await expect(headerControls.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Cancel current work", exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await headerControls.getByRole("button", { name: "Stop", exact: true }).focus();
+  await headerControls.getByRole("button", { name: "Cancel current work", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "cancelled", "Header Stop cancels discovery without opening the drawer");
   await page.reload();
-  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeInViewport();
+  await expect(headerControls.getByRole("button", { name: "Continue", exact: true })).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Header resume fits mobile width");
   const callsBeforeResume = releases.length;
   await runQueueAction(page, "Process saved responses only");
   await expect.poll(() => releases.length).toBe(callsBeforeResume + 1);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
-  await headerControls.getByRole("button", { name: "Stop", exact: true }).click();
-  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await headerControls.getByRole("button", { name: "Cancel current work", exact: true }).click();
+  await expect(headerControls.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -1196,12 +1205,12 @@ try {
   failNextScan = true;
   await page.getByRole("button", { name: "Create & initialize" }).click();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("hasn’t finished reading this project’s files");
-  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toHaveCount(0);
+  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: /^Design/ }).click();
   await discoveryActions(page);
-  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
+  await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeDisabled();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions" })).toHaveCount(0);
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
   await page.getByRole("tab", { name: /^Specification/ }).click();
   await expect(page.getByRole("button", { name: "Start new scan", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("batches saved");
@@ -1244,8 +1253,10 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Inline question actions should fit mobile width");
   await unrelatedActions.getByRole("button", { name: "Dismiss unrelated question: Generic unrelated one?", exact: true }).click();
   await expect.poll(() => store.get(scanned.id).questions.filter((q) => q.status === "retired").length).toBe(1);
+  await technicalProcessing(page);
   await page.getByText("Bulk question actions & history", { exact: true }).click();
   await page.getByRole("button", { name: "Replace unanswered questions from project evidence", exact: true }).click();
+  await closeTechnicalViews(page);
   await expect(page.getByRole("heading", { name: "Should the existing saved-job recovery preserve progress after failure?", exact: true })).toBeVisible();
   baseline = store.get(scanned.id);
   assert.equal(baseline.questions.filter((q) => q.status === "retired").length, 2);
@@ -1335,12 +1346,12 @@ try {
     assert.equal(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!.status, "accepted");
     assert.equal(store.jobs(reviewProject.id).length, reviewJobs);
     assert.equal(reviewReleases.length, 0);
-    await expect(page.locator(".round-status")).toContainText("Some responses need attention");
+    await expect(page.locator(".project-status")).toContainText("Your project needs attention");
     await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
     await expect(reviewPanel).toContainText("too much related information to review in one step");
     await expect(reviewPanel).toContainText("Your response is saved");
     await page.reload();
-    await expect(page.locator(".round-status")).toContainText("Some responses need attention");
+    await expect(page.locator(".project-status")).toContainText("Your project needs attention");
      const retainedApproval = structuredClone(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!);
      const retainedAttempts = store.submissions(reviewProject.id).length;
      await runQueueAction(page, "Process saved responses only");
@@ -1389,9 +1400,7 @@ try {
          await page.getByLabel("Filter by feature").selectOption("all");
          await page.getByRole("tab", { name: /^Design/ }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const autoPreference = page.getByLabel("Automatically process saved inputs");
-         const wasAutomatic = await autoPreference.isChecked();
-         await autoPreference.check();
+          const wasAutomatic = await automaticInputs(page, true);
          await page.getByRole("button", { name: "Back to workspace" }).click();
          if (kind === "answer") {
            const question = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should guest report access be preserved?", exact: true }) });
@@ -1406,9 +1415,9 @@ try {
            await expect.poll(() => store.submissions(automatic.id)[0]?.status).toBe("needs-attention");
            const receipt = store.submissions(automatic.id)[0]!.overlapFollowup!;
            assert.equal(store.getJob(receipt.discoveryJobID).status, "completed");
-           await page.locator(".topbar .queue-trigger").click();
-            await expect(page.getByRole("dialog")).toContainText("The last review couldn’t finish");
-            await page.getByRole("dialog").getByRole("button", { name: "View logs", exact: true }).first().click();
+            const failedPairQueue = await processingQueue(page);
+             await expect(failedPairQueue).toContainText("The last review couldn’t finish");
+             await failedPairQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
             const pairLogs = page.getByRole("dialog", { name: "Logs", exact: true });
             await expect(pairLogs).toContainText("Fixture targeted check failure");
             await pairLogs.getByRole("button", { name: "Close logs", exact: true }).click();
@@ -1422,15 +1431,15 @@ try {
           await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
           await expandReviewEpics();
             await expect(reviewPanel.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
-           await page.locator(".topbar .queue-trigger").click();
-           await expect(page.getByRole("dialog").getByText(/^Recent completed work/)).toHaveCount(0);
+            const completedPairQueue = await processingQueue(page);
+            await expect(completedPairQueue.getByText(/^Recent completed work/)).toHaveCount(0);
            const completedPairCheck = store.submissions(automatic.id)[0]!.overlapFollowup!;
            assert.equal(completedPairCheck.state, "completed");
            assert.equal(completedPairCheck.pairs.filter((p) => p.status === "completed").length, 1, "Removing the duplicate queue report does not discard completed pair receipts");
-         await page.getByRole("button", { name: "Close processing queue" }).click();
+          await closeTechnicalViews(page);
          await page.getByRole("tab", { name: /^Design/ }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         await autoPreference.setChecked(wasAutomatic);
+          await automaticInputs(page, wasAutomatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
         for (const ambiguous of [false, true]) {
@@ -1446,8 +1455,7 @@ try {
          await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
          if (ambiguous) {
            await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-           restoreAutomatic = await page.getByLabel("Automatically process saved inputs").isChecked();
-           await page.getByLabel("Automatically process saved inputs").uncheck();
+            restoreAutomatic = await automaticInputs(page, false);
            await page.getByRole("button", { name: "Back to workspace" }).click();
          }
         await page.getByRole("tab", { name: /Specification/ }).click();
@@ -1522,7 +1530,7 @@ try {
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
          if (restoreAutomatic !== undefined) {
            await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-           await page.getByLabel("Automatically process saved inputs").setChecked(restoreAutomatic);
+            await automaticInputs(page, restoreAutomatic);
            await page.getByRole("button", { name: "Back to workspace" }).click();
          }
       }
@@ -1536,8 +1544,7 @@ try {
          await page.reload();
          await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(changes.name) }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const automatic = await page.getByLabel("Automatically process saved inputs").isChecked();
-         await page.getByLabel("Automatically process saved inputs").uncheck();
+          const automatic = await automaticInputs(page, false);
          await page.getByRole("button", { name: "Back to workspace" }).click();
          await page.getByRole("tab", { name: /Specification/ }).click();
          await page.getByLabel("Filter by feature").selectOption("all");
@@ -1594,7 +1601,7 @@ try {
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Change request flow fits mobile width");
          await page.setViewportSize({ width: 1440, height: 1000 });
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         await page.getByLabel("Automatically process saved inputs").setChecked(automatic);
+          await automaticInputs(page, automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
        {
@@ -1607,8 +1614,7 @@ try {
          narrow = store.get(narrow.id);
          await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Narrow blocker browser fixture/ }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const automatic = await page.getByLabel("Automatically process saved inputs").isChecked();
-         await page.getByLabel("Automatically process saved inputs").uncheck();
+          const automatic = await automaticInputs(page, false);
          await page.getByRole("button", { name: "Back to workspace" }).click();
          await page.getByRole("tab", { name: /^Design/ }).click();
          await expect(page.getByRole("complementary", { name: "Targeted answer scope", exact: true })).toBeVisible();
@@ -1648,7 +1654,7 @@ try {
          assert.equal(store.get(narrow.id).requirements[0]!.status, "proposed");
          assert.equal(store.submissions(narrow.id).some((s) => s.status === "needs-attention"), false);
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         await page.getByLabel("Automatically process saved inputs").setChecked(automatic);
+          await automaticInputs(page, automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
        let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
@@ -1660,9 +1666,9 @@ try {
      await (await workspaceMenu(page)).getByRole("button", { name: /Cleanup fixture/ }).click();
      await page.getByRole("tab", { name: /Specification/ }).click();
       await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
-     await expect(page.locator(".queue-trigger")).toContainText("0 of 3 checks completed");
-     await expect(page.locator(".queue-trigger [role=progressbar]")).toHaveAttribute("aria-valuenow", "0");
-     await page.locator(".queue-trigger").click();
+      await expect(page.locator(".project-status")).toContainText("Updating your project");
+      await expect(page.locator(".project-status [role=progressbar]")).not.toHaveAttribute("aria-valuenow");
+      await processingQueue(page);
      const refinementDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
      await expect(refinementDrawer).toContainText("Step 2 of 2 · Wording cleanup");
      await expect.poll(() => refinementReleases.length).toBe(1);
@@ -1676,7 +1682,7 @@ try {
       assert.equal(cleanupSnapshot.refinementProgress.status, "completed");
       assert.equal(cleanupSnapshot.refinementProgress.completed, 3); assert.equal(cleanupSnapshot.refinementProgress.total, 3);
       await expect(refinementDrawer).toContainText("No unfinished responses. Completed work is recorded in Activity.");
-      await refinementDrawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+      await closeTechnicalViews(page);
       await reviewPanel.getByRole("button", { name: /^Needs your decision/ }).click();
       await expandReviewEpics();
      await expect(reviewPanel.locator(".refinement-card")).toHaveCount(2);
@@ -1690,8 +1696,9 @@ try {
      await expect(reviewPanel.locator(".review-card")).toHaveCount(2);
       await expect(reviewPanel.getByRole("button", { name: "Replace requirement", exact: true })).toHaveCount(1);
      const firstRefinement = reviewPanel.locator(".refinement-card .review-card-heading").first();
-     await firstRefinement.click();
-     await expect(firstRefinement).toHaveAttribute("aria-expanded", "false");
+      await firstRefinement.click();
+      await expandReviewEpics();
+      await expect(firstRefinement).toHaveAttribute("aria-expanded", "false");
      await firstRefinement.click();
      await expect(firstRefinement).toHaveAttribute("aria-expanded", "true");
      await page.getByLabel("Filter by feature").selectOption("project");
@@ -1794,11 +1801,9 @@ try {
         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
        await expect(listPanel.locator(".requirement-detail > summary").first()).toContainText("Assessed · partial");
        await expect(listPanel.locator(".implementation-row-status").first()).toContainText("Coding: not started");
-       await listPanel.getByRole("button", { name: "Assessed", exact: true }).click();
-        await expectImplementationRows(2);
-       await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 2 assessed");
-       await listPanel.getByRole("button", { name: "Unknown", exact: true }).click();
-       await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
+        await expect(listPanel.locator('[aria-label="Implementation filters"] button')).toHaveCount(4);
+        await expect(listPanel.getByRole("button", { name: "Unknown", exact: true })).toHaveCount(0);
+        await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 2 assessed");
        await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
       await search.fill("ACCESS"); await expect(listPanel.locator(".feature-group")).toHaveCount(1);
        await expectImplementationRows(2);
@@ -1806,25 +1811,26 @@ try {
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Download signed receipts");
        await search.fill(listing.requirements[2]!.id.toUpperCase()); await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Export monthly revenue");
-      await search.fill("monthly"); await listPanel.getByRole("button", { name: "Missing", exact: true }).click();
+       await search.fill("monthly");
        await expectImplementationRows(1);
-      await listPanel.getByRole("button", { name: "Partial", exact: true }).click();
+       await listPanel.getByRole("button", { name: "Delivered", exact: true }).click();
       await expect(listPanel.getByRole("heading", { name: "No requirements match these filters.", exact: true })).toBeVisible();
       await listPanel.getByRole("button", { name: "Clear search and status filter", exact: true }).click();
        await expect(search).toHaveValue(""); await expectImplementationRows(4);
       const reportsID = listing.epics.find((e) => e.title === "Business reports")!.id;
       await page.getByRole("combobox", { name: "Filter by feature", exact: true }).selectOption(reportsID);
-      await listPanel.getByRole("button", { name: "Blocked", exact: true }).click();
+       await listPanel.getByRole("button", { name: "Needs attention", exact: true }).click();
        await expectImplementationRows(2);
        await search.fill("receipts"); await expectImplementationRows(1);
       await page.getByRole("combobox", { name: "Filter by feature", exact: true }).selectOption("all"); await search.fill("");
-      await listPanel.getByRole("button", { name: "Partial", exact: true }).click();
+       await listPanel.getByRole("button", { name: "All approved", exact: true }).click(); await search.fill("Sign in with email");
        await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Sign in with email");
-      await listPanel.getByRole("button", { name: "Needs reassessment", exact: true }).click();
+       await search.fill("Reset a forgotten password");
        await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Reset a forgotten password");
-      await listPanel.getByRole("button", { name: "Not assessed", exact: true }).click();
+       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Needs reassessment");
+       await search.fill("Download signed receipts");
        await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Download signed receipts");
       await listPanel.getByRole("button", { name: "All approved", exact: true }).click(); await search.fill("AFTER RESTART");
@@ -1856,10 +1862,11 @@ try {
        await expect(assessmentLogs.locator("pre")).toContainText("VERIFY_FIXTURE_FAILURE: executable unavailable");
        await expect(assessmentLogs.locator("pre")).toContainText('"exitCode": 3');
        await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
-      await listPanel.getByRole("button", { name: "Complete in code", exact: true }).click();
+       await listPanel.getByRole("button", { name: "All approved", exact: true }).click(); await search.fill("Download signed receipts");
        await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Download signed receipts");
-      await listPanel.getByRole("button", { name: "Implemented", exact: true }).click();
+       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Complete in code");
+       await listPanel.getByRole("button", { name: "Delivered", exact: true }).click();
       await expect(listPanel.locator(".feature-group")).toHaveCount(0);
       await expect(listPanel.getByRole("heading", { name: "No requirements match these filters.", exact: true })).toBeVisible();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Failed assessment diagnostics and command output fit mobile width");
@@ -1871,12 +1878,12 @@ try {
        store.saveExecution(listing.id, previewState);
        await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
        const previewRun = listPanel.getByRole("region", { name: "Assessment run" });
-       await expect(previewRun.getByRole("heading")).toContainText("Assessment queue preview");
-       await previewRun.getByText("Assessment queue · 1 pending · 3 reusable at capture", { exact: true }).click();
-       await expect(previewRun).toContainText("src/auth/reset.ts");
+        await expect(previewRun.getByRole("heading")).toContainText("Code check preview");
+        await expect(previewRun).not.toContainText("src/auth/reset.ts");
         await previewRun.getByRole("button", { name: "View logs", exact: true }).click();
         await assessmentLogs.getByText("Log details", { exact: true }).click();
-        await expect(assessmentLogs.locator("pre")).toContainText("No model calls or verification commands run");
+         await expect(assessmentLogs.locator("pre")).toContainText("No model calls or verification commands run");
+         await expect(assessmentLogs.locator("pre")).toContainText("src/auth/reset.ts");
         await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Assessment queue reasons fit mobile width");
        await page.screenshot({ path: ".reqwizit-state/browser-assessment-queue.png", fullPage: true });
@@ -1935,7 +1942,7 @@ try {
         queueAssessment.completedIDs.push(liveRequirement.id); queueAssessment.reused = 1; queueAssessment.currentRequirementID = listing.requirements[2]!.id;
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 0 complete locally · 1 partial · 0 missing · 1 unknown");
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
-          await expect(listPanel.getByRole("region", { name: "Assessment run" })).toContainText("2 / 4 requirements assessed · 1 unchanged results reused");
+        await expect(listPanel.getByRole("region", { name: "Assessment run" })).toContainText("2 / 4 requirements checked");
           await expect(listPanel.getByRole("progressbar", { name: "Requirements assessed", exact: true })).toHaveAttribute("aria-valuenow", "50");
          queueAssessment.force = true; queueAssessment.freshIDs = [liveRequirement.id];
           await listPanel.getByRole("region", { name: "Assessment run" }).getByRole("button", { name: "View logs", exact: true }).click();
@@ -1964,16 +1971,15 @@ try {
          await progressDialog.getByRole("button", { name: "Close progress", exact: true }).click();
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 1 complete locally · 0 partial · 0 missing · 1 unknown");
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
-        await listPanel.getByRole("button", { name: "Unknown", exact: true }).click();
-        await expect(listPanel.locator(".requirement-detail")).toHaveCount(1);
-         await expect(listPanel.locator(".requirement-detail > summary")).toContainText(liveRequirement.statement);
-         await expect(listPanel.locator(".feature-group > summary")).toContainText("2 / 2 assessed locally · 1 complete locally");
-        await listPanel.getByRole("button", { name: "Assessed", exact: true }).click();
+         await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
+         await expect(listPanel.locator(".requirement-detail > summary").filter({ hasText: liveRequirement.statement })).toContainText("unknown");
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 1 complete locally");
+         await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
          await expectImplementationRows(4);
         queueAssessment.completedIDs = [listing.requirements[0]!.id];
-        const sharedQueueTrigger = page.locator(".queue-trigger");
+         await processingQueue(page);
+         const sharedQueueTrigger = page.locator("#logs .queue-trigger");
        await expect(sharedQueueTrigger).toContainText("2 tasks processing");
-       await sharedQueueTrigger.click();
         const sharedQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
          await expect(sharedQueue).toContainText("Responses are saved and waiting for assessment or implementation to finish");
          await expect(sharedQueue.locator(".queue-item").filter({ hasText: "Historical saved response" })).toHaveCount(0);
@@ -1997,10 +2003,10 @@ try {
        assert.equal(await sharedQueue.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Shared task feedback fits mobile width");
        await page.screenshot({ path: ".reqwizit-state/queue-implementation-mobile.png" });
        await page.keyboard.press("Escape");
-       await page.reload(); await expect(sharedQueueTrigger).toContainText("Main verification");
-       await sharedQueueTrigger.click(); await sharedQueue.getByRole("button", { name: "Stop implementation", exact: true }).click();
+        await page.reload(); await processingQueue(page); await expect(sharedQueueTrigger).toContainText("Main verification");
+        await sharedQueue.getByRole("button", { name: "Stop implementation", exact: true }).click();
        await expect(sharedQueue.getByRole("button", { name: "Stop implementation", exact: true })).toHaveCount(0);
-         await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
+         await expect(page.locator(".project-status")).toContainText("Your work is saved");
         await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
         await expect(sharedQueueTrigger.locator(".activity-spinner")).toHaveCount(0);
         await expect(sharedQueue.getByText(/^Recent background work/)).toHaveCount(0);
@@ -2009,19 +2015,19 @@ try {
         const backgroundAssessment = backgroundLogs.locator(".log-record").filter({ hasText: "fixture-context-block" });
         await expect(backgroundAssessment).toContainText("Assessment stopped; earlier results retained.");
         queueAssessment.status = "failed"; queueAssessment.diagnostic = "Verification command failed; local assessment retained.";
-         await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
+          await expect(page.locator(".project-status")).toContainText("Your work is saved");
         await expect(backgroundAssessment).toContainText("Verification command failed; local assessment retained.");
         queueAssessment.status = "completed"; queueAssessment.diagnostic = "Verified main assessment finished.";
          await expect(backgroundAssessment).toContainText("Verified main assessment finished.");
          await backgroundLogs.getByRole("button", { name: "Close logs", exact: true }).click();
-        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
+         await expect(page.locator(".project-status")).toContainText("Your work is saved");
         await page.keyboard.press("Escape");
-        queueHasWaiting = false;
-        queueAssessment.status = "interrupted";
-        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready when you are");
-        await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
-        await page.reload();
-        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready when you are");
+         queueHasWaiting = false;
+         queueAssessment.status = "interrupted";
+         await expect(page.locator(".project-status")).toContainText("Your work is saved");
+         await expect(page.locator(".project-status").getByRole("progressbar")).toHaveCount(0);
+         await page.reload();
+         await expect(page.locator(".project-status")).toContainText("Your work is saved");
         await page.unroute(snapshotRoute);
        await page.unroute(`**/api/projects/${listing.id}/cancel-help`);
         await page.unroute(`**/api/projects/${listing.id}/execution-stop`);
@@ -2029,11 +2035,11 @@ try {
         // Current badges, filters and evidence must all invalidate consistently.
         listing = store.note(listing.id, listing.revision, "New global acceptance constraint", "project");
         await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
-         await expect(listPanel).toContainText("Answers and reviews saved during assessment wait in the queue until it finishes");
-         await listPanel.getByRole("button", { name: "Needs reassessment", exact: true }).click();
-         await expectImplementationRows(4);
-        await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 assessed");
-        await listPanel.getByRole("button", { name: "Complete in code", exact: true }).click();
+          await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
+          await expectImplementationRows(4);
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 assessed");
+         await expect(listPanel.locator(".requirement-detail > summary").first()).toContainText("Needs reassessment");
+         await listPanel.getByRole("button", { name: "Delivered", exact: true }).click();
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
          // Large, deterministic snapshot: guard DOM growth and exercise checkpoints
          // while searching/scrolling. No model, remote or verification work runs.
@@ -2080,21 +2086,22 @@ try {
           await expect(implementationPages).toContainText("1–1 of 1");
           await expect(listPanel.locator(".feature-group > summary").first()).toContainText("Large feature 9");
           await search.fill("");
-         await listPanel.locator(".implementation-settings > summary").click();
-         await listPanel.getByText("Requirement prerequisites", { exact: true }).click();
-         await expect(listPanel.locator("select[multiple]")).toHaveCount(0);
-         await listPanel.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-0");
-         const prerequisites = listPanel.getByLabel("Prerequisites for Large requirement 0", { exact: true });
+         const largeTools = await implementationTools(page);
+         await largeTools.locator(".implementation-settings > summary").click();
+         await largeTools.getByText("Requirement prerequisites", { exact: true }).click();
+         await expect(largeTools.locator("select[multiple]")).toHaveCount(0);
+         await largeTools.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-0");
+         const prerequisites = largeTools.getByLabel("Prerequisites for Large requirement 0", { exact: true });
          await expect(prerequisites.locator("option")).toHaveCount(499);
          await prerequisites.selectOption(["large-r-1"]);
-         await listPanel.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-2");
-         await listPanel.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-0");
+         await largeTools.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-2");
+         await largeTools.getByLabel("Requirement to configure", { exact: true }).selectOption("large-r-0");
          await expect(prerequisites).toHaveValues(["large-r-1"]);
-         await listPanel.getByText("Requirement prerequisites", { exact: true }).click();
-         await expect(listPanel.locator("select[multiple]")).toHaveCount(0);
-         await listPanel.getByText("Requirement prerequisites", { exact: true }).click();
+         await largeTools.getByText("Requirement prerequisites", { exact: true }).click();
+         await expect(largeTools.locator("select[multiple]")).toHaveCount(0);
+         await largeTools.getByText("Requirement prerequisites", { exact: true }).click();
          await expect(prerequisites).toHaveValues(["large-r-1"]);
-         await listPanel.locator(".implementation-settings > summary").click();
+         await closeTechnicalViews(page);
          await listPanel.locator(".feature-group > summary").first().click();
           await expect(listPanel.locator(".requirement-detail")).toHaveCount(25);
          await expect(listPanel.locator(".requirement-detail article")).toHaveCount(0);
@@ -2107,12 +2114,11 @@ try {
          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 50 assessed locally · 1 complete locally");
          await expect(search).toHaveValue("Large requirement 0");
-         await expect(prerequisites).toHaveValues(["large-r-1"]);
           await expect(listPanel.locator(".requirement-detail[open]")).toHaveCount(1);
           // Progress-only polls must not retransmit the 500-requirement project or
           // execution evidence, disturb focused input, or mount additional details.
           largeActive = true;
-          await expect(page.locator(".queue-trigger")).toContainText("Implementing requirements");
+           await expect(page.locator(".project-status")).toContainText("Updating your project");
           await search.focus();
           for (let checkpoint = 1; checkpoint <= 3; checkpoint++) {
             const nextCheckpoint = page.waitForResponse(async (response) => response.url().endsWith(`/api/projects/${listing.id}`) && (await response.text()).includes(`Performance checkpoint ${checkpoint}`));
@@ -2148,6 +2154,7 @@ try {
               output: { summary: "Paging plan fixture", packages: largeProject.requirements.map((r, index) => ({ requirementID: r.id, title: `Paged package ${index}`, reason: "Keep complete planning scope", steps: ["Implement"], verification: ["Verify"], prerequisites: index === 0 ? [{ requirementID: largeProject.requirements[1]!.id, kind: "hard", reason: "Supporting behavior", evidenceIDs: [largeProject.requirements[1]!.id], confidence: "high" }] : [], questions: [] })) } };
             largeState.version++;
             await page.getByRole("tab", { name: /Implement/ }).click();
+            await listPanel.getByText("Build details and ordering", { exact: true }).click();
             const packagePages = listPanel.getByRole("navigation", { name: "Work packages pages", exact: true });
             await expect(packagePages).toContainText("1–25 of 500");
             const packageList = listPanel.getByRole("list", { name: "Proposed work packages", exact: true });
@@ -2168,8 +2175,7 @@ try {
             largeProject.revision++;
             await page.reload();
             await page.getByRole("tab", { name: /Specification/ }).click();
-             await expect(reviewPanel.locator(".review-card")).toHaveCount(0);
-             await reviewPanel.locator(".feature-group > summary").first().click();
+             await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
              const reviewPages = reviewPanel.getByRole("navigation", { name: "Specification Large feature 0 requirements pages", exact: true });
              await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
              const readinessFilters = reviewPanel.locator(".review-readiness");
@@ -2178,7 +2184,7 @@ try {
              await expect(reviewPanel.locator(".review-card")).toHaveCount(0);
               await expect(reviewPanel.getByText("No items match this readiness filter.", { exact: true })).toBeVisible();
               await readinessFilters.getByRole("button", { name: /^Ready to review/ }).click();
-              await reviewPanel.locator(".feature-group > summary").first().click();
+              await expandReviewEpics(true);
              await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
               await readinessFilters.getByRole("button", { name: /^All / }).click();
               await expandReviewEpics(true);
@@ -2299,10 +2305,11 @@ try {
             await page.evaluate((id) => localStorage.setItem("reqwizit-project", id), planningProject.id);
             await page.reload();
            await page.getByRole("tab", { name: /Implement/ }).click();
-           const planningPanel = page.getByRole("region", { name: "Implementation planning", exact: true });
+           const planningPanel = page.locator(".implementation-tab");
             await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
-           await expect(planningPanel.getByRole("list", { name: "Proposed work packages" }).locator(":scope > li")).toHaveCount(3);
-           await expect(planningPanel.getByRole("alert")).toContainText("proposed build order cannot be used yet");
+            await planningPanel.getByText("Build details and ordering", { exact: true }).click();
+            await expect(planningPanel.getByRole("list", { name: "Proposed work packages" }).locator(":scope > li")).toHaveCount(3);
+           await expect(planningPanel.getByRole("alert")).toContainText("build order needs a correction before approval");
             await planningPanel.locator(".job-error").getByRole("button", { name: "View logs", exact: true }).click();
             const planningLogs = page.getByRole("dialog", { name: "Logs", exact: true });
             await expect(planningLogs).toContainText("cycle");
@@ -2319,7 +2326,8 @@ try {
            await expect(approvePlan).toBeEnabled();
            await planningPanel.getByRole("button", { name: "Move Planning package 3 earlier", exact: true }).click();
            await approvePlan.click();
-            await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+            await planningPanel.getByText("Saved build plan", { exact: true }).click();
+            await expect(planningPanel.getByText("Plan approved", { exact: true })).toBeVisible();
             await expect(page.getByRole("status", { name: "Implementation next step" })).toContainText("Your plan is approved");
             await expect(page.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
            const approvedPlanState = store.execution(planningProject.id), firstID = planningProject.requirements[0]!.id, secondID = planningProject.requirements[1]!.id;
@@ -2327,7 +2335,8 @@ try {
            assert.deepEqual(approvedPlanState.config!.dependencies[secondID], [firstID]);
            assert.equal(approvedPlanState.config!.dependencies[firstID], undefined);
            await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
-           await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+           await planningPanel.getByText("Saved build plan", { exact: true }).click();
+           await expect(planningPanel.getByText("Plan approved", { exact: true })).toBeVisible();
            await expect(planningPanel.getByRole("textbox", { name: /Planning review notes/ })).toHaveValue("Create the durable record contract first, then edit it.");
            await page.setViewportSize({ width: 390, height: 844 });
            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Reviewable implementation plan fits mobile width");
@@ -2361,9 +2370,10 @@ try {
              await expect(page.getByRole("status", { name: "Implementation next step" })).toContainText("Merge the delivery branch or PR");
              await page.getByRole("button", { name: "Verify delivery", exact: true }).click();
              await expect.poll(() => continuedRuns).toBe(2);
-             await page.getByText("Check options", { exact: true }).click();
+              await implementationTools(page);
              assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Consolidated implementation actions and expanded options fit mobile width");
-             await page.screenshot({ path: ".reqwizit-state/browser-implementation-actions.png", fullPage: true });
+              await page.screenshot({ path: ".reqwizit-state/browser-implementation-actions.png", fullPage: true });
+              await closeTechnicalViews(page);
              mapState.run = undefined;
               await page.getByRole("tab", { name: /^Specification/ }).click();
               await page.getByText("Organize features", { exact: true }).click();
@@ -2462,7 +2472,7 @@ try {
               }
               await expect(reviewPanel.getByRole("button", { name: /^Submitted/ })).toHaveText("Submitted 0");
               await expect(reviewPanel).toContainText("No reviews awaiting follow-up");
-              await expect(page.getByRole("button", { name: /^Processing & queue:/ })).not.toHaveAccessibleName(/need attention/);
+               await expect(page.locator(".project-status")).not.toContainText("needs attention");
                await reviewPanel.getByRole("button", { name: /^History/ }).click();
                await expandReviewEpics();
                await expect(reviewPanel.getByRole("region", { name: "Resolved review attempt" })).toHaveCount(3);
@@ -2504,7 +2514,6 @@ try {
     // All modal entry points share the same shell and dismissal safeguards.
     for (const [trigger, name] of [
       [page.locator(".progress-trigger"), "Project progress"],
-      [page.getByRole("button", { name: /^Processing & queue:/ }), "Processing & queue"],
     ] as const) {
       const previousOverflow = await page.evaluate(() => document.body.style.overflow);
       await trigger.click();
@@ -2532,61 +2541,47 @@ try {
       await expect(modal).toHaveCount(0); await expect(trigger).toBeFocused();
     }
      await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
-    const resolverDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
+     const resolverDialog = page.getByRole("region", { name: "Requirement review", exact: true });
+     await expect(page.getByRole("dialog", { name: "View & resolve", exact: true })).toHaveCount(0);
     await expect(resolverDialog).toContainText("Both players return to their latest shared beacon");
     await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
     await resolverDialog.getByLabel("Anything to add? (optional)").fill("Keep this resolver draft");
-    await resolverDialog.getByRole("heading", { name: "View & resolve", exact: true }).click();
-    await expect(resolverDialog).toBeVisible();
-    const resolverBounds = (await resolverDialog.boundingBox())!;
-    await page.mouse.move(resolverBounds.x + 10, resolverBounds.y + 10);
-    await page.mouse.down(); await page.mouse.move(2, 2); await page.mouse.up();
-    await expect(resolverDialog).toBeVisible();
-    await page.mouse.click(2, 2);
-    await expect(resolverDialog).toHaveCount(0);
-     await expect(resolverInbox.getByRole("button", { name: "Answer question", exact: true })).toBeFocused();
-     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
+     await page.getByRole("tab", { name: "Activity", exact: true }).click();
+     await page.getByRole("tab", { name: /^Specification/ }).click();
     await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
-    assert.deepEqual(await resolverDialog.evaluate((dialog) => {
-      const body = dialog.querySelector(".issue-dialog-body")!;
-      return { overflow: getComputedStyle(dialog).overflow, bodyOverflow: getComputedStyle(body).overflowY, scrolls: body.scrollHeight > body.clientHeight, headerVisible: dialog.querySelector("header")!.getBoundingClientRect().top >= dialog.getBoundingClientRect().top };
-    }), { overflow: "hidden", bodyOverflow: "auto", scrolls: true, headerVisible: true }, "Only the dialog body scrolls, inside the rounded shell");
-    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
-    await expect(page.getByLabel("Filter by feature", { exact: true })).toHaveValue("project");
-     await expect(resolverInbox.getByRole("button", { name: "Answer question", exact: true })).toBeFocused();
-     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
-    await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
-    await resolverDialog.getByText("Saved attempts & notes · 4", { exact: true }).click();
-    await expect(resolverDialog).toContainText("Use spawn beacons, not partner revival.");
-    await resolverDialog.getByText("Archive attempt…", { exact: true }).last().click();
-    await resolverDialog.getByRole("button", { name: "Confirm archive attempt", exact: true }).click();
-    await expect(resolverDialog).toContainText("Archived · history only");
-    await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
+     const recoveryTools = await technicalProcessing(page);
+     await recoveryTools.getByText("Saved review history and recovery", { exact: true }).click();
+     await recoveryTools.getByRole("button", { name: "Inspect saved review attempts", exact: true }).click();
+     const historyDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
+     await expect(historyDialog.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+     await historyDialog.getByText("Saved attempts & notes · 4", { exact: true }).click();
+     await expect(historyDialog).toContainText("Use spawn beacons, not partner revival.");
+     await historyDialog.getByText("Archive attempt…", { exact: true }).last().click();
+     await historyDialog.getByRole("button", { name: "Confirm archive attempt", exact: true }).click();
+     await expect(historyDialog).toContainText("Archived · history only");
      assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Archiving never answers the clarification");
-     await resolverDialog.getByRole("button", { name: "Dismiss old attempts (3)", exact: true }).click();
-     await expect(resolverDialog).toContainText("Old attempts dismissed. All notes and history kept.");
+      await historyDialog.getByRole("button", { name: "Dismiss old attempts (3)", exact: true }).click();
+      await expect(historyDialog).toContainText("Old attempts dismissed. All notes and history kept.");
      await expect(resolverInbox).toHaveCount(0);
      assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 4);
      assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Bulk dismissal never answers a question or changes approval");
-     await resolverDialog.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+      await historyDialog.getByRole("button", { name: "Undo dismissal", exact: true }).click();
      await expect(resolverInbox).toContainText("3 saved attempts");
      assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 1, "Undo affects only the bulk-dismissed attempts");
-    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
-    await page.getByRole("button", { name: /^Processing & queue:/ }).click();
-    const resolverDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+     await historyDialog.getByRole("button", { name: "Close ×", exact: true }).click();
+     const resolverDrawer = await processingQueue(page);
      const queueRecovery = resolverDrawer.getByRole("region", { name: "Responses needing attention", exact: true }).getByRole("button", { name: resolverTarget.statement, exact: true });
      await queueRecovery.click();
      await expect(resolverDialog).toBeVisible();
      await expect(resolverDrawer).toHaveCount(0);
-    await page.mouse.click(2, 2);
-    await expect(resolverDialog).toHaveCount(0);
+     await expect(page.getByRole("dialog")).toHaveCount(0);
      assert.equal(await page.evaluate(() => document.body.style.overflow), "", "Queue-to-item navigation leaves no hidden modal or stale scroll lock");
-     await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+      await processingQueue(page);
      await queueRecovery.click();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await resolverDialog.evaluate((dialog) => dialog.scrollWidth > dialog.clientWidth), false, "Resolver fits mobile width");
     await page.screenshot({ path: ".reqwizit-state/browser-focused-resolver.png", fullPage: true });
-     await page.keyboard.press("Escape"); await expect(resolverDialog).toHaveCount(0);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
      await expect(resolverDrawer).toHaveCount(0);
     const resolverAuto = await page.evaluate(() => { const previous = localStorage.getItem("reqwizit-auto"); localStorage.setItem("reqwizit-auto", "false"); return previous; });
     await page.reload(); await page.getByRole("tab", { name: /^Specification/ }).click();
@@ -2597,15 +2592,15 @@ try {
     await resolverDialog.getByLabel("Anything to add? (optional)").fill("Preserve this note through clarification follow-up");
     await resolverDialog.getByLabel("Your answer to Where should players return before reaching a beacon?", { exact: true }).fill("Return to the mission entrance.");
     await resolverDialog.getByRole("button", { name: "Save response →", exact: true }).click();
-    await expect(resolverDialog.getByRole("button", { name: "Process blocking input", exact: true })).toBeVisible();
+    const processResolverInput = resolverDialog.getByRole("region", { name: "Current review recovery", exact: true }).getByRole("button", { name: "Process blocking input", exact: true });
+    await expect(processResolverInput).toBeVisible();
     assert.equal(resolverCalls, 0, "Manual processing preferences also apply inside the resolver");
-    await resolverDialog.getByRole("button", { name: "Process blocking input", exact: true }).click();
+    await processResolverInput.click();
     await expect(resolverDialog).toContainText("earlier blocker is no longer active");
     await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Preserve this note through clarification follow-up");
-     await expect(resolverDialog.getByRole("alert")).toContainText("Updated since you started reviewing.");
+     await expect(resolverDialog.getByRole("alert").filter({ hasText: "Updated since you started reviewing." })).toBeVisible();
     await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).not.toHaveAttribute("aria-disabled", "true");
     assert.equal(resolverCalls, 1);
-    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
     await page.evaluate((previous) => { if (previous === null) localStorage.removeItem("reqwizit-auto"); else localStorage.setItem("reqwizit-auto", previous); }, resolverAuto);
     assert.deepEqual(errors, []);
     let gapProject = store.create("Gap backlog fixture", "Preserve work across interruptions", { providerID: "openai", modelID: "fixture" });
@@ -2620,14 +2615,16 @@ try {
    await page.getByRole("tab", { name: /^Design/ }).click();
     await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
     await discoveryActions(page);
-     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
-     await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("7");
+      const questionTuning = await technicalProcessing(page);
+      await expect(questionTuning.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
+      await questionTuning.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("7");
+      await closeTechnicalViews(page);
     for (let i = 0; i < 2; i++) {
      const jobsBefore = store.jobs(gapProject.id).length, revisionBefore = store.get(gapProject.id).revision;
       await exploreLegacyGaps(page, store.get(gapProject.id), false, true);
       await expect.poll(() => store.jobs(gapProject.id).length).toBe(jobsBefore + (i === 0 ? 4 : 1));
      await expect.poll(() => store.jobs(gapProject.id).at(-1)!.status).toBe("completed");
-     await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions", exact: true })).toBeEnabled();
+     await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeEnabled();
       assert.equal(store.jobs(gapProject.id).at(-1)!.gapReport!.checked, 3);
       if (i === 1) assert.equal(store.get(gapProject.id).revision, revisionBefore, "A no-call reuse outcome cannot create a specification revision");
    }
@@ -2635,8 +2632,8 @@ try {
    assert.deepEqual(store.get(gapProject.id).requirements, gapOriginal.requirements);
    assert.deepEqual(store.get(gapProject.id).sources, gapOriginal.sources);
      // Completed reuse is saved diagnostic history, not current queue activity.
-    await expect(page.locator(".round-status")).toContainText("Ready when you are");
-   await page.locator(".topbar .queue-trigger").click();
+     await expect(page.locator(".project-status")).toContainText("Your work is saved");
+    await processingQueue(page);
     const gapQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
     await expect(gapQueue.getByRole("region", { name: "Gap exploration backlog", exact: true })).toHaveCount(0);
     await gapQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
@@ -2653,8 +2650,8 @@ try {
    await page.screenshot({ path: ".reqwizit-state/browser-gap-backlog.png", fullPage: true });
       await gapLogs.getByRole("button", { name: "Close logs", exact: true }).click(); await page.reload();
      await discoveryActions(page);
-     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("7");
-    await page.locator(".topbar .queue-trigger").click();
+      await expect((await technicalProcessing(page)).getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("7");
+     await processingQueue(page);
     await gapQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
     await gapStatus.getByText("Log details", { exact: true }).click();
      await expect(gapStatus.locator(":scope > small")).toContainText("Finished");
@@ -2672,11 +2669,13 @@ try {
     await page.getByRole("tab", { name: /^Design/ }).click();
       await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
       await discoveryActions(page);
-      await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
-      await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("1");
+       const retrievalTuning = await technicalProcessing(page);
+       await expect(retrievalTuning.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
+       await retrievalTuning.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("1");
+       await closeTechnicalViews(page);
      await exploreLegacyGaps(page, store.get(retrievalProject.id));
      await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("failed");
-     await page.locator(".topbar .queue-trigger").click();
+      await processingQueue(page);
      await gapQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
      const retrievalLog = () => gapLogs.locator(".log-record").filter({ hasText: store.jobs(retrievalProject.id).at(-1)!.id });
      await retrievalLog().getByText("Log details", { exact: true }).click();
@@ -2688,7 +2687,7 @@ try {
      await exploreLegacyGaps(page, store.get(retrievalProject.id));
     await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("completed");
      assert.equal(retrievalCalls, 3);
-     await page.locator(".topbar .queue-trigger").click();
+      await processingQueue(page);
      await gapQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
      await retrievalLog().getByText("Log details", { exact: true }).click();
      await expect(retrievalLog().locator(":scope > small")).toContainText("Finished");

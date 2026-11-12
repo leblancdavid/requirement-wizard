@@ -27,7 +27,8 @@ try {
       await page.addInitScript((id) => { localStorage.setItem("reqwizit-project", id); localStorage.setItem("reqwizit-auto", "false"); }, p.id);
       await page.goto(app.origin); await page.getByRole("tab", { name: /^Specification/ }).click();
       const panel = page.getByRole("region", { name: "Requirement review", exact: true });
-      await panel.locator(".feature-group > summary").click();
+      const feature = panel.locator(".feature-group");
+      if (await feature.getAttribute("open") === null) await feature.locator(":scope > summary").click();
       const edited = panel.locator(".review-card").filter({ has: page.locator(".review-card-heading strong", { hasText: "Save reports" }) });
       const other = panel.locator(".review-card").filter({ has: page.locator(".review-card-heading strong", { hasText: "Keep audit history" }) });
       await expect(edited.locator(".review-card-heading")).toHaveAttribute("aria-expanded", "true");

@@ -8,6 +8,22 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Project-focused presentation (2026-11-11)
+
+Plan questions and approval appear first when a current proposal needs review;
+saved builds and approved plans prioritize explicit coding/delivery continuation.
+Four normal filters show Not delivered, Needs attention, Delivered and All approved.
+Detailed evidence still distinguishes local code completeness from main delivery.
+Build destination and available GitHub review links remain visible before action.
+Approval alone never starts coding or expands command/publication permissions.
+
+Preview, forced rechecks, manual reassessment marking, prerequisites and assessment
+boundaries are retained under Logs → Technical processing controls and retained
+preferences. Normal setup saves preserve hidden expert settings, including an
+explicit disabled reuse policy. Historical evidence remains available through Logs;
+opening diagnostics performs no model work. See
+[scope, compatibility and verification](project-focused-workspace.md).
+
 ### Reviewed definition apply preserves valid work (2026-10-30)
 
 The separate [reviewed-assessment apply](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19)

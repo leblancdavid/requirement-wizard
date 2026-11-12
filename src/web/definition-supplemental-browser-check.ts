@@ -81,10 +81,10 @@ try {
   await open(); assert.equal(calls, 0); await refresh.click();
   await expect.poll(() => waiting).toBe(true);
   await overview.getByRole("button", { name: "Close progress", exact: true }).click();
-  await expect(page.locator(".queue-header")).toContainText("Runtime");
+  await expect(page.locator(".project-status")).toContainText("Updating your project");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Cancel current work", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.deepEqual(paused.definitionWork!.receipts, originalReceipts); assert.equal(paused.definitionWork!.attempts, 9);

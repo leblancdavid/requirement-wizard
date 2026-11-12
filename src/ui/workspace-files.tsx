@@ -76,7 +76,7 @@ export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: P
   }
   const latest = project.scans.at(-1);
   const incomplete = !latest && (project.origin || scanJob) && !["running", "pending"].includes(scanJob?.status ?? "");
-  return <ActionScope reason={!disabled && active ? "A folder scan is already running. Wait for it to finish, or stop it in Processing & queue." : undefined}><section aria-label="Source initialization" className="insight-card workspace-scan">
+  return <ActionScope reason={!disabled && active ? "The app is already reading your project files. Wait for it to finish, or use Cancel current work in the header." : undefined}><section aria-label="Source initialization" className="insight-card workspace-scan">
     <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
     {active && <ActivityFeedback label="Scanning project folder…" completed={progress?.completed} total={progress?.total} />}
     {incomplete && <DiagnosticNotice summary="The app hasn’t finished reading this project’s files. Complete the scan before looking for missing decisions." detail={scanJob?.diagnostic} />}

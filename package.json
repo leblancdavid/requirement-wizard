@@ -64,6 +64,7 @@
     "test:browser:combined-assessment-reader": "npm run build:ui && tsx src/web/combined-assessment-reader-browser-check.ts",
     "test:browser:definition-order": "npm run build:ui && tsx src/web/definition-order-browser-check.ts",
     "test:browser:workspace": "npm run build:ui && tsx src/web/workspace-layout-browser-check.ts",
+    "test:browser:assistance": "npm run build:ui && tsx src/web/project-assistance-browser-check.ts",
     "test:browser:definition-history": "npm run build:ui && tsx src/web/definition-history-browser-check.ts",
     "test:browser:assessment-history": "npm run build:ui && tsx src/web/assessment-history-browser-check.ts",
     "test:browser:definition-recovery": "npm run build:ui && tsx src/web/definition-recovery-browser-check.ts",

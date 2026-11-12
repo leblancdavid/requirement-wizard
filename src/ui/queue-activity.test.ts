@@ -4,14 +4,15 @@ import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job, type Submission } from "../core/model.js";
 import { definitionActivityLabel, queueActivities, discoveryResumeJob } from "./queue-activity.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
-import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
+import { mayContinueProject, WorkflowControls as ProjectWorkflowControls, LegacyWorkflowControls as WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import { workflowLimits } from "../core/workflow.js";
 import { pausedClarification, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { followThroughOutcome } from "../core/follow-through.js";
-import { ProcessingSettings } from "./processing-settings.js";
+import { ProcessingPreferences as ProcessingSettings, ProcessingSettings as ProjectAssistanceSettings } from "./processing-settings.js";
+import { ProjectReviewPermission, additionalReview } from "./project-review-permission.js";
 import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
 
 test("definition activity names the saved assessment area rather than the browsed area", () => {
@@ -49,10 +50,10 @@ test("Continue specification consistently distinguishes consent, waiting decisio
   assert.doesNotMatch(renderWindow(true), /ended without a complete summary/);
   assert.match(renderWindow(false), /ended without a complete summary/);
   const consent = renderToStaticMarkup(createElement(WorkflowControls, { workflow, disabled: false, pending: false, configure() {} }));
-  const primaryControls = consent.split("<details>")[0]!;
-  assert.match(primaryControls, />Play<\/button>/); assert.match(primaryControls, />Pause<\/button>/); assert.match(primaryControls, />Stop<\/button>/);
+  const primaryControls = renderToStaticMarkup(createElement(ProjectWorkflowControls, { workflow, disabled: false, pending: false, configure() { assert.fail("Rendering cannot start work"); } }));
+  assert.match(primaryControls, />Continue<\/button>/); assert.match(primaryControls, />Pause<\/button>/);
   assert.doesNotMatch(primaryControls, /Authorize|Allow repair|Continue specification|four-request|eight-request/);
-  assert.match(consent, /<details><summary>Processing details and advanced actions<\/summary>/, "Technical controls must start collapsed");
+  assert.doesNotMatch(primaryControls, /Processing details and advanced actions|batch|checkpoint|allowance|exact layout/);
   assert.match(consent, /Continue specification lets the app guide your next steps/);
   assert.match(consent, /across all project areas/); assert.match(consent, /More actions/);
   assert.doesNotMatch(consent, /Resume processing/);
@@ -108,6 +109,9 @@ test("Continue specification consistently distinguishes consent, waiting decisio
     const props = { workflow, maintenance, auto, setAuto() { dispatches++; }, disabled: false, pending: false,
       configureWorkflow() { dispatches++; }, configureMaintenance() { dispatches++; }, openQueue() { dispatches++; } };
     const separate = renderToStaticMarkup(createElement(ProcessingSettings, props));
+    const simple = renderToStaticMarkup(createElement(ProjectAssistanceSettings, props));
+    assert.match(simple, /Project assistance/); assert.match(simple, /existing automatic-work permissions are unchanged/);
+    assert.doesNotMatch(simple, /type="radio"|type="checkbox"|batch|maintenance|worker|processing mode/);
     assert.match(separate, /Processing permissions/); assert.match(separate, /applies across projects using this browser/);
     assert.match(separate, /does not rewrite the permission already saved/);
     assert.equal(separate.includes('checked=""'), auto, "Retain both older on and off browser preferences");
@@ -140,6 +144,22 @@ test("refinement labels distinguish stage progress, run scope and terminal outco
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },
   sources: [{ id: "idea", kind: "initial", text: "Save responses" }], questions: [], summary: "Queue", goals: [], actors: [], assumptions: [],
   requirements: [{ id: "save", statement: "Save a response", rationale: "Persistence", sourceIDs: ["idea"], epicID: "inbox", acceptance: ["Survives restart"], status: "accepted" }] });
+
+test("additional usage is a direct project-level choice, with no approval or calls on rendering", () => {
+  const item: Submission = { id: "saved", projectID: project.id, jobID: "review", status: "needs-attention", applied: true,
+    submittedAt: "2026-11-11T00:00:00Z", auto: false, research: false, input: { type: "note", epicID: "inbox", text: "Retain all answers" } };
+  const job: Job = { id: "review", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "failed",
+    submissionAllowance: { step: 1, attempts: 4, limit: 4, canExtend: true } };
+  const before = structuredClone({ project, item, job });
+  assert.deepEqual(additionalReview(project, [item], [job]), { item, job });
+  assert.equal(additionalReview(project, [{ ...item, status: "completed" }], [job]), undefined);
+  assert.equal(additionalReview(project, [item], [{ ...job, submissionAllowance: { ...job.submissionAllowance!, canExtend: false } }]), undefined);
+  const html = renderToStaticMarkup(createElement(ProjectReviewPermission, { item, job, disabled: false, allow() { assert.fail("No dispatch on render"); } }));
+  assert.match(html, /A little more review is needed/); assert.match(html, /additional AI usage/);
+  assert.match(html, />Continue review<\/button>/); assert.match(html, />Not now<\/button>/);
+  assert.match(html, /<details><summary>Details/); assert.doesNotMatch(html.split("<details>")[0]!, /batch|checkpoint|four to eight|type="checkbox"/);
+  assert.deepEqual({ project, item, job }, before);
+});
 
 test("joint validation failures cannot become generic discovery resume authority", () => {
   for (const status of ["failed", "cancelled", "interrupted", "stale"] as const) {

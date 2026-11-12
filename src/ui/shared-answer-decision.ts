@@ -30,3 +30,19 @@ export function currentSharedConflicts(project: Project, jobs: Job[], submission
     return [{ jobID: job.id, submissionID: ids[0]! }];
   });
 }
+
+/** Keep a saved decision's progress in its original tab while its owned review
+ * runs. These cards are not new decisions or additional continuation authority. */
+export function sharedReviewCards(project: Project, jobs: Job[], submissions: Submission[]) {
+  const cards = currentSharedConflicts(project, jobs, submissions);
+  const inputs = new Map(submissions.map(item => [item.id, item]));
+  for (const job of jobs) {
+    const ids = job.context?.submissionIDs;
+    if (job.projectID !== project.id || job.expectedRevision !== project.revision || !["pending", "running"].includes(job.status)
+      || job.answerGroupClarification?.jobID !== job.id || !job.answerGroupClarification.savedText || !ids?.length) continue;
+    if (ids.some(id => { const item = inputs.get(id); return !item || item.projectID !== project.id || item.jobID !== job.id || !item.applied
+      || item.archivedAt || item.conflict || !["processing", "queued", "saved", "needs-attention"].includes(item.status); })) continue;
+    cards.push({ jobID: job.id, submissionID: ids[0]! });
+  }
+  return cards;
+}

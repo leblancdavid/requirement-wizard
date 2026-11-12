@@ -6,6 +6,7 @@ import { planExactTaskContext, shareRepeatedText, shareRepeatedIdentifiers, shar
 import { specificationUpdateTargets } from "./specification-permissions.js";
 import { submissionClarificationQuestions } from "./readiness-questions.js";
 import { assertSpecificationAuthorization, specificationAuthorizationSources } from "./specification.js";
+import { refinementEvidenceRecords } from "./refinement-context.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -28,6 +29,10 @@ export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]),
   reviewChanges: z.array(z.discriminatedUnion("type", [analysisSchema.shape.reviewChanges.unwrap().element.options[0],
     analysisSchema.shape.reviewChanges.unwrap().element.options[1]])).max(30).optional() });
 export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-submission-batches-v1"), submissionID: z.string().uuid(),
+  publicationSupport: z.object({ format: z.literal(1), contextKey: key, attempts: z.number().int().min(0).max(4),
+    receipt: z.object({ contextKey: key, attempt: z.number().int().min(1).max(4), atRevision: z.number().int().positive(),
+      jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
+      verdict: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict().optional() }).strict().optional(),
   task: taskSchema, materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(32),
    attempts: z.number().int().min(0).max(8), receipts: z.array(z.object({ step: z.number().int().min(0).max(64),
      contextKey: key, attempt: z.number().int().min(1).max(8), atRevision: z.number().int().positive(), jobID: z.string().min(1),
@@ -71,10 +76,12 @@ export const submissionStep = (w: SubmissionWork) => repairActive(w)
   ? w.batches.length + w.receipts.slice(w.draftRepair!.fromReceipt).filter((r) => complete(r.response)).length
   : w.receipts.filter((r) => complete(r.response)).length;
 export const submissionTotalSteps = (w: SubmissionWork) => w.batches.length * 2 + Number(!!w.draftRepair);
-export const submissionProgress = (w: SubmissionWork) => ({ completed: submissionStep(w), total: submissionTotalSteps(w),
+export const submissionProgress = (w: SubmissionWork) => w.publicationSupport ? { completed: submissionStep(w) + Number(!!w.publicationSupport.receipt?.verdict.valid), total: submissionTotalSteps(w) + 1,
+  phase: w.publicationSupport.receipt?.verdict.valid ? "complete" as const : "check" as const } : ({ completed: submissionStep(w), total: submissionTotalSteps(w),
    phase: submissionStep(w) >= submissionTotalSteps(w) ? "complete" as const : repairRead(w) || submissionStep(w) < w.batches.length ? "read" as const : "check" as const });
 export const submissionRequestLimit = (w: SubmissionWork, step = submissionStep(w)) => !repairActive(w) && w.allowanceExtensions?.some((g) => g.step === step) ? 8 : 4;
 export function submissionAllowance(w: SubmissionWork) {
+  if (w.publicationSupport) return { step: submissionTotalSteps(w), attempts: w.publicationSupport.attempts, limit: 4, canExtend: false };
   const step = submissionStep(w), limit = submissionRequestLimit(w), last = w.receipts.at(-1);
   const blocked = last && ("submissionCheck" in last.response && !last.response.submissionCheck.valid
     || "submissionBlocked" in last.response && w.permissionRecovery?.receiptIndex !== w.receipts.length - 1);
@@ -137,7 +144,7 @@ export function submissionDraftRepair(m: SubmissionMaterials, w: SubmissionWork,
 }
 const draftLimit = 18000, stageLimit = 96000;
 export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis): ContextPack {
-  const step = submissionStep(w), phase = submissionProgress(w).phase;
+  const step = submissionStep(w), phase = submissionProgress({ ...w, publicationSupport: undefined }).phase;
   if (step >= submissionTotalSteps(w) || phase === "complete") throw new Error("No unfinished saved-response stage.");
   const supplemental = w.receipts.slice(repairActive(w) ? w.draftRepair!.fromReceipt : 0).filter((r) => r.step === step).flatMap((r) => "submissionEvidence" in r.response ? r.response.submissionEvidence.recordIDs : []);
   const batch = repairRead(w) ? w.draftRepair!.evidenceIDs : w.batches[repairActive(w) ? step - w.batches.length - 1 : step % w.batches.length]!;
@@ -405,5 +412,56 @@ export function validateSubmissionPublication(project: Project, item: Submission
   const w = job.submissionWork!, m = submissionMaterials(project, item, w.task), verified = replaySubmissionStages(m, w);
   if (verified.blocked || submissionStep(w) !== submissionTotalSteps(w) || JSON.stringify(result) !== JSON.stringify(submissionPublicationDraft(m, w, verified.draft))
     || job.context?.submissionStage?.planKey !== w.planKey || JSON.stringify(job.context.submissionIDs) !== JSON.stringify([item.id])
-    || JSON.stringify(job.context.includedIDs) !== JSON.stringify(m.evidenceIDs)) throw new Error("Incomplete or changed saved-response work cannot publish.");
+    || JSON.stringify(job.context.includedIDs) !== JSON.stringify(submissionPublicationEvidence(m, w, verified.draft))) throw new Error("Incomplete or changed saved-response work cannot publish.");
+}
+
+/** Supplement an otherwise complete legacy draft, never relabel omitted bodies as
+ * read. Original material/plan keys and paid read/check receipts remain exact. */
+export function submissionPublicationSupportContext(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis): ContextPack | undefined {
+  if (submissionStep(w) !== submissionTotalSteps(w)) return undefined;
+  const targets = [...new Set((draft.refinements ?? []).map(p => p.requirementID))];
+  const required = refinementEvidenceRecords(m.project, targets);
+  if (required.every(id => m.evidenceIDs.includes(id))) {
+    if (w.publicationSupport) throw new Error("Saved publication support no longer matches the frozen draft.");
+    return undefined;
+  }
+  const selected = new Set([...m.pins, ...required]);
+  const detail = Object.fromEntries((["sources", "questions", "requirements", "research"] as const)
+    .map(field => [field, m.project[field].filter(record => selected.has(record.id))]));
+  const data = { ...m.base, ...detail, draft, publicationSupport: { format: 1,
+    originalPlanKey: w.planKey, paidPrefixKey: hash(w.receipts),
+    instruction: "The frozen draft passed its original saved-response batches, but omitted linked supporting records prevented publication. Check the ENTIRE unchanged draft against the exact target requirements and ALL their supporting sources supplied here, including historical/workspace sources. Earlier checks do not establish compatibility with these newly loaded bodies. Return submissionCheck:{valid,reason} only. Reject contradictions, missing human choices or unsupported changes; do not rewrite the draft, decide precedence, grant permission, or retroactively enforce new prose-style preferences. Inclusion of historical sources is not current decision authority. No tools or research." },
+    submissionStage: { phase: "check", step: submissionTotalSteps(w), batches: w.batches.length } };
+  const includedIDs = (["sources", "questions", "requirements", "research"] as const).flatMap(field => m.project[field].filter(record => selected.has(record.id)).map(record => record.id));
+  const manifest: ContextPack["manifest"] = { revision: m.revision, focusEpicID: m.task.focusEpicID ?? null,
+    characters: JSON.stringify(data).length, budget: stageLimit, includedIDs, omittedIDs: m.evidenceIDs.filter(id => !selected.has(id)),
+    epicIDs: m.base.areas.map(e => e.id), partial: true, isolatedTask: true, submissionIDs: [m.item.id], taskRecordIDs: m.task.recordIDs,
+    submissionDraftPolicy: "legacy", submissionStage: { policy: w.policy, planKey: w.planKey, step: submissionTotalSteps(w), phase: "check" },
+    selectionReason: "Additional exact supporting evidence check of an unchanged paid draft; original batches remain separate, not replayed." };
+  if (manifest.characters > stageLimit) throw new ContextBudgetError(manifest);
+  return { data, manifest };
+}
+
+export function validateSubmissionPublicationSupport(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis) {
+  const context = submissionPublicationSupportContext(m, w, draft);
+  if (!context) return;
+  const support = w.publicationSupport, receipt = support?.receipt;
+  if (!support || support.contextKey !== hash(context.data) || !receipt || receipt.contextKey !== support.contextKey
+    || receipt.attempt !== support.attempts || receipt.atRevision !== m.revision)
+    throw new Error("The saved draft needs its additional exact supporting evidence check before publication. Original paid work is retained.");
+  if (!receipt.verdict.valid) throw new Error(`Additional supporting evidence review rejected the saved draft: ${receipt.verdict.reason} Original input and paid work remain saved.`);
+}
+
+export function submissionPublicationEvidence(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis) {
+  validateSubmissionPublicationSupport(m, w, draft);
+  return [...new Set([...m.evidenceIDs, ...submissionPublicationSupportContext(m, w, draft)?.manifest.includedIDs ?? []])];
+}
+
+export function prepareSubmissionPublicationSupport(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis) {
+  const context = submissionPublicationSupportContext(m, w, draft);
+  if (!context) return undefined;
+  const contextKey = hash(context.data);
+  if (w.publicationSupport && w.publicationSupport.contextKey !== contextKey) throw new Error("Saved publication support evidence changed; no attempt or paid work was reset.");
+  w.publicationSupport ??= { format: 1, contextKey, attempts: 0 };
+  return context;
 }

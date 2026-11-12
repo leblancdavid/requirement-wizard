@@ -7,7 +7,7 @@ import { coverage } from "../core/coverage.js";
 import { expandChangeIdentifiers, expandChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails, processingQueue } from "./menu-check-helpers.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -67,7 +67,7 @@ try {
   await legacyWorkflowDetails(page);
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  await processingQueue(page);
   const flow = page.getByRole("dialog", { name: "Processing & queue", exact: true }).getByRole("region", { name: "Project workflow", exact: true });
   await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
@@ -78,7 +78,7 @@ try {
   const paused = store.jobs(p.id).at(-1)!; assert.equal(paused.definitionChangeWork!.attempts, 1);
   assert.equal(store.get(p.id).definitionChangeReviews, undefined); assert.deepEqual(store.get(p.id).assessments, original);
   await page.reload(); assert.equal(calls, 3);
-  await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  await processingQueue(page);
   await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => coverage(store.get(p.id)).epics.find(area => area.epicID === "project")?.stale).toBe(false);
   await expect(flow).toContainText("Current—changes checked"); assert.equal(fullReviews, 0);

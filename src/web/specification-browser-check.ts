@@ -1,4 +1,4 @@
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, processingQueue, closeTechnicalViews } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -74,6 +74,8 @@ try {
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   await expect.poll(() => store.get(p.id).requirements[0]?.status).toBe("accepted");
+  await expect(page.getByText(/Specification updated from your answers · 1 requirement/)).toBeHidden();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
   await expect(page.getByText(/Specification updated from your answers · 1 requirement/)).toBeVisible();
   await page.getByRole("button", { name: "Inspect or correct requirements", exact: true }).click();
   const panel = page.getByRole("region", { name: "Requirement review", exact: true });
@@ -163,7 +165,7 @@ try {
       await first.locator(".review-card-heading").first().click();
       await expect(first.getByLabel("Anything to add? (optional)")).toHaveValue("Retain this draft across both paging levels and search");
     } else {
-      await view.getByRole("button", { name: "Assessed", exact: true }).click();
+      await view.getByRole("button", { name: "Delivered", exact: true }).click();
       await expect(view.locator(".feature-group")).toHaveCount(0);
       await view.getByRole("button", { name: "All approved", exact: true }).click();
       await expect(view.locator(".feature-group")).toHaveCount(25);
@@ -211,7 +213,7 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-definition-decision-mobile.png", fullPage: true });
   await finding.getByRole("button", { name: "Save clarification", exact: true }).click();
   await expect(finding).toContainText("Your clarification is saved");
-  await expect(finding).toContainText("Saving alone does not resolve");
+  await expect(finding).toContainText("Choose Continue to review your saved clarification");
   const correction = store.submissions(p.id).find((s) => s.input.type === "note" && s.input.text.includes(decision));
   assert.ok(correction); assert.equal(correction.status, "saved");
   assert.equal(calls, 2, "Displaying and saving a save-only correction never starts inference");
@@ -247,9 +249,9 @@ try {
     await panel.getByRole("button", { name: "Prepare questions in Design", exact: true }).click();
     await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
     const notice = page.getByRole("status", { name: "Definition clarification", exact: true });
-    await expect(notice).toBeFocused();
-    await expect(notice).toBeInViewport();
     if (settled) {
+      await expect(notice).toBeFocused();
+      await expect(notice).toBeInViewport();
       await expect(notice).toContainText("No new product question was established");
       await expect(notice).toContainText("already settled");
       assert.equal(store.get(review.id).questions.length, 0);
@@ -270,7 +272,7 @@ try {
       assert.equal(calls, before + 1, "Unchanged no-question result is reused without another call");
       assert.equal(store.jobs(review.id).length, jobsBeforeReuse, "Reusing clarification must not start general package planning or another job");
       assert.deepEqual(store.getJob(earlier.id), historicalFailure);
-      await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+      await processingQueue(page);
       const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
       await expect(drawer.getByRole("region", { name: "Reused clarification result" })).toContainText("No new AI request was made");
       await expect(drawer.getByRole("region", { name: "Reused clarification result" })).toContainText("This does not resolve the original definition finding");
@@ -278,7 +280,7 @@ try {
       await drawer.getByText("Earlier task needs attention · separate from clarification", { exact: true }).click();
       await expect(drawer.getByText("This diagnostic belongs to the earlier task, not the clarification result reused above. Its saved work and blockers are unchanged.", { exact: true })).toBeVisible();
       await expect(drawer.locator("details").filter({ has: page.getByText("Earlier task needs attention · separate from clarification", { exact: true }) }).getByRole("button", { name: "View logs", exact: true })).toBeVisible();
-      await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+      await closeTechnicalViews(page);
       // Repeating the exact no-call action must reveal its outcome again, not
       // depend on a changed task key or a new model job. Stress a deep origin.
       await page.getByRole("tab", { name: /^Specification/ }).click();
@@ -301,6 +303,7 @@ try {
       await page.unroute("**/clarify-definition");
     } else {
       await expect(notice).toContainText("Focused questions are ready");
+      await expect(page.getByRole("heading", { name: "Which minimum governs the combination reward for a single-trick landing?", exact: true })).toBeInViewport();
       await page.getByRole("button", { name: /Choose One trick earns both rewards\./ }).click();
       await page.getByRole("button", { name: "Save response →", exact: true }).click();
       await expect.poll(() => store.submissions(review.id).filter((s) => s.input.type === "answer").length).toBe(1);
@@ -327,7 +330,7 @@ try {
   const lookupNotice = panel.getByLabel("Review evidence problems", { exact: true });
   await lookupNotice.getByText("Review evidence problems — not product decisions", { exact: true }).click();
   await expect(lookupNotice).toContainText("Review blocked by evidence lookup");
-  await expect(lookupNotice).toContainText("Refresh definition coverage");
+  await expect(lookupNotice).toContainText("refresh definition coverage");
   await expect(lookupNotice.getByRole("button", { name: "Clarify in Design", exact: true })).toHaveCount(0);
   await expect(lookupNotice.locator("textarea")).toHaveCount(0);
   const lookupRefusal = await page.request.post(`${app.origin}/api/projects/${lookup.id}/clarify-definition`, {
@@ -361,21 +364,21 @@ try {
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: staged.name, exact: true }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   const stagedNotice = page.getByRole("status", { name: "Definition clarification", exact: true });
-  await expect(stagedNotice).toContainText("1 / 2 exact read/check steps saved");
+  await expect(stagedNotice).toContainText("Your answers and progress are saved");
   const beforeContinuation = calls;
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
-  await expect(stagedNotice).toContainText("Clarification paused"); assert.equal(calls, beforeContinuation);
+  await expect(stagedNotice).toContainText("Question preparation paused"); assert.equal(calls, beforeContinuation);
   const waitingDecision = store.enqueue(staged.id, { id: randomUUID(), auto: false, research: false,
     input: { type: "note", text: "Retained decision awaiting processing", epicID: "project" } });
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
-  await expect(stagedNotice.getByRole("button", { name: "Continue clarification", exact: true })).toBeDisabled();
-  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
+  await expect(stagedNotice.getByRole("button", { name: "Continue review", exact: true })).toBeDisabled();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   assert.equal(calls, beforeContinuation, "Saved input priority never dispatches inference on render");
   waitingDecision.archivedAt = new Date().toISOString(); store.saveSubmission(waitingDecision);
   await page.reload();
   await page.getByRole("tab", { name: /^Specification/ }).click();
-  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
-  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await processingQueue(page);
   const clarificationRecovery = page.getByRole("region", { name: "Saved clarification progress", exact: true });
   await expect(clarificationRecovery).toContainText("1 / 2 exact read/check steps saved");
   await expect(clarificationRecovery).toContainText("not general discovery");
@@ -383,6 +386,7 @@ try {
   await expect(page.getByRole("button", { name: "Resume discovery only", exact: true })).toHaveCount(0);
   const continuationRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${staged.id}/clarify-definition`) && request.method() === "POST");
   await clarificationRecovery.getByRole("button", { name: "Continue clarification", exact: true }).click();
+  await closeTechnicalViews(page);
   assert.equal((await continuationRequest).postDataJSON().resumeJobID, workJob.id, "Continue must name the exact saved task");
   await expect(stagedNotice).toContainText("No new product question was established");
   assert.equal(calls, beforeContinuation + 1); assert.ok(sawProgress);
@@ -422,14 +426,15 @@ try {
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: followup.name, exact: true }).click();
   const beforeReviewResume = calls;
   await page.reload(); assert.equal(calls, beforeReviewResume, "Opening the saved review cannot start inference");
-  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
-  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await processingQueue(page);
   const retained = page.getByRole("region", { name: "Additional saved-response allowance", exact: true });
   await expect(retained).toContainText("eight total");
   await expect(retained).toContainText("does not guarantee completion");
   assert.equal(calls, beforeReviewResume, "Opening the allowance confirmation cannot start requests");
   const processRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${followup.id}/process-responses`) && request.method() === "POST");
   await retained.getByRole("button", { name: "Allow 4 more requests", exact: true }).click();
+  await closeTechnicalViews(page);
   assert.deepEqual((await processRequest).postDataJSON(), { revision: followup.revision, submissionIDs: [savedReview.id], research: false,
     resumeJobID: exhaustedJob.id, additionalRequests: 4, confirmAdditionalRequests: true });
   await expect.poll(() => store.submissions(followup.id).find((s) => s.id === savedReview.id)?.status).toBe("completed");
@@ -485,8 +490,9 @@ try {
     store.saveWorkflow(conflict.id, { ...store.workflow(conflict.id), enabled: true, paused: true, phase: "blocked", message: "Coordinator stopped before manual saved-response recovery." });
     await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: conflict.name, exact: true }).click();
     const conflictCalls: number = calls;
-    await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+    await processingQueue(page);
     await page.getByRole("region", { name: "Process retained responses", exact: true }).getByRole("button", { name: "Process saved responses only", exact: true }).click();
+    await closeTechnicalViews(page);
     if (noQuestion) {
       await expect.poll(() => store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!.status).toBe("completed");
       assert.equal(store.get(conflict.id).questions.length, 0);

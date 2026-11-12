@@ -6,7 +6,7 @@ export function SharedConflictNotice({ conflicts, open }: {
   if (!conflicts.length) return null;
   return <section className="save-notice" aria-label="Saved answers need your decision">
     <h2>Saved answers need your decision</h2>
-    <p>Two earlier answers disagree. Choose which applies or describe an exception to continue. Play cannot make this choice for you. Your original answers, draft and completed AI work are saved.</p>
+    <p>Two earlier answers disagree. Choose which applies or describe an exception in Specification. Your answers and progress are saved.</p>
     {conflicts.map((conflict, index) => <button key={conflict.jobID} className="primary" onClick={() => open(conflict.submissionID)}>
       Resolve saved-answer conflict{conflicts.length > 1 ? ` ${index + 1}` : ""}
     </button>)}

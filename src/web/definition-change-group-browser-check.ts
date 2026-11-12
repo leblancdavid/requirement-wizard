@@ -4,7 +4,7 @@ import { ProjectStore } from "../storage/store.js";
 import { dimensions } from "../core/definition-dimensions.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails, processingQueue } from "./menu-check-helpers.js";
 import type { DiscoveryOptions } from "../service/discovery.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -42,7 +42,7 @@ try {
   await legacyWorkflowDetails(page);
   page.on("pageerror", error => errors.push(error.message)); await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Shared change browser", exact: true }).click();
-  const open = () => page.getByRole("button", { name: /Processing & queue:/ }).click(); await open();
+  const open = () => processingQueue(page); await open();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await queue.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(queue).toContainText("Shared change check: 3 features in one request");

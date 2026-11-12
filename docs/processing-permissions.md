@@ -1,5 +1,18 @@
 # Processing permissions
 
+## Project-focused controls (2026-11-11)
+
+Normal specification work uses **Continue** in the header, with active-work **Pause**
+and **Cancel current work**. Continue retains the existing Play operation and safe
+technical recovery; it does not silently renew an exhausted allowance. Necessary
+extra-usage consent appears in Design with optional Details. Conflicts are resolved
+in Specification, not the processing queue.
+
+The processing modes and independent worker settings described below are now
+retained under **Logs → Technical processing controls and retained preferences**,
+not normal Settings. Relocation changes no preference, saved grant, machine-local
+scope, pause or restart rule. See [the project-focused workspace](project-focused-workspace.md).
+
 ## Primary controls (2026-11-08)
 
 Use **Play / Pause / Stop** for normal specification work. No processing-mode

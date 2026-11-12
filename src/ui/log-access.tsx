@@ -12,12 +12,12 @@ export function closeLogs() { publish({ ...state, open: false, target: undefined
 export function useLogs() {
   return useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => state, () => state);
 }
-export function LogLink({ detail, target, title = "Diagnostic", projectID }: { detail?: string; target?: string; title?: string; projectID?: string }) {
+export function LogLink({ detail, target, title = "Diagnostic", projectID }: { detail?: string | (() => string); target?: string; title?: string; projectID?: string }) {
   const currentProjectID = useContext(LogProject);
   return <button type="button" className="quiet" onClick={() => {
     if (detail) {
       const id = target ?? `detail:${crypto.randomUUID()}`;
-      recordLog({ id, title, detail, source: "Selected detail", projectID: projectID ?? currentProjectID });
+      recordLog({ id, title, detail: typeof detail === "function" ? detail() : detail, source: "Selected detail", projectID: projectID ?? currentProjectID });
       openLogs(id);
     } else openLogs(target);
   }}>View logs</button>;

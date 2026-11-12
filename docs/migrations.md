@@ -1,5 +1,80 @@
 # Data migrations and upgrade compatibility
 
+## Saved-response publication support recovery (2026-11-11)
+
+**Source → target: SQLite 67 → 68; portable state up to 41 → 42 only when the
+new support-review marker is present.** The transactional SQLite upgrade is a
+reader-capability boundary. Startup does not rewrite project revisions, old stage
+plans/keys, paid receipts, attempts, answers, proposals or completed results, and
+does not start model work. Older portable projects remain readable and keep their
+original export format unless this recovery is actually used. Downgraded envelopes
+carrying the new marker are rejected without overwriting saved work.
+
+A fully checked saved-response draft could previously fail publication because a
+refinement referenced a background requirement whose linked file evidence was
+intentionally absent from the original context. Repeating the same completed
+batches could not repair that omission. Explicit continuation now retains all
+original batches and checks, loads the exact target requirements and supporting
+sources, and requests a separate check of the unchanged frozen draft. Nothing is
+published until that check passes. The support check cannot rewrite the draft or
+turn historical/file evidence into human decision authority.
+
+The optional `submissionWork.publicationSupport` marker binds the exact context,
+frozen draft and original paid receipt prefix, and retains its own four-attempt
+ceiling and dated model/job receipt. Cancelled and malformed requests stay charged;
+an explicit retry uses the remaining attempts, never renews them. A rejected
+verdict stops unchanged retries without further calls. Oversized or changed support
+fails closed without truncating evidence or resetting original work. Existing
+per-action request/time limits still apply. The new check is additional semantic
+work, not a representation-only reassessment or a claim that omitted evidence was
+already reviewed. No wider tools/research permissions are introduced.
+
+Curated upgrade/service tests cover 67→68 repeated reopen with unchanged original
+jobs, successful recovery with one additional request and no repeated paid stages,
+rejected/cancelled/malformed checks, charged explicit retry, changed/oversized
+evidence, exhausted allowance without renewal, failed final-write retry without
+another check, missing/tampered receipts and portable 42 round-trip/downgrade rejection.
+Unsupported future support metadata rolls back the capability upgrade and can be
+reopened after restoring the original payload, without resetting saved attempts.
+The real user's database and model account were not modified or called. Broader
+suite verification is recorded alongside the final task results.
+
+## Question-focused Design presentation (2026-11-11)
+
+No stored-format or migration-version change. The existing feature selection now
+appears in a Design-only bottom discovery bar, alongside the existing epic-gap
+action. No selection or consent is written on navigation. Saved answers, history,
+preferences, jobs, evidence and assessment fingerprints retain their existing
+representation and meaning; no reassessment or reset is needed. Bulk question
+tools remain accessible in Logs. There is no data conversion to interrupt/retry.
+
+## Project-focused workspace presentation (2026-11-11)
+
+**Source → target: unchanged SQLite 67 / portable formats up to 41.** Processing
+controls move to Logs; normal Continue uses the same explicit workflow operation
+and existing resumable task endpoints. Modes, browser preferences, original answers,
+spent allowances, checkpoint identities, assessments and approval history are not
+rewritten. No forward migration or reassessment is required. Restart/reload starts
+no work. Additional saved-response and exploration allowances still use their
+existing explicit confirmation fields and finite limits, without renewal on view.
+
+The new downloaded log-view envelope (`format: 1`) is an informational export only,
+not an importable project/portable format. It discloses loaded-only scope, caps at
+250 records and 64,000-character diagnostic previews, redacts common credentials
+and warns that project information may remain. Originals remain in storage.
+UI/render tests preserve original inputs/preferences; the real review-recovery browser
+checks retained originals/history, stale writes and save failure. Snapshot-only
+assistance-browser reload checks do not replace existing durable engine recovery tests.
+See [implemented scope and verification limits](project-focused-workspace.md).
+
+The specialist follow-up also changes presentation only: implementation filters,
+plan-review ordering and locations of advanced assessment/history controls. Normal
+build-setup saves retain hidden prerequisites, assessment scopes/shared paths and
+the explicit `reuseEquivalentScopes: false` choice. The planning browser exercises
+that preservation against real local storage, plus reload/continuation of saved
+planning checkpoints. No fingerprint, assessment semantics, format/version or paid
+attempt counters change; existing work needs no conversion or repeated model calls.
+
 ## Plain-language requirement resolution (2026-11-11)
 
 **Source → target: unchanged SQLite 67 / portable formats up to 41.** A new explicit

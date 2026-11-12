@@ -87,12 +87,13 @@ try {
   await panel.locator(".review-card-heading").filter({ hasText: survivor.statement }).click();
   const blockers = panel.getByRole("region", { name: "Responses blocking this review", exact: true });
   await expect(blockers).toContainText("Explain all ability changes before applying an upgrade");
-  await expect(blockers).toContainText("not proof of a conflict or duplicate");
+  await expect(blockers).toContainText("answers are already saved");
   await blockers.getByRole("button", { name: "View & resolve saved response", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
-  await expect(dialog).toContainText("Explain all ability changes before applying an upgrade");
-  await expect(dialog.getByRole("button", { name: "Retry follow-up", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape"); await expect(dialog).toHaveCount(0);
+  const noteReview = page.getByRole("region", { name: "Saved information review", exact: true });
+  await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
+  await expect(noteReview).toContainText("Explain all ability changes before applying an upgrade");
+  await expect(noteReview.getByRole("button", { name: "Continue review", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "View & resolve", exact: true })).toHaveCount(0);
   assert.deepEqual(store.get(p.id).requirements, approved.requirements);
   let combined = store.create("Combine two requirements", "Keep upgrade rules and tradeoffs", { providerID: "openai", modelID: "fixture" });
   const combinedSeed = store.beginJob(combined.id, combined.revision).job; store.claimJob(combinedSeed.id, Date.now() + 60000);

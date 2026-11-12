@@ -6,7 +6,7 @@ import { dimensions } from "../core/definition-dimensions.js";
 import { coverage } from "../core/coverage.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails, processingQueue } from "./menu-check-helpers.js";
 import { expandChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 
@@ -56,7 +56,7 @@ try {
   const progress = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(progress).toContainText("100% saved · validity pending");
   await progress.getByRole("button", { name: "Close progress", exact: true }).click();
-  await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  await processingQueue(page);
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
   await expect(flow).toContainText("change check pending"); assert.equal(calls, 0);
   await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
@@ -68,7 +68,7 @@ try {
   const paused = store.jobs(p.id).at(-1)!; assert.equal(paused.definitionChangeWork!.attempts, 1);
   assert.deepEqual(store.get(p.id).assessments, original); assert.equal(store.get(p.id).definitionChangeReviews, undefined);
   await page.reload(); assert.equal(calls, 2);
-  await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  await processingQueue(page);
   await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => coverage(store.get(p.id)).epics.find((a) => a.epicID === "project")?.stale).toBe(false);
   await expect(flow).toContainText("Current—changes checked");

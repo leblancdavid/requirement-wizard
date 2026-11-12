@@ -390,7 +390,7 @@ test("66 to 67 preserves paid legacy empty drafts and attempts through repeated 
     store.failJob(job.id, "interrupted", "Legacy empty draft awaiting checks");
     const original = store.getJob(job.id); store.close();
     let db = new Database(path); const payload = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id) as { payload: string }).payload;
-    db.pragma("user_version = 66"); db.prepare("DELETE FROM migration_history WHERE version=67").run();
+    db.pragma("user_version = 66"); db.prepare("DELETE FROM migration_history WHERE version>66").run();
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify({ ...original, retrievalWork: { ...original.retrievalWork,
       epicStages: { ...stages, completionPolicy: "future-policy" } } }), job.id); db.close();
     assert.throws(() => new ProjectStore(path));

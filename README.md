@@ -16,6 +16,13 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+The workspace now uses **Continue** with project-level status. Resolve conflicting
+answers directly in Specification and authorize extra review usage directly in
+Design, with optional details. Technical processing controls move to Logs, alongside
+a bounded redacted log download. Existing permissions and saved work are preserved.
+This is the first simplification pass, not an app-wide completion claim; see
+[scope and verification limits](docs/project-focused-workspace.md).
+
 Requirement overlaps now name the other requirement and offer one **Resolve** flow:
 compare both, choose remove/replace/combine, and save. Review cards explain why they
 need attention in plain language; processing holds stay distinct from product conflicts.

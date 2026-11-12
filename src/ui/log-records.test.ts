@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { jobHistoryLog, logLimit, logPreview, logTiming, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
+import { exportLogRecords, jobHistoryLog, logLimit, logPreview, logTiming, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
 import type { JobLogEntry } from "../core/log-history.js";
 import { emptyExecution } from "../core/execution.js";
 import type { Job } from "../core/model.js";
@@ -26,6 +26,17 @@ test("browser-session logs deduplicate by identity, bound retention, and never m
 test("large log previews explicitly disclose their display bound", () => {
   assert.match(logPreview("x".repeat(70_000)), /Display limited to 64,000 characters/);
   assert.equal(logPreview("exact diagnostic"), "exact diagnostic");
+});
+
+test("loaded log exports disclose partial scope, bound records, redact credentials and preserve originals", () => {
+  const records: LogRecord[] = Array.from({ length: 260 }, (_, index) => ({ id: String(index), source: "Discovery", title: "Review access_token=private-title", detail: "Bearer private-token " + "x".repeat(65_000) }));
+  const before = structuredClone(records), serialized = exportLogRecords(records), output = JSON.parse(serialized);
+  assert.equal(output.records.length, 250); assert.equal(output.truncated, true);
+  assert.equal(output.containsProjectInformation, true); assert.match(output.scope, /Loaded matching logs only/);
+  assert.doesNotMatch(serialized, /private-title|private-token/);
+  assert.match(output.records[0].detail, /Display limited to 64,000 characters/);
+  assert.deepEqual(records, before);
+  assert.equal(JSON.parse(exportLogRecords([])).truncated, false);
 });
 
 test("zero-request blocked runs explain retained blockers without claiming a new model rejection", () => {

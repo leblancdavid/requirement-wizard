@@ -37,10 +37,11 @@ export function attentionAction(project: Project, submissions: Submission[], ite
   return availability.state === "ready" ? "Review requirement" : "Review changes";
 }
 
-export function AttentionInbox({ project, submissions, jobs = [], open }: {
+export function AttentionInbox({ project, submissions, jobs = [], open, include = () => true }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; open: (submissionID: string) => void;
+  include?: (submission: Submission) => boolean;
 }) {
-  const groups = attentionGroups(project, submissions);
+  const groups = attentionGroups(project, submissions).filter(group => include(group.latest));
   if (!groups.length) return null;
   return <section aria-label="Needs attention inbox" className="attention-inbox"><h3>Needs attention · {groups.length} {groups.length === 1 ? "item" : "items"}</h3><p>Grouped by item across all project areas. Previous attempts are history, not separate requirements.</p>
     <PagedList items={groups} itemID={(group) => group.id} label="Attention items">{({ id, latest, attempts }) => {

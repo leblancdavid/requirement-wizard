@@ -1,11 +1,13 @@
 import type { Page } from "@playwright/test";
 import { discoveryActions } from "./queue-check-helpers.js";
+import { technicalProcessing, closeTechnicalViews } from "./menu-check-helpers.js";
 
 /** Exercise retained individual-check API/recovery explicitly, not the new workflow button. */
 export async function exploreLegacyGaps(page: Page, project: { id: string; revision: number }, experimental = false, targeted = false) {
   const focusEpicID = await page.getByLabel("Filter by feature").inputValue();
   await discoveryActions(page);
-  const questionTarget = Number(await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).inputValue());
+  const questionTarget = Number(await (await technicalProcessing(page)).getByRole("spinbutton", { name: "Questions ready", exact: true }).inputValue());
+  await closeTechnicalViews(page);
   await page.evaluate(async ({ project, focusEpicID, questionTarget, experimental, targeted }) => {
     const token = document.querySelector<HTMLMetaElement>('meta[name="reqwizit-token"]')!.content;
     const response = await fetch(`/api/projects/${project.id}/analyze`, { method: "POST",

@@ -43,7 +43,7 @@
 .topbar .queue-header { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px 0 0; }
 .topbar button.queue-trigger { background: transparent; border: 0; border-radius: 8px; }
 @media (max-width: 1100px) {
-  .topbar:has(.queue-trigger) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .topbar:has(.queue-header) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .topbar .queue-header { grid-column: 1 / -1; order: 3; }
   .topbar .header-progress { width: 100%; max-width: none; }
 }

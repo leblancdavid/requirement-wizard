@@ -6,16 +6,17 @@ import type { LogHistoryPage } from "../core/log-history.js";
 import { Modal } from "./modal.js";
 import { PagedList } from "./pagination.js";
 import { closeLogs, openLogs, useLogs } from "./log-access.js";
-import { jobHistoryLog, logPreview, logTiming, projectLogs, redactLog, type LogRecord } from "./log-records.js";
+import { exportLogRecords, jobHistoryLog, logPreview, logTiming, projectLogs, redactLog, type LogRecord } from "./log-records.js";
 import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
 import { statusLabel } from "./user-messages.js";
 import type { DefinitionHistoryRequest } from "./definition-review-history.js";
 import "./logs.css";
 
 const jobSources = ["Discovery", "Definition review", "Question help", "Folder scan"];
-export function Logs({ project, jobs = [], submissions = [], execution, progress = [], workflowMessage, workspaceDiagnostic, exportDiagnostics, request }: {
+export function Logs({ project, jobs = [], submissions = [], execution, progress = [], workflowMessage, workspaceDiagnostic, exportDiagnostics, request, technicalControls }: {
   project?: Project; jobs?: Job[]; submissions?: Submission[]; execution?: ExecutionState; progress?: string[]; workflowMessage?: string; workspaceDiagnostic?: string;
   exportDiagnostics?: (jobIDs: string[]) => Promise<DiscoveryDiagnosticReport>; request?: DefinitionHistoryRequest;
+  technicalControls?: React.ReactNode;
 }) {
   const state = useLogs();
   const [scope, setScope] = useState("all"), [source, setSource] = useState(""), [search, setSearch] = useState(""), [problems, setProblems] = useState(false), [area, setArea] = useState("");
@@ -68,6 +69,14 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
     {target && <p role="status">Showing the selected task or diagnostic—not necessarily the latest run. <button type="button" className="secondary" onClick={() => openLogs()}>Show all logs</button></p>}
     {!target && <p>Tasks are ordered newest first by recorded start or creation time. Filters and older-history pages can hide newer runs. “Current processing messages” is a live snapshot, not the last saved task.</p>}
     {exportDiagnostics && <details><summary>Export discovery diagnostics</summary><p>This bounded metadata-only export excludes original text and credentials. Review it before sharing.</p><DiscoveryDiagnostics jobs={jobs} load={exportDiagnostics} /></details>}
+    <details><summary>Export these logs</summary><p>Downloads up to 250 loaded matching records, not the complete history. Common credentials are redacted, but project text, paths and other sensitive information may remain. Review the file before sharing. Export starts no AI work.</p>
+      <button type="button" className="secondary" disabled={loading || !filtered.length} onClick={() => {
+        const url = URL.createObjectURL(new Blob([exportLogRecords(filtered)], { type: "application/json" }));
+        const link = document.createElement("a"); link.href = url; link.download = "reqwizit-logs.json";
+        document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }}>Download loaded logs</button>
+    </details>
+    {technicalControls && <details><summary>Technical processing controls and retained preferences</summary>{technicalControls}</details>}
     <div className="log-filters">
       <label>Scope<select aria-label="Scope" value={scope} onChange={(e) => { setScope(e.target.value); latest(); }}><option value="all">App & current project</option><option value="app">App only</option>{project && <option value="project">Current project</option>}</select></label>
       <label>Source<select aria-label="Source" value={source} onChange={(e) => { setSource(e.target.value); latest(); }}><option value="">All sources</option>{sources.map((s) => <option key={s}>{s}</option>)}</select></label>

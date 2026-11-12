@@ -6,7 +6,7 @@ import { dimensions } from "../core/epics.js";
 import { runDefinitionStages } from "../service/definition-stages.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails, processingQueue } from "./menu-check-helpers.js";
 import type { Analysis } from "../core/model.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -49,7 +49,7 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Decision-aware browser fixture", exact: true }).click();
-  const openQueue = () => page.getByRole("button", { name: /Processing & queue:/ }).click();
+  const openQueue = () => processingQueue(page);
   await openQueue();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   const progress = queue.getByRole("region", { name: "Decision-aware review progress", exact: true });
@@ -72,7 +72,7 @@ try {
    await page.reload(); await openQueue(); await expect(progress).toContainText("0 saved reviews current");
    assert.equal(calls, 0); assert.deepEqual(store.workflow(p.id).grant, grant);
   await app.close(); app = await startApp(options);
-  await page.goto(app.origin); await expect(page.getByRole("button", { name: /Processing & queue:/ })).toBeVisible();
+  await page.goto(app.origin); await expect(page.locator(".project-status")).toBeVisible();
   await openQueue(); await expect(queue.getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
    assert.equal(calls, 0); assert.deepEqual(store.workflow(p.id).grant, grant); assert.deepEqual(store.get(p.id), before);
   await page.setViewportSize({ width: 390, height: 844 });

@@ -31,32 +31,35 @@ type WorkflowControlsProps = {
   workflow: WorkflowView; disabled: boolean; pending: boolean; configure: WorkflowConfigure;
   openDecision?: (decision: WorkflowDecision) => void; settings?: boolean; guided?: boolean;
   standaloneActive?: boolean; stopStandalone?: () => void;
+  showTechnical?: boolean;
 };
 export function WorkflowControls(props: WorkflowControlsProps) {
   const { workflow, disabled, pending, configure, openDecision, settings, standaloneActive, stopStandalone } = props;
   return <section className="workflow-controls" aria-label={settings ? "Processing settings" : "Project workflow"}>
     <h3>Specification · {workflow.stopped ? "Stopped" : workflowLabels[workflow.phase]}</h3>
     <div className="button-row">
-      <button className="primary" disabled={disabled || workflow.active} onClick={() => configure("play")}>Play</button>
+      <button className="primary" disabled={disabled || workflow.active} onClick={() => configure("play")}>Continue</button>
       <button className="secondary" disabled={pending || !workflow.active || workflow.paused} onClick={() => configure("pause")}>Pause</button>
-      <button className="secondary" disabled={pending || !standaloneActive && !workflow.active && (!workflow.enabled || !!workflow.stopped)} onClick={() => standaloneActive && !workflow.active ? stopStandalone?.() : configure("stop")}>Stop</button>
+      {props.showTechnical ? <button className="secondary" disabled={pending || !standaloneActive && !workflow.active && (!workflow.enabled || !!workflow.stopped)} onClick={() => standaloneActive && !workflow.active ? stopStandalone?.() : configure("stop")}>Stop</button>
+        : (standaloneActive || workflow.active) && <button className="quiet" disabled={pending} onClick={() => standaloneActive && !workflow.active ? stopStandalone?.() : configure("stop")}>Cancel current work</button>}
     </div>
-    <p>Play reviews saved answers, updates affected rules and checks the specification. Evidence loading and technical recovery are handled automatically. Uses your selected AI plan; it does not start coding, scan files or research the web.</p>
+    <p>Continue updates your specification from saved answers and checks what still needs a decision. Uses your AI plan; it does not start coding, read project files or research the web.</p>
     <p role="status">{workflow.active && workflow.paused ? "Pausing after the current reply is saved…"
       : workflow.active ? "Working on your specification…" : workflow.stopped ? "Stopped. Saved answers and progress are kept."
-      : workflow.phase === "needs-decision" ? "Your product decisions are needed. Save your answers, then press Play."
-      : workflow.phase === "blocked" ? "Processing could not finish. Your work is saved; see processing details for the cause."
-      : workflow.suspended ? "Ready to resume saved work. Press Play when ready." : workflowLabels[workflow.phase]}</p>
-    <p>Pause saves the current reply before waiting. Stop cancels current work. Both keep completed progress.</p>
+      : workflow.phase === "needs-decision" ? "Answer the questions or resolve the choices in Design and Specification, then Continue."
+      : workflow.phase === "blocked" ? "The review could not finish. Your answers and progress are saved."
+      : workflow.suspended ? "Your saved work is ready to continue." : workflowLabels[workflow.phase]}</p>
+    <p>Pause keeps completed progress. Cancel interrupts the current request; AI usage may still count.</p>
     {workflow.enabled && workflow.decisions.some(d => d.kind !== "input") && <section aria-label="Product decisions"><h4>Needs your decision</h4>
       <PagedList items={workflow.decisions.filter(d => d.kind !== "input")} itemID={d => `${d.kind}:${d.id}`} label="Product decisions">{decision => <article>
         <p>{decision.title}</p>{openDecision && <button className="secondary" onClick={() => openDecision(decision)}>Review and decide</button>}
       </article>}</PagedList>
     </section>}
-    <details><summary>Processing details and advanced actions</summary><LegacyWorkflowControls {...props} /></details>
+    <LogLink target="live-progress" />
+    {props.showTechnical && <details><summary>Processing details and advanced actions</summary><LegacyWorkflowControls {...props} /></details>}
   </section>;
 }
-function LegacyWorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: WorkflowControlsProps) {
+export function LegacyWorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: WorkflowControlsProps) {
   const mayContinue = mayContinueProject(workflow);
   const decisionSchedule = workflow.decisionSchedule;
    const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.enabled || !workflow.decisions.some((decision) =>

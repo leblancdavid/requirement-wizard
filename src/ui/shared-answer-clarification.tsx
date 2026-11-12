@@ -23,7 +23,7 @@ export function SharedAnswerClarification({ project, conflict, disabled, working
       <p role="status">{working ? "Applying your decision and checking related requirements…" : "Your decision is saved, but its review has not finished."}</p>
       {!working && <button className="primary" disabled={disabled || saving} onClick={() => {
         setSaving(true); setError("");
-        void resume().catch(() => setError("Your decision is still saved. Review could not start; check Processing & queue before trying again.")).finally(() => setSaving(false));
+        void resume().catch(() => setError("Your decision is still saved. Review could not start. You can try Continue review again; technical details are in Logs.")).finally(() => setSaving(false));
       }}>{saving ? "Starting review…" : "Continue review"}</button>}
       <details><summary>Saved decision</summary><p className="source-excerpt">{conflict.savedText ?? decision}</p></details>
     </> : <form onSubmit={event => {

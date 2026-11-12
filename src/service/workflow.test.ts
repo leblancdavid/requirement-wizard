@@ -15,7 +15,7 @@ import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow, wor
 import { planWorkflowSchedule, workflowScheduleSchema } from "../core/workflow-schedule.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { WorkflowControls } from "../ui/workflow-controls.js";
+import { LegacyWorkflowControls as WorkflowControls } from "../ui/workflow-controls.js";
 import type { Analysis, Project } from "../core/model.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { coverage } from "../core/coverage.js";

@@ -67,6 +67,6 @@ try {
   await checkChevrons();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-assessment-tools-empty-mobile.png", fullPage: true });
-  console.log("Assessment tools browser passed: honest initial loading, clean three-stage progress, optional Settings tools, legacy no-source explanation without empty menus, mobile and no AI/write/reset.");
+  console.log("Assessment tools browser passed: honest initial loading, clean three-stage progress, optional Logs tools, legacy no-source explanation without empty menus, mobile and no AI/write/reset.");
 } catch (e) { await diagnose(".reqwizit-state/browser-assessment-tools-failure"); throw e; }
 finally { await page.close(); await browser.close(); await app.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
