@@ -11,7 +11,7 @@ import { prepareDefinitionChangeEvidence, definitionChangeEvidenceContext, makeD
 import { definitionChangeBatchedContext, upgradeDefinitionChangeBatches, makeDefinitionChangeBatchedReceipt } from "../core/definition-change-batches.js";
 import { withChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { definitionReviewHistory } from "./definition-review-history.js";
-import { logHistory } from "./log-history.js";
+import { logHistory, epicBlockedReasonSQL } from "./log-history.js";
 import { activityPage, activitySnapshot, latestSpecificationChange, saveActivity } from "./activity.js";
 import { previewAssessmentHistory, selectedHistoricalAssessment } from "./assessment-history.js";
 import type { AssessmentHistorySelection } from "../core/assessment-history.js";
@@ -1652,7 +1652,8 @@ export class ProjectStore {
   discoveryDiagnostics(projectID: string, input: unknown) {
     const ids = z.array(z.string().uuid()).min(1).max(20).refine((items) => new Set(items).size === items.length).parse(input);
     const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
-      json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
+      CASE WHEN (${epicBlockedReasonSQL("jobs.payload")}) IS NOT NULL THEN 'blocked' ELSE json_extract(payload, '$.status') END AS status,
+      json_extract(payload, '$.discoveryMetrics') AS metrics,
       COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey'), json_extract(payload, '$.readinessWork.planKey'), json_extract(payload, '$.submissionWork.planKey'), json_extract(payload, '$.answerGroupWork.planKey')) AS packageID,
       CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN json_extract(payload, '$.readinessWork.policy')
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN json_extract(payload, '$.submissionWork.policy')

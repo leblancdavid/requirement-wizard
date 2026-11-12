@@ -714,7 +714,8 @@ test("context memo preserves wire bytes, restores the live review identity alias
     assert.equal(JSON.stringify(warm.data), wire); assert.equal(warm.manifest.epicReview, review);
     assert.equal(contexts.get(key)!.outcome, "context");
     const tooBig = seed(store, 1, 10, true), failed = new Map<string, EpicContextCheckpoint>();
-    const blockedReview = planEpicReview(tooBig, [], "orders").tasks[0]!.review;
+    const blockedReview: EpicReview = { ...planEpicReview(tooBig, [], "orders").tasks[0]!.review, contextPolicy: "current-spec-v1" };
+    delete blockedReview.recordGrouping; delete blockedReview.guardrailBatches;
     let first: ContextBudgetError | undefined;
     try { epicReviewContext(tooBig, blockedReview, [], false, undefined, undefined, undefined, undefined, { contexts: failed }); }
     catch (error) { assert.ok(error instanceof ContextBudgetError); first = error; }
@@ -978,8 +979,8 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
     const files = renderWorkspace(p, emptyExecution(), projection);
     const portable = decodePortable(files, p.model);
     if (linkedNotes === 10) {
-      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 41);
-      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 41/);
+      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 43);
+      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 43/);
     }
     assert.deepEqual(portable.continuation.jobs[0]!.retrievalWork!.epicStages, paused.retrievalWork!.epicStages);
     assert.deepEqual(portable.continuation.jobs[0]!.context!.epicReview, paused.context!.epicReview);
@@ -1023,7 +1024,8 @@ test("exact staged bundles reuse packing only and dense batches preserve the leg
     assert.equal(first.review.contextPolicy, "staged-dense-records-v5");
     assert.ok(cold > warm); assert.deepEqual(again, first);
     assert.ok([...contexts.values()].some(v => v.outcome === "staged"));
-    const legacy = stagedEpicReview(p, { ...first.review, contextPolicy: "staged-records-v4" });
+    const legacyReview: EpicReview = { ...first.review, contextPolicy: "staged-records-v4" }; delete legacyReview.recordGrouping;
+    const legacy = stagedEpicReview(p, legacyReview);
     assert.deepEqual(new Set(first.batches!.flatMap(c => c.manifest.includedIDs)), new Set(legacy.contexts.flatMap(c => c.manifest.includedIDs)));
     assert.ok(first.batches!.length < legacy.contexts.length);
     for (const c of first.batches!) assert.ok(reservedStageCharacters(c) <= 96000);

@@ -28,8 +28,9 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema } from "../core/gap-retrieval.js";
+import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 69;
+export const databaseSchemaVersion = 70;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -372,6 +373,10 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   CREATE TRIGGER IF NOT EXISTS portable_record_cache_revision_delete AFTER DELETE ON revisions BEGIN
     DELETE FROM portable_record_cache WHERE project_id = OLD.project_id;
   END;`);
+} }, { version: 70, name: "linked-question-answer-discovery-evidence", apply() {
+  // Reader boundary only: preserve original layouts, receipts, drafts and spend.
+  // New schedules co-locate explicit question/answer units. Explicit continuation
+  // may supplement one frozen blocked verification step without replaying reads.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -404,6 +409,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.context.epicReview') AS BLOB)) <= 524288
+      THEN json_extract(payload, '$.context.epicReview') END AS review FROM jobs
+      WHERE json_type(payload, '$.context.epicReview.recordGrouping') IS NOT NULL`).iterate() as Iterable<{ review: string | null }>) {
+      if (!row.review) throw new Error("Unsupported linked question/answer review checkpoint. Saved work was not overwritten.");
+      epicReviewSchema.parse(JSON.parse(row.review));
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.publicationSupport') AS BLOB)) <= 8192
       THEN json_extract(payload, '$.submissionWork.publicationSupport') END AS support FROM jobs
       WHERE json_type(payload, '$.submissionWork.publicationSupport') IS NOT NULL`).iterate() as Iterable<{ support: string | null }>) {
@@ -413,7 +424,8 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.retrievalWork.epicStages') END AS work FROM jobs
       WHERE json_type(payload, '$.retrievalWork.epicStages.completionPolicy') IS NOT NULL
-        OR json_type(payload, '$.retrievalWork.epicStages.emptyCompletion') IS NOT NULL`).iterate() as Iterable<{ work: string | null }>) {
+        OR json_type(payload, '$.retrievalWork.epicStages.emptyCompletion') IS NOT NULL
+        OR json_type(payload, '$.retrievalWork.epicStages.linkedEvidence') IS NOT NULL`).iterate() as Iterable<{ work: string | null }>) {
       if (!row.work) throw new Error("Unsupported empty-proposal checkpoint. Saved work was not overwritten.");
       epicStagesSchema.parse(JSON.parse(row.work));
     }

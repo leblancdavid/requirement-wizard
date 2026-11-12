@@ -1,11 +1,19 @@
 # Architecture outline
 
+`src/core/epic-linked-evidence.ts` closes explicit question/answer units for new
+dense schedules and authenticates bounded supplementation of existing blocked
+validation steps. Replay and dispatch share the same effective evidence hash;
+storage validates the supplemented receipts before publication. SQLite 70 and
+conditional portable 43 preserve original paid layouts and evidence. Recovery is
+explicit, retains the original attempt ceiling and requires a new verdict; see
+[migration/recovery contract](migrations.md#linked-questionanswer-discovery-evidence-2026-11-12).
+
 Completed questions-only discovery may reuse exact evidence dependencies separately
 from batch layout. `src/core/epic-stage-reuse.ts` authenticates original v4/v5
 read/check ledgers against their historical revision and compares the complete
 expanded record union plus every displayed guidance field with today's candidate.
 Only fully completed published work qualifies; changed evidence and partial work
-retain existing checks. Local resolved-prefix keys use v3 without changing paid
+retain existing checks. Local resolved-prefix keys now use v4 without changing paid
 protocols or portable formats. Numeric diagnostics distinguish equivalence proofs
 and draft removals; see [compatibility and remaining scope](migrations.md#exact-dependency-equivalent-completed-discovery-2026-11-12).
 

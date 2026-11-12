@@ -1,5 +1,45 @@
 # Data migrations and upgrade compatibility
 
+## Linked question/answer discovery evidence (2026-11-12)
+
+**Source → target: SQLite 69 → 70; conditional portable 43; local resolved-prefix
+computation v3 → v4.** SQLite 70 is a transactional reader boundary, not a rewrite
+of paid work. Original layouts, stable IDs, answers, options, completed stages,
+drafts and spent attempts remain intact. Startup performs no model calls and does
+not automatically continue blocked work. Older reviewed CPU planning receipts may
+be adopted; older pending/blocked scheduling results are recomputed locally.
+
+New dense questions-only schedules declare `question-answer-units-v1` and keep
+explicit question/answer units in each relevant batch without reducing the original
+mandatory evidence union. Existing paid layouts retain their original identity.
+On explicit continuation, a saved validation-stage blocker naming an omitted linked
+record can add exact question/options/answer evidence to that step. This uses the
+original three-attempt ceiling (only steps with one or two spent attempts qualify)
+and 96,000-character bound, never truncation or a fresh allowance. An authenticated
+support record binds the original receipt prefix, frozen draft, added IDs and
+before/after evidence hashes. Blocker prose is only a navigation hint: a new model
+verdict must resolve the check before publication. Repeated supplemented semantic
+rejection remains blocked. Unrelated transport errors are not repaired by this path.
+
+Portable 43 is required only when grouping or linked-evidence recovery metadata is
+exported. Older unchanged continuations retain their existing formats. Downgraded
+or unsupported future markers are rejected without overwriting saved work. Failed
+startup validation rolls back the migration; reopening retries safely. Cancellation
+retains the paid ledger and allowance. A validated stale verdict is retained against
+its original revision, not published; failed publication can reuse its checked final.
+
+Logs/diagnostic exports project completed worker receipts with an unpublished
+package blocker as `blocked`; durable worker status is unchanged.
+
+Verification: ten focused deterministic recovery tests passed, including 69→70
+interrupted upgrade/reopen, future-marker rejection, actual portable clone
+continuation, tampering, capacity/exhaustion, cancellation, semantic rejection,
+stale verdict and publication retry. Extended workspace-layout browser checks
+passed, as did type checking, UI build and diff checking. The final full test
+run passed 2,061 tests, including all ten focused recovery tests. No live subscription recovery
+was exercised. The reported WebSocket 1006
+transport failure remains unresolved and separate.
+
 ## Exact dependency-equivalent completed discovery (2026-11-12)
 
 **Source → target: unchanged SQLite 69 / portable formats through 42; local

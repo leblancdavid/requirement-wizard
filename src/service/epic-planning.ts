@@ -12,7 +12,7 @@ import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
  * Keep revision width: changing encoded size can change a boundary partition.
  * This is NOT a semantic/model/checkpoint identity and never changes saved calls. */
 export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[]) {
-  return createHash("sha256").update(JSON.stringify(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
+  return createHash("sha256").update(JSON.stringify(["resolved-prefix-v4", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
 }
 /** Packing reads only the project/review, not mutable worker receipts. Inner
  * computation keys still bind the exact review, policy and algorithm inputs. */
@@ -47,16 +47,18 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   // inputs still match. These are disposable CPU receipts, never model evidence.
   const legacyKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v1", project, jobs, focusEpicID, submissions])).digest("hex");
   const previousKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
+  const v3Key = createHash("sha256").update(JSON.stringify(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
   const resolved = options.loadReceipts?.(inputKey) ?? new Map<string, EpicPlanningCheckpoint>();
   const contexts = options.loadContexts?.(contextInputKey) ?? new Map<string, EpicContextCheckpoint>();
-  for (const generation of [previousKey, legacyKey]) {
+  for (const generation of [v3Key, previousKey, legacyKey]) {
     if (resolved.size) break;
     for (const [key, value] of options.loadReceipts?.(generation) ?? []) {
+      if (value.tasks.some(task => task.state !== "reviewed")) continue;
       options.signal.throwIfAborted();
       options.saveReceipt?.(inputKey, key, value); resolved.set(key, value);
     }
   }
-  for (const generation of [inputKey, previousKey, legacyKey]) {
+  for (const generation of [inputKey, v3Key, previousKey, legacyKey]) {
     if (contexts.size) break;
     for (const [key, value] of options.loadContexts?.(generation) ?? []) {
       options.signal.throwIfAborted();

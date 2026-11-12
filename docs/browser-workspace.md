@@ -1,5 +1,24 @@
 # Browser workspace, epics, and estimated completeness
 
+## Linked evidence discovery continuation (2026-11-12)
+
+Restart the backend, then explicitly continue Discover for the affected feature.
+Do not reset the project or re-enter answers. Eligible saved checks can receive
+their missing linked question/options/answer while retaining completed stages,
+the frozen draft and spent attempts. New dense schedules keep these units together.
+A new verification verdict is required before publication; exhausted attempts,
+oversized evidence and unresolved semantic blockers still stop the package.
+
+Logs show unpublished evidence-blocked outcomes as Needs attention, including in
+Problems only, blocker-text searches and diagnostics exports. This presentation
+does not change the durable completed worker receipt. Extended workspace-layout
+browser checks passed, including mobile/keyboard and blocker filtering. The full
+browser aggregate stopped at the existing Design badge assertion in
+`src/web/browser-check.ts:1126` (expected 2, actual 1); later runners did not run.
+Recovery is deterministically tested, not live-provider qualified. The separate
+WebSocket 1006 failure is not fixed by this change. See
+[compatibility and limits](migrations.md#linked-questionanswer-discovery-evidence-2026-11-12).
+
 ## Footer guidance tooltips (2026-11-12)
 
 The Discover, Refine, Prepare plan and implementation footer buttons now carry

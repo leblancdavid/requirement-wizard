@@ -173,6 +173,14 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-implementation-footer-mobile.png", fullPage: true });
   await page.setViewportSize({ width: 1280, height: 960 });
   await page.getByRole("tab", { name: /^Specification/ }).click();
+  const evidenceBlocked = store.beginJob(p.id, store.get(p.id).revision).job;
+  store.claimJob(evidenceBlocked.id, Date.now() + 60000);
+  store.checkpointRetrieval(evidenceBlocked.id, { format: 1, research: false, stages: [], attempts: 1 }, {
+    revision: store.get(p.id).revision, focusEpicID: "inbox", characters: 100, budget: 96000,
+    includedIDs: [p.sources[0]!.id], omittedIDs: [], epicReview: { format: 1, packageID: "fixture-evidence-block", inputKey: "a".repeat(64),
+      epicID: "inbox", epicIDs: ["inbox"], recordIDs: [p.sources[0]!.id], kind: "workflow" } });
+  store.finishEpicReviewBlocked(evidenceBlocked.id, { format: 1, total: 1, reviewed: 0, pending: 0, waiting: 0, blocked: 1, modelCalls: 1,
+    explanation: "Saved bounded evidence review", blockers: [{ packageID: "fixture-evidence-block", epicID: "inbox", reason: "Original linked evidence is unavailable" }] });
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   const logs = page.getByRole("dialog", { name: "Logs", exact: true });
   const diagnostics = logs.locator("summary").filter({ hasText: /^Export discovery diagnostics$/ });
@@ -195,11 +203,18 @@ try {
   const exported = await readFile((await download.path())!, "utf8");
   assert.match(exported, /Loaded matching logs only/); assert.match(exported, /Original review diagnostic/);
   assert.doesNotMatch(exported, /private-secret/);
+  await logs.getByLabel("Search logs", { exact: true }).fill("Original linked evidence is unavailable");
+  await expect(logs.locator(".log-record")).toHaveCount(1);
+  await expect(logs.locator(".log-record > small")).toContainText("Needs attention");
+  await expect(logs.locator(".log-record")).toContainText("Blocked—supporting evidence needed; drafts not published");
+  assert.equal(store.getJob(evidenceBlocked.id).status, "completed", "Logs must not rewrite the original worker receipt");
+  await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");
   await page.setViewportSize({ width: 390, height: 844 });
   await logs.locator(".logs-panel").evaluate((element) => { element.scrollTop = 0; });
   await expect(diagnostics).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workspace-logs-mobile.png", fullPage: true });
+  await diagnostics.focus(); // Native search inputs consume Escape to clear their value.
   await page.keyboard.press("Escape"); await expect(logs).toHaveCount(0);
   assert.deepEqual(store.get(p.id), before);
   // Deterministic live snapshot: keep mechanics out of the queue, swap to Pause,

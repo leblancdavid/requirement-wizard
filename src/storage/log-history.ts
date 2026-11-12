@@ -1,6 +1,13 @@
 import type Database from "better-sqlite3";
 import { logHistoryQuery, type JobLogEntry, type LogHistoryPage } from "../core/log-history.js";
 
+/** Presentation only: the durable worker receipt remains completed, but no draft
+ * was published when its own package has an explicit saved evidence blocker. */
+export const epicBlockedReasonSQL = (payload: string) => `CASE WHEN json_extract(${payload}, '$.status') = 'completed'
+  AND json_type(${payload}, '$.result') IS NOT 'object' THEN
+  (SELECT json_extract(b.value, '$.reason') FROM json_each(${payload}, '$.epicReviewReport.blockers') b
+   WHERE json_extract(b.value, '$.packageID') = json_extract(${payload}, '$.context.epicReview.packageID') LIMIT 1) END`;
+
 /** SQL-bounded diagnostics only: no prompt, response, session, account or credential payloads. */
 export function logHistory(db: Database.Database, projectID: string, input: unknown): LogHistoryPage {
   const query = logHistoryQuery.parse(input);
@@ -23,6 +30,9 @@ export function logHistory(db: Database.Database, projectID: string, input: unkn
     WHEN json_type(j.payload, '$.context.epicReview') = 'object' OR json_type(j.payload, '$.context.gapExploration') = 'object' THEN 'Gap discovery'
     WHEN json_array_length(j.payload, '$.context.submissionIDs') > 0 THEN 'Saved-response processing' ELSE 'Project review' END`;
   const where = ["j.project_id = ?"], args: (string | number)[] = [projectID];
+  const epicBlock = epicBlockedReasonSQL("j.payload");
+  const status = `CASE WHEN (${epicBlock}) IS NOT NULL THEN 'blocked' ELSE json_extract(j.payload, '$.status') END`;
+  const blockReason = `COALESCE(json_extract(j.payload, '$.definitionBlock.reason'), (${epicBlock}))`;
   if (query.before) { where.push("j.rowid < ?"); args.push(query.before); }
   if (query.epicID) {
     where.push(`(${area} = ? OR EXISTS (SELECT 1 FROM json_each(j.payload, '$.definitionChangeGroupWork.areas') a WHERE json_extract(a.value, '$.epicID') = ?))`);
@@ -30,23 +40,23 @@ export function logHistory(db: Database.Database, projectID: string, input: unkn
   }
   if (query.source) { where.push(`${source} = ?`); args.push(query.source); }
   if (query.jobID) { where.push("j.id = ?"); args.push(query.jobID); }
-  if (query.problems === "true") where.push("json_extract(j.payload, '$.status') IN ('failed', 'blocked', 'interrupted', 'cancelled', 'stale')");
+  if (query.problems === "true") where.push(`${status} IN ('failed', 'blocked', 'interrupted', 'cancelled', 'stale')`);
   if (query.search) {
-    where.push(`instr(lower(j.id || ' ' || COALESCE(json_extract(j.payload, '$.diagnostic'), '') || ' ' || COALESCE(${area}, '') || ' ' || ${source} || ' ' || ${title}), lower(?)) > 0`);
+    where.push(`instr(lower(j.id || ' ' || COALESCE(json_extract(j.payload, '$.diagnostic'), '') || ' ' || COALESCE(${blockReason}, '') || ' ' || COALESCE(${area}, '') || ' ' || ${source} || ' ' || ${title}), lower(?)) > 0`);
     args.push(query.search);
   }
   const rows = db.prepare(`SELECT j.rowid AS sequence, j.id, j.project_id AS projectID, ${area} AS epicID, ${source} AS source,
     ${title} AS title,
-    json_extract(j.payload, '$.expectedRevision') AS revision, json_extract(j.payload, '$.status') AS status,
+    json_extract(j.payload, '$.expectedRevision') AS revision, ${status} AS status,
     json_extract(j.payload, '$.createdAt') AS createdAt, json_extract(j.payload, '$.startedAt') AS startedAt,
     json_extract(j.payload, '$.finishedAt') AS finishedAt,
     (SELECT json_extract(a.payload, '$.at') FROM project_activity a WHERE a.project_id = j.project_id
       AND a.event_id = 'job:' || j.id || ':' || json_extract(j.payload, '$.status')) AS recordedAt,
     json_extract(j.payload, '$.discoveryMetrics.elapsedMs') AS durationMs,
     substr(json_extract(j.payload, '$.diagnostic'), 1, 16000) AS diagnostic,
-    substr(json_extract(j.payload, '$.definitionBlock.reason'), 1, 16000) AS blockReason,
+    substr(${blockReason}, 1, 16000) AS blockReason,
     COALESCE(length(json_extract(j.payload, '$.diagnostic')) > 16000, 0)
-      OR COALESCE(length(json_extract(j.payload, '$.definitionBlock.reason')) > 16000, 0) AS detailLimited,
+      OR COALESCE(length(${blockReason}) > 16000, 0) AS detailLimited,
     COALESCE(json_array_length(j.payload, '$.definitionWork.receipts'), json_array_length(j.payload, '$.refinementWork.receipts')) AS savedSteps,
     COALESCE(json_array_length(j.payload, '$.definitionWork.batches'), json_array_length(j.payload, '$.refinementWork.batches')) AS batches,
     COALESCE(json_extract(j.payload, '$.definitionWork.attempts'), json_extract(j.payload, '$.refinementWork.attempts')) AS attempts,

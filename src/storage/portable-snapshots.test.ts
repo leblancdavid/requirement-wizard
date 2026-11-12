@@ -11,7 +11,7 @@ import { portableRecords, projectFromPortableRecords } from "./portable-records.
 import { projectSchema } from "../core/model.js";
 import { continuationState } from "./portable.js";
 import { renderWorkspace } from "./workspace.js";
-import { migrateDatabase } from "./migrations.js";
+import { migrateDatabase, databaseSchemaVersion } from "./migrations.js";
 
 test("portable snapshots reuse exact normalized evidence across reopen and recover corrupt/stale derived caches", () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
@@ -144,7 +144,7 @@ test("68 to 69 upgrade shares authenticated exact records, preserves old computa
     // A real older normalized representation, not a newly generated manifest.
     db.prepare("INSERT OR REPLACE INTO portable_snapshot_cache VALUES (?, ?, 2, ?, ?, ?)")
       .run(seed.id, seed.revision, hash(source(seed.revision)), hash(oldText), deflateSync(oldText));
-    db.exec("DROP TRIGGER portable_record_cache_revision_update; DROP TRIGGER portable_record_cache_revision_delete; DROP TABLE portable_record_cache; DELETE FROM migration_history WHERE version=69; PRAGMA user_version=68");
+    db.exec("DROP TRIGGER portable_record_cache_revision_update; DROP TRIGGER portable_record_cache_revision_delete; DROP TABLE portable_record_cache; DELETE FROM migration_history WHERE version>=69; PRAGMA user_version=68");
     const originals = db.prepare("SELECT * FROM revisions ORDER BY revision").all();
     const jobs = db.prepare("SELECT * FROM jobs").all();
     db.exec("CREATE TRIGGER fail_69 BEFORE INSERT ON migration_history WHEN NEW.version=69 BEGIN SELECT RAISE(ABORT, 'Interrupted schema upgrade'); END");
@@ -154,7 +154,7 @@ test("68 to 69 upgrade shares authenticated exact records, preserves old computa
     assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
     db.exec("DROP TRIGGER fail_69");
     migrateDatabase(db); migrateDatabase(db);
-    assert.equal(db.pragma("user_version", { simple: true }), 69);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 2, "Startup does not rewrite old paid work or computation");
     const profile = snapshotCacheProfile();
     let calls = 0;

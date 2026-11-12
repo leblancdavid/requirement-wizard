@@ -24,6 +24,7 @@ import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages } from "../core/epic-stages.js";
+import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -767,6 +768,21 @@ export class DiscoveryService {
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
             completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches, proposalCounts);
+          // Carry the validated paid ledger before progress callbacks/cancellation
+          // can leave a newer matching job without its original saved stages.
+          context = staged.phase === "complete" ? epicStagePublicationContext(batches, staged)
+            : epicStageContext(linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates), staged);
+          checkpoint();
+          if (epicPlan.task.recoverLinkedEvidence) {
+            const support = planLinkedEvidenceRecovery(project, review, staged, work.attempts,
+              prior?.epicReviewReport?.blockers.find(blocker => blocker.packageID === review.packageID)?.reason, batches);
+            if (!support) throw new Error("Saved linked-evidence recovery is no longer compatible. Original stages and spent attempts remain saved.");
+            (staged.linkedEvidence ??= []).push(support);
+            validateEpicStages(project, review, staged, batches, proposalCounts);
+            context = epicStageContext(linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates), staged);
+            checkpoint();
+            report("Continuing the saved draft with its missing linked question/answer evidence. Completed stages and spent attempts are retained; a new check must resolve the evidence blocker before publication.");
+          }
           stagedRun = true;
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
           work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
@@ -776,7 +792,8 @@ export class DiscoveryService {
           let callsThisRun = 0;
           while (staged.phase !== "complete") {
             controller.signal.throwIfAborted();
-            context = epicStageContext(batches[staged.nextBatch]!, staged);
+            const stageBase = linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates);
+            context = epicStageContext(stageBase, staged);
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
             if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
@@ -802,7 +819,7 @@ export class DiscoveryService {
             proposalCounts.draftedRequirements += Math.max(0, staged.candidates.requirements.length - beforeDraft.requirements.length);
             proposalCounts.removedQuestions += Math.max(0, beforeDraft.questions.length - staged.candidates.questions.length);
             proposalCounts.removedRequirements += Math.max(0, beforeDraft.requirements.length - staged.candidates.requirements.length);
-            staged.receipts.push({ phase, batch, attempts: work.attempts, evidenceKey: retrievalEvidenceBasis(batches[batch]!).key,
+            staged.receipts.push({ phase, batch, attempts: work.attempts, evidenceKey: retrievalEvidenceBasis(stageBase).key,
               response: phase === "discover" ? response as import("../core/model.js").Analysis : guardrailVerdictSchema.parse(response) });
             work.attempts = 0;
             staged.nextBatch++;

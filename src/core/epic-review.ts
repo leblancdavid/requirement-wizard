@@ -13,6 +13,7 @@ import { reusablePlanningCheckpoint, rememberEpicContext } from "./epic-planning
 import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js";
 import { epicPlanningProjectKey } from "./epic-planning-input.js";
 import { completedRecordStagesEquivalent, recordStagePolicy } from "./epic-stage-reuse.js";
+import { questionAnswerUnitIDs, planLinkedEvidenceRecovery } from "./epic-linked-evidence.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -31,7 +32,7 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
   if (outside) throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside)}. Allowed area IDs: ${JSON.stringify(context.manifest.epicIDs)}. No proposals applied; retry the review to request a corrected response.`);
 }
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
-export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; blocker?: EpicPlanningBlocker; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
+export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; blocker?: EpicPlanningBlocker; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job; recoverLinkedEvidence?: true };
 /** Diagnostic differences only, not a replacement for exact freshness matching.
  * Compare the union of old/current detailed evidence; never export its contents. */
 export function epicReviewInputChanges(previous: Project, project: Project, prior: Job, task: EpicReviewTask) {
@@ -314,6 +315,7 @@ export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?:
  * Every exact record is read and every surviving proposal checked in all batches. */
 function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
   const plain = { ...base, contextPolicy: "current-spec-v1" as const }; delete plain.guardrailBatches;
+  delete plain.recordGrouping;
   let original: ContextPack["manifest"];
   try { original = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation, memo).manifest; }
   catch (error) { if (!(error instanceof ContextBudgetError)) throw error; original = error.manifest; }
@@ -336,6 +338,10 @@ function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () =
   const render = (seeds: string[]): ContextPack => {
     onPrepare?.();
     const included = new Set([...pins, ...seeds]);
+    if (base.recordGrouping) for (const id of questionAnswerUnitIDs(project, included)) {
+      if (!ids.has(id)) throw new Error("Question/answer grouping cannot omit an original linked record.");
+      included.add(id);
+    }
     const data = { id: project.id, name: project.name, revision: project.revision, focusEpicID: review.epicID, partial: true,
       taskRecordIDs: review.recordIDs, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
       projectOrigin: project.origin ?? null,
@@ -457,12 +463,13 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     ...project.sources.filter((s) => s.kind === "note")].filter((r) => r.epicID === id);
   let foundPending = false;
   const candidates = options.cache ?? new Map<string, Candidate>();
-  const build = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[], contextPolicy?: EpicReview["contextPolicy"]): Candidate => {
+  const build = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[], contextPolicy?: EpicReview["contextPolicy"], recordGrouping?: EpicReview["recordGrouping"]): Candidate => {
     const recordIDs = records.map((r) => r.id).sort();
-    const cacheKey = JSON.stringify([epicID, epicIDs, kind, recordIDs, contextPolicy]);
+    const cacheKey = JSON.stringify([epicID, epicIDs, kind, recordIDs, contextPolicy, recordGrouping]);
     const cached = candidates.get(cacheKey); if (cached) return cached;
     let review = epicReviewSchema.parse({ format: 1, epicID, epicIDs, kind, recordIDs,
-      ...(contextPolicy && !isStagedPolicy(contextPolicy) ? { contextPolicy } : {}),
+      ...(contextPolicy && (!isStagedPolicy(contextPolicy) || recordGrouping) ? { contextPolicy } : {}),
+      ...(recordGrouping ? { recordGrouping, guardrailBatches: [[]] } : {}),
       packageID: hash({ kind, epicIDs, recordIDs }),
       inputKey: hash({ version: "epic-workflow-v1", kind, epicIDs,
         evidence: records.map((r) => [r.id, evidence(kind === "workflow" ? { ...r, epicID } : r).inputKey]).sort(),
@@ -473,7 +480,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     // Failed candidate policies are small deterministic local results. Retaining
     // them avoids replaying an entire >16-batch partition before reaching the
     // unfinished sibling on explicit retry. Never cache a pending model package.
-    const failureKey = hash(["epic-candidate-failure-v1", currentProjectKey, epicID, epicIDs, kind, recordIDs, contextPolicy]);
+    const failureKey = hash(["epic-candidate-failure-v1", currentProjectKey, epicID, epicIDs, kind, recordIDs, contextPolicy, ...(recordGrouping ? [recordGrouping] : [])]);
     const savedFailure = options.contexts?.get(failureKey);
     if (savedFailure?.outcome === "planning-failure") {
       options.onContext?.(failureKey, savedFailure, true);
@@ -507,6 +514,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key,
+        ...(recordGrouping ? { recordGrouping } : {}),
         ...(["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(contextPolicy ?? "") ? { contextPolicy } : {}) });
       if (staged) for (const batch of batches!) batch.manifest.epicReview = review;
       if (staged && options.contexts) {
@@ -594,7 +602,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     // Reconstruct each saved policy before changing representation or grouping.
     // Preserve compatible legacy splits, completed calls and spent allowances.
     for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length === records.length)) {
-      const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, j.context!.epicReview!.contextPolicy));
+      const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, j.context!.epicReview!.contextPolicy, j.context!.epicReview!.recordGrouping));
       if (during("saved-policy", () => matches(j, saved))) { candidate = saved; break; }
     }
     const preserved = !!candidate;
@@ -602,7 +610,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       const children = new Map<string, Record[]>();
       for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length < records.length)) {
         const ids = new Set(j.context!.epicReview!.recordIDs), subset = records.filter((r) => ids.has(r.id));
-        if (during("saved-policy", () => matches(j, build(epicID, epicIDs, kind, subset, j.context!.epicReview!.contextPolicy)))) {
+        if (during("saved-policy", () => matches(j, build(epicID, epicIDs, kind, subset, j.context!.epicReview!.contextPolicy, j.context!.epicReview!.recordGrouping)))) {
           children.set(j.context!.epicReview!.packageID, subset);
         }
       }
@@ -636,7 +644,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         && epicIDs.every((id) => records.some((record) => record.epicID === id));
       const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-dense-records-v5"] as const;
       for (const policy of policies) {
-        staged = build(epicID, epicIDs, kind, records, policy);
+        staged = build(epicID, epicIDs, kind, records, policy, policy === "staged-dense-records-v5" ? "question-answer-units-v1" : undefined);
         stageFailure = staged.batchLimit?.message; stageLimit = !!staged.batchLimit;
         if (staged.context) break;
         if (staged.batchLimit) staged = undefined;
@@ -671,7 +679,10 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       || j.status === "completed" && !j.result && (j.retrievalWork?.epicStages || j.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)))
       && j.model.providerID === project.model.providerID && j.model.modelID === project.model.modelID
       && j.model.connectionID === project.model.connectionID).at(-1);
-    const blocked = !!prior && !prior.retrievalWork?.final && (prior.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)
+    const recoverLinkedEvidence = !!prior?.retrievalWork?.epicStages && !!candidate.batches
+      && !!planLinkedEvidenceRecovery(project, review, prior.retrievalWork.epicStages, prior.retrievalWork.attempts,
+        prior.epicReviewReport?.blockers.find(blocker => blocker.packageID === review.packageID)?.reason, candidate.batches);
+    const blocked = !recoverLinkedEvidence && !!prior && !prior.retrievalWork?.final && (prior.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)
       || (prior.retrievalWork?.attempts ?? 0) >= 3);
     const availability = decisionAvailability(project, records.filter((r) => "statement" in r).map((r) => r.id), submissions);
     // Approval is deliberately conservative about shared source citations. A gap
@@ -701,7 +712,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       : undefined;
     tasks.push({ review, context, batches: candidate.batches, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
        ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
-       ...(blocker ? { blocker } : {}), state });
+        ...(blocker ? { blocker } : {}), ...(recoverLinkedEvidence ? { recoverLinkedEvidence: true as const } : {}), state });
     if (options.firstPending && state === "pending") foundPending = true;
     reportProgress();
   };

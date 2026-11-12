@@ -16,6 +16,13 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+New dense discovery schedules keep linked questions/options and answers together.
+Explicit Discover continuation can also supply missing linked evidence to a saved
+blocked check without repeating completed stages or resetting spent attempts.
+Publication still requires a new verdict; Logs show unpublished evidence blockers
+as needing attention. Restart the backend, then continue Discover; do not reset
+the project. See [upgrade details](docs/migrations.md#linked-questionanswer-discovery-evidence-2026-11-12).
+
 Completed questions-only discovery can now retain an earlier check across lossless
 record-order/layout changes after replaying its original receipts and proving its
 full displayed evidence and guidance unchanged. Genuine decision changes still

@@ -147,7 +147,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
        const totalSteps = groupProgress?.total ?? legacyTotalSteps;
       const completedSteps = groupProgress?.completed ?? nullableCount(row.stagedCompleted);
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
-        status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
+        status: z.enum(["pending", "running", "completed", "blocked", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
         policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "") ? row.policy : null,
         interruptionCause: definitionInterruptionCauses.find((cause) => cause === row.interruptionCause) ?? null,

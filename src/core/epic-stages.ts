@@ -5,6 +5,7 @@ import { epicBatchKey, epicReviewBatches, stagedEpicReview, validateEpicReviewFi
 import { guardrailVerdictSchema, isStagedPolicy, type EpicReview } from "./epic-review-types.js";
 import { retrievalEvidenceBasis, epicStagesSchema, type EpicStages } from "./gap-retrieval.js";
 import { emptyEpicDraft, epicStageContext, epicDraftLimit } from "./epic-stage-context.js";
+import { linkedEvidenceStageBase } from "./epic-linked-evidence.js";
 export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
 
 const key = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -68,7 +69,7 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
   let draft = emptyEpicDraft();
   if (counts) Object.assign(counts, { draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 });
   for (const [index, receipt] of work.receipts.entries()) {
-    const base = contexts[receipt.batch]!;
+    const base = linkedEvidenceStageBase(project, work, contexts[receipt.batch]!, index, draft);
     if (receipt.evidenceKey !== retrievalEvidenceBasis(base).key) throw new Error("Staged receipt evidence does not match its exact batch.");
     const before = draft;
     draft = receipt.phase === "discover"
@@ -86,6 +87,7 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
       throw new Error("Empty staged completion must stop at its exact empty receipt boundary.");
   }
   if (key(draft) !== key(work.candidates)) throw new Error("Staged draft differs from its saved exact response history.");
+  if (work.phase === "validate") linkedEvidenceStageBase(project, work, contexts[work.nextBatch]!, work.receipts.length, draft);
   return draft;
 }
 

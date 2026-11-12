@@ -29,6 +29,11 @@ export const epicStagesSchema = z.object({
   candidates: analysisSchema,
   completionPolicy: z.literal("empty-proposals-v1").optional(),
   emptyCompletion: z.literal("no-surviving-proposals").optional(),
+  linkedEvidence: z.array(z.object({ format: z.literal(1), fromReceipt: z.number().int().min(1).max(31),
+    addedIDs: z.array(z.string().min(1).max(200)).min(1).max(32).refine(ids => new Set(ids).size === ids.length, "Duplicate supporting records"),
+    prefixKey: z.string().regex(/^[a-f0-9]{64}$/), draftKey: z.string().regex(/^[a-f0-9]{64}$/),
+    beforeEvidenceKey: z.string().regex(/^[a-f0-9]{64}$/), afterEvidenceKey: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict()).min(1).max(16).optional(),
   receipts: z.array(z.object({ phase: z.enum(["discover", "validate"]), batch: z.number().int().min(0).max(15),
     evidenceKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     response: z.union([analysisSchema, guardrailVerdictSchema]),
@@ -44,6 +49,10 @@ export const epicStagesSchema = z.object({
       || (r.phase === "validate") !== ("guardrailVerdict" in r.response))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid staged epic checkpoint sequence or draft bound." });
   }
+  if (work.linkedEvidence?.some((support, index, all) => support.fromReceipt < work.batches
+    || support.fromReceipt >= work.batches * 2 || support.fromReceipt > work.receipts.length
+    || index > 0 && support.fromReceipt <= all[index - 1]!.fromReceipt))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Linked evidence recovery must bind a unique reached verification step." });
 });
 export type EpicStages = z.infer<typeof epicStagesSchema>;
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
