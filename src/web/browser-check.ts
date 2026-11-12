@@ -1109,6 +1109,8 @@ try {
   await expect(offline).toBeVisible();
   await expect(offline).toHaveValue("An unfinished offline draft");
   await page.getByRole("button", { name: /Submitted/ }).click();
+  await expect(page.getByRole("region", { name: "Answers needing attention", exact: true })).toHaveCount(0);
+  await expect(page.getByText("What job details should be saved?", { exact: true })).toHaveCount(1);
   await detailsCard.getByRole("button", { name: "Edit answer", exact: true }).click();
   await details.fill("Corrected job details");
   await detailsCard.getByRole("button", { name: "Save changes" }).click();

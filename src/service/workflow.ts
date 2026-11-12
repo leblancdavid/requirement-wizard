@@ -86,7 +86,7 @@ export class ProjectWorkflow {
     const changeGroup = changeJob ? this.store.definitionChangeGroupProgress(id, changeJob) : undefined;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
       ? Math.max(0, Date.now() - (state.leaseUntil - 360000)) : 0));
-    const recoveryJobs = [...new Set(submissions.filter(s => !s.archivedAt && !s.conflict && s.status === "needs-attention" && s.jobID).map(s => s.jobID!))].map(jobID => this.store.getJob(jobID));
+    const recoveryJobs = [...new Set(submissions.filter(s => !s.archivedAt && !resolved.has(s.id) && !s.conflict && s.status === "needs-attention" && s.jobID).map(s => s.jobID!))].map(jobID => this.store.getJob(jobID));
     const sourceRecovery = recoveryJobs.map(job => answerGroupRecoveryPreview(project, job)).find(Boolean);
     const pageRecovery = recoveryJobs.map(job => answerGroupPageRecoveryPreview(project, job)).find(Boolean);
     const verificationRecovery = recoveryJobs.map(job => answerGroupVerificationPreview(project, job)).find(Boolean);

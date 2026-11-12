@@ -59,7 +59,7 @@ export class DiscoveryQueue {
     service.store.recoverExpiredJobs();
     for (const project of service.store.list()) {
       const submissions = service.store.submissions(project.id);
-      const resolved = submissions.some((s) => s.input.type === "review" && s.conflict && !s.applied && s.status === "needs-attention")
+      const resolved = submissions.some((s) => s.status === "needs-attention" && (s.input.type === "answer" || s.input.type === "review" && s.conflict && !s.applied))
         ? resolvedReviewAttempts(service.store.get(project.id), submissions) : new Map();
       const unfinished = submissions.some((s) => ["queued", "saved", "needs-attention"].includes(s.status) && !resolved.has(s.id));
       if (unfinished && !this.isActive(project.id)) service.store.pauseQueue(project.id, true);

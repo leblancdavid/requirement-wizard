@@ -14,7 +14,12 @@ const store = new ProjectStore(":memory:");
 let p = store.create("Workspace layout fixture", "Save offline reports", { providerID: "openai", modelID: "fixture" });
 const seed = store.beginJob(p.id, p.revision).job;
 store.claimJob(seed.id, Date.now() + 60000);
-store.finishJob(seed.id, { summary: "Offline reports", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{ localID: "new:offline", statement: "Save reports offline", rationale: "Reports must survive disconnection", acceptance: ["A report saves without a network"], sourceIDs: [p.sources[0]!.id], epicID: "inbox" }] });
+store.finishJob(seed.id, { summary: "Offline reports", goals: [], actors: [], assumptions: [], questions: [{ text: "Should reports work offline?", whyItMatters: "Choose disconnected behavior", epicID: "inbox", options: [{ label: "Offline", consequence: "Keep reports available" }, { label: "Online", consequence: "Require a connection" }] }], retireQuestions: [], requirements: [{ localID: "new:offline", statement: "Save reports offline", rationale: "Reports must survive disconnection", acceptance: ["A report saves without a network"], sourceIDs: [p.sources[0]!.id], epicID: "inbox" }] });
+p = store.get(p.id);
+const question = p.questions[0]!;
+const response = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null, answer: { kind: "answer", text: "Keep reports available offline" } } });
+store.applyQueued(p.id);
+store.saveSubmission({ ...store.submissions(p.id).find(item => item.id === response.id)!, status: "needs-attention", diagnostic: "Saved response review paused" });
 p = store.get(p.id);
 const failed = store.beginJob(p.id, p.revision).job;
 store.claimJob(failed.id, Date.now() + 60000);
@@ -35,7 +40,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: "Workspace layout fixture", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Project map", exact: true })).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(4);
-  const before = structuredClone(store.get(p.id));
+  let before = structuredClone(store.get(p.id));
   const footer = page.getByRole("contentinfo", { name: "Discovery controls", exact: true });
   await expect(footer).toBeInViewport();
   await expect(footer.getByRole("button", { name: "Discover", exact: true })).toBeEnabled();
@@ -44,6 +49,42 @@ try {
   await expect(page.locator(".work-heading")).toHaveCount(0);
   await expect(page.locator(".workspace-status")).toHaveCount(0);
   await expect(page.locator(".question-cleanup")).toHaveCount(0);
+  // Answered questions with failed follow-up must remain reachable from the badge
+  // without recreating the duplicate attention list or starting AI work.
+  await expect(page.getByRole("tab", { name: /^Design/ })).toContainText("1");
+  await expect(page.getByRole("button", { name: "To answer 0", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Submitted 0", exact: true })).toBeVisible();
+  await footer.getByRole("combobox").selectOption("project");
+  await page.getByRole("button", { name: "Needs attention 1", exact: true }).click();
+  await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
+  await expect(page.getByText(question.text, { exact: true })).toHaveCount(1);
+  await expect(page.getByRole("region", { name: "Answers needing attention", exact: true })).toHaveCount(0);
+  await page.locator(".question-card").getByRole("button", { name: "Edit answer", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: `Your answer to ${question.text}`, exact: true })).toHaveValue("Keep reports available offline");
+  await expect(page.getByRole("region", { name: "Item processing error", exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Needs attention 1", exact: true }).click();
+  await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "To answer 0", exact: true }).click();
+  await footer.getByRole("combobox").selectOption("all");
+  // A newer waiting correction belongs only in Submitted. Once its review has
+  // completed, reopening must not resurrect the original failed attempt.
+  const originalAttempt = structuredClone(store.submissions(p.id).find(item => item.id === response.id)!);
+  const corrected = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: store.get(p.id).questions[0]!.sourceID!, answer: { kind: "answer", text: "Keep reports available offline" } } });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Needs attention 1", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Submitted 1", exact: true }).click();
+  await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
+  store.applyQueued(p.id);
+  store.saveSubmission({ ...store.submissions(p.id).find(item => item.id === corrected.id)!, status: "completed" });
+  p = store.get(p.id); before = structuredClone(p);
+  for (let reopen = 0; reopen < 2; reopen++) {
+    await page.reload();
+    await expect(page.getByRole("button", { name: /^Needs attention/ })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: /^Design/ })).toContainText("0");
+    await expect(page.getByRole("button", { name: "Previous answers 1", exact: true })).toBeVisible();
+  }
+  assert.deepEqual(store.submissions(p.id).find(item => item.id === response.id), originalAttempt, "Old diagnostics and paid-work links remain untouched");
   // Intercept dispatch only: verify the existing bounded action and scope without inference.
   const requests: Record<string, unknown>[] = [];
   const analyzeRoute = `**/api/projects/${p.id}/analyze`;

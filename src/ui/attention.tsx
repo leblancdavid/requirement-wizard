@@ -10,8 +10,17 @@ import { LogLink } from "./log-access.js";
 export function attentionGroups(project: Project, submissions: Submission[]) {
   const resolved = resolvedReviewAttempts(project, submissions);
   const groups = new Map<string, Submission[]>();
-  for (const item of submissions) {
+  for (const [index, item] of submissions.entries()) {
     if (item.projectID !== project.id || item.status !== "needs-attention" || resolved.has(item.id)) continue;
+    if (item.input.type === "answer" && item.applied && item.appliedSourceID && item.overlapFollowup?.state !== "pending") {
+      const question = project.questions.find(question => item.input.type === "answer" && question.id === item.input.questionID);
+      // A valid waiting correction has its home in Submitted. Do not show the
+      // previous failure as a second live item while it waits to be applied.
+      if (question?.sourceID === item.appliedSourceID && submissions.slice(index + 1).some(later =>
+        later.projectID === project.id && later.status === "queued" && !later.applied && !later.conflict
+        && later.input.type === "answer" && later.input.questionID === question.id && later.input.questionText === question.text
+        && later.input.sourceID === question.sourceID && Date.parse(later.submittedAt) >= Date.parse(item.submittedAt))) continue;
+    }
     const key = item.input.type === "review" ? `requirement:${item.input.requirementID}` : item.input.type === "answer" ? `question:${item.input.questionID}` : `submission:${item.id}`;
     const attempts = groups.get(key) ?? [];
     attempts.push(item); groups.set(key, attempts);

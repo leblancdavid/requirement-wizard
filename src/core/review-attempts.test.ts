@@ -9,6 +9,7 @@ import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "./review-attemp
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { DiscoveryService } from "../service/discovery.js";
+import { workflowDecisions } from "./workflow.js";
 
 function fixture() {
   const project = projectSchema.parse({ id: "project", name: "Review history", revision: 8, model: { providerID: "openai", modelID: "fixture" },
@@ -22,6 +23,89 @@ function fixture() {
   project.sources.push({ id: "approval", kind: "confirmation", requirementID: "story", epicID: "inbox", text: "Saved human approval" });
   return { project, failed, completed };
 }
+
+function answerFixture() {
+  const { project } = fixture();
+  project.sources.push({ id: "original-answer", kind: "answer", questionID: "question", epicID: "inbox", text: "Together" },
+    { id: "replacement-answer", kind: "answer", questionID: "question", epicID: "inbox", text: "Together", supersedes: "original-answer" });
+  const old: Submission = { id: "old-answer", projectID: project.id, submittedAt: "2026-11-11T12:00:00Z", auto: false, research: false,
+    status: "needs-attention", applied: true, appliedSourceID: "original-answer", appliedRevision: 6, diagnostic: "Original failed publication; paid evidence retained",
+    input: { type: "answer", questionID: "question", questionText: "Must players leave together?", sourceID: null, answer: { kind: "answer", text: "Together" } } };
+  if (old.input.type !== "answer") throw new Error("Answer fixture");
+  const later: Submission = { ...structuredClone(old), id: "new-answer", submittedAt: "2026-11-11T12:01:00Z", status: "completed", appliedSourceID: "replacement-answer", appliedRevision: 7,
+    input: { ...old.input, sourceID: "original-answer" } };
+  return { project, old, later };
+}
+
+test("a later applied answer reconciles a superseded failed answer without changing original evidence or claiming review completion", () => {
+  for (const status of ["saved", "processing", "needs-attention", "completed"] as const) {
+    const { project, old, later } = answerFixture(); later.status = status;
+    const before = structuredClone({ project, old, later });
+    assert.deepEqual([...resolvedReviewAttempts(project, [old, later])], [[old.id, { submissionID: later.id, changedWording: false }]]);
+    assert.equal(resolvedReviewAttempts(project, [old, later]).has(later.id), false);
+    assert.deepEqual({ project, old, later }, before);
+  }
+});
+
+for (const mode of ["unapplied", "queued", "conflict", "missing-source", "unlinked-source", "wrong-question", "wrong-text", "earlier-date", "wrong-project", "pending-overlap", "broken-chain", "cycle"] as const) {
+  test(`answer reconciliation retains ${mode} work without assuming it completed`, () => {
+    const { project, old, later } = answerFixture();
+    if (mode === "unapplied") later.applied = false;
+    if (mode === "queued") later.status = "queued";
+    if (mode === "conflict") later.conflict = true;
+    if (mode === "missing-source") delete later.appliedSourceID;
+    if (mode === "unlinked-source") delete project.sources.at(-1)!.supersedes;
+    if (mode === "wrong-question") project.sources.at(-1)!.questionID = "different";
+    if (mode === "wrong-text") project.sources.at(-1)!.text = "Unsupported source text";
+    if (mode === "earlier-date") later.submittedAt = "2026-11-10T12:01:00Z";
+    if (mode === "wrong-project") later.projectID = "different";
+    if (mode === "pending-overlap") old.overlapFollowup = { format: 1, state: "pending", discoveryJobID: "job", requirementIDs: [], triggerSourceIDs: [], candidateCount: 0, pairs: [] };
+    if (mode === "broken-chain") project.sources.at(-1)!.supersedes = "missing";
+    if (mode === "cycle") project.sources.at(-1)!.supersedes = "replacement-answer";
+    assert.equal(resolvedReviewAttempts(project, [old, later]).size, 0);
+  });
+}
+
+test("answer reconciliation follows an explicit multi-correction source chain and rejects reverse durable order", () => {
+  const { project, old, later } = answerFixture();
+  project.sources.push({ id: "intermediate", kind: "answer", questionID: "question", epicID: "inbox", text: "Together", supersedes: "original-answer" });
+  project.sources.find(source => source.id === "replacement-answer")!.supersedes = "intermediate";
+  assert.equal(resolvedReviewAttempts(project, [old, later]).get(old.id)?.submissionID, later.id);
+  assert.equal(resolvedReviewAttempts(project, [later, old]).size, 0);
+});
+
+test("older saved answer history reopens repeatedly without a phantom blocker, model calls or payload rewrites", async () => {
+  mkdirSync(resolve(".reqwizit-state"), { recursive: true });
+  const directory = mkdtempSync(join(resolve(".reqwizit-state"), "answer-history-"));
+  const path = join(directory, "state.sqlite");
+  try {
+    let store = new ProjectStore(path);
+    let project = store.create("Answer history upgrade", "Keep departure decisions", { providerID: "openai", modelID: "fixture" });
+    const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { summary: "Departure", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Must players leave together?", whyItMatters: "Departure behavior", epicID: "inbox", options: [{ label: "Together", consequence: "Both present" }, { label: "Separately", consequence: "Earlier arrival counts" }] }] });
+    project = store.get(project.id);
+    const question = project.questions[0]!;
+    const old = store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null, answer: { kind: "answer", text: "Together" } } });
+    store.applyQueued(project.id);
+    store.saveSubmission({ ...store.submissions(project.id).find(item => item.id === old.id)!, status: "needs-attention", diagnostic: "Original missing supporting record", jobID: job.id });
+    const later = store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: store.get(project.id).questions[0]!.sourceID!, answer: { kind: "answer", text: "Together" } } });
+    store.applyQueued(project.id);
+    store.saveSubmission({ ...store.submissions(project.id).find(item => item.id === later.id)!, status: "completed" });
+    const original = store.submissions(project.id), savedProject = store.get(project.id);
+    store.close();
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store = new ProjectStore(path);
+      const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("History reconciliation must not repeat model work"); } }));
+      try {
+        assert.equal(resolvedReviewAttempts(store.get(project.id), store.submissions(project.id)).get(old.id)?.submissionID, later.id);
+        assert.equal(store.queuePaused(project.id), false);
+        assert.deepEqual(workflowDecisions(store.get(project.id), store.submissions(project.id)), [], "The old answer cannot keep Continue in a needs-decision loop");
+        assert.deepEqual(store.submissions(project.id), original);
+        assert.deepEqual(store.get(project.id), savedProject);
+      } finally { await queue.close(); store.close(); }
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("a full dismissal Undo batch fits the authenticated API body limit", () => {
   const attempts = Array.from({ length: reviewAttemptBatchLimit }, () => ({ submissionID: randomUUID(), archivedAt: new Date().toISOString() }));

@@ -1,5 +1,38 @@
 # Data migrations and upgrade compatibility
 
+## Superseded saved-answer attention reconciliation (2026-11-11)
+
+**Source → target: unchanged SQLite 68 / portable formats through 42.** Older
+databases can retain a failed applied answer next to later successfully processed
+corrections. The shared history resolver previously reconciled requirement reviews
+only, leaving the old answer in Design and workflow decisions after newer work
+finished. Repeatedly saving the answer could therefore consume more model calls
+without clearing the historical attention item.
+
+An older failed answer is now treated as superseded only when durable submission
+order, timestamps, exact saved answer kind/text and the same-question source
+`supersedes` chain prove a later answer was applied. The replacement's own pending
+or failed review remains actionable; this is not inferred AI completion, freshness,
+requirement approval or a new recovery allowance. Missing/invalid provenance,
+conflicting replacements and unfinished overlap work remain unresolved. A valid
+unapplied queued correction is displayed in Submitted rather than duplicating its
+previous failed answer in the UI; actual reconciliation waits for durable application.
+
+This is a read-time compatibility projection, including existing saved projects.
+No original submission payload, diagnostic, source, job, paid receipt, fingerprint,
+portable format or migration version is rewritten. There is no conversion to
+interrupt or retry and startup requires no model work. Repeated SQLite reopen
+tests check unchanged records, no phantom queue pause or workflow decision, no
+inference and preserved source evidence. Malformed/broken/cyclic chains fail closed.
+
+Verification: type check, UI build, focused history/workflow/recovery tests and the
+workspace browser regression passed. The full `npm test` attempt exceeded the
+120-second tool timeout during pretests and is not reported as a complete pass.
+The supplied log export was inspected read-only; the live project/database and
+model account were not modified or called. Restart the backend and reload to use
+the shared resolver; this fix does not require resaving or reprocessing an already
+completed replacement.
+
 ## Saved-response publication support recovery (2026-11-11)
 
 **Source → target: SQLite 67 → 68; portable state up to 41 → 42 only when the
@@ -36,8 +69,12 @@ evidence, exhausted allowance without renewal, failed final-write retry without
 another check, missing/tampered receipts and portable 42 round-trip/downgrade rejection.
 Unsupported future support metadata rolls back the capability upgrade and can be
 reopened after restoring the original payload, without resetting saved attempts.
-The real user's database and model account were not modified or called. Broader
-suite verification is recorded alongside the final task results.
+The full `npm test` run passed 2,028 tests (947 pretests, 802 main, 279 posttests).
+After further strengthening the regression fixtures, all six support-recovery
+cases passed again, including the additional failed-write reuse case. Type checking,
+UI build, specification/question-batch browsers and diff checks passed. The full
+browser aggregate was not rerun for this backend fix. The real user's database and
+model account were not modified or called; live recovery remains unqualified.
 
 ## Question-focused Design presentation (2026-11-11)
 

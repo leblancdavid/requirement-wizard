@@ -1,5 +1,22 @@
 # Browser workspace, epics, and estimated completeness
 
+## Historical saved-answer attention loop (2026-11-11)
+
+An earlier failed answer no longer stays in Needs attention after a later durable
+answer explicitly supersedes its saved source. A valid waiting correction appears
+in Submitted without also listing its old failure; if the replacement's own review
+fails, that current failure remains visible. Logs and original answers keep the old
+diagnostic and paid processing history unchanged. Restart the backend and reload;
+an already completed correction needs no extra Save changes/Continue or model call
+merely to reconcile its historical attention count.
+
+The provided export showed three completed saved-response runs alongside an older
+failed response. This matches the corrected history-reconciliation gap; it does not
+provide the full source-chain witnesses needed to certify the live project's exact
+state. The regression covers queued → completed correction, unchanged originals,
+repeated reload, no duplicate inbox and no inference. See
+[compatibility and verification](migrations.md#superseded-saved-answer-attention-reconciliation-2026-11-11).
+
 ## Saved review waiting on linked evidence (2026-11-11)
 
 Saving an answer and applying its AI review are separate durable operations. A
@@ -28,6 +45,22 @@ Saved-answer problems, required usage permissions, initialization and folder
 conflicts remain visible when relevant. Add information and previous-answer filters
 remain available. Bulk question actions/history move to Logs' retained technical
 controls; specification-change notices belong in Specification.
+Saved answers appear only in the question list (including Submitted), not in a
+second attention list above it. Their cards retain status, editing and follow-up
+controls. Separate saved notes still have their review controls because they have
+no question card. This removes duplicate presentation without changing saved data.
+The duplicate-list follow-up passed type checking, UI build and the main browser
+runner, including a queued response appearing once in Submitted with editing intact.
+
+Saved answers needing follow-up now also have a **Needs attention** filter in the
+same question list. It is project-wide like the attention badge, including answered
+or retired questions and items outside the selected epic. An empty To answer view
+points to this filter rather than suggesting discovery when a saved answer needs
+review. This fixes the unreachable badge after removal of the duplicate inbox;
+no stored statuses, original answers or paid progress are changed. The workspace
+browser regression uses an answered question with a failed saved review, checks
+zero open/submitted items, another selected epic, original answer text, recovery
+notice, reload, no duplicate list and no inference.
 
 This is presentation-only: discovery still uses the existing epic-gap request,
 revision, permission and busy-state checks. No persisted data, saved preferences,
