@@ -40,18 +40,19 @@ export function ActionScope({ reason, children }: { reason?: string; children: R
   return <DisabledReason.Provider value={reason}>{prepare(children)}</DisabledReason.Provider>;
 }
 
-/** Disabled actions stay focusable so their explanation works with keyboard and touch. */
-export function ActionButton({ disabled, reason, title, onClick, onKeyDown, onBlur, onPointerEnter, onPointerLeave, onFocus, ...props }:
-  React.ComponentPropsWithRef<"button"> & { reason?: string }) {
+/** Disabled actions stay focusable; optional guidance supports delayed hover and immediate focus. */
+export function ActionButton({ disabled, reason, title, tooltip, tooltipDelay = 0, onClick, onKeyDown, onBlur, onPointerEnter, onPointerLeave, onFocus, ...props }:
+  React.ComponentPropsWithRef<"button"> & { reason?: string; tooltip?: string; tooltipDelay?: number }) {
   const id = useId();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const showTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const cancelHide = () => { clearTimeout(hideTimer.current); };
-  const hide = () => { cancelHide(); hideTimer.current = setTimeout(() => setAnchor(null), 180); };
-  useEffect(() => () => clearTimeout(hideTimer.current), []);
+  const hide = () => { clearTimeout(showTimer.current); cancelHide(); hideTimer.current = setTimeout(() => setAnchor(null), 180); };
+  useEffect(() => () => { clearTimeout(hideTimer.current); clearTimeout(showTimer.current); }, []);
   useEffect(() => { if (!disabled) setAnchor(null); }, [disabled]);
   useEffect(() => {
     if (!anchor) return;
@@ -65,16 +66,16 @@ export function ActionButton({ disabled, reason, title, onClick, onKeyDown, onBl
     return () => { document.removeEventListener("pointerdown", dismissOutside, true); document.removeEventListener("focusin", dismissOutside, true); };
   }, [anchor]);
   const inheritedReason = useContext(DisabledReason);
-  const explanation = disabled ? reason || title || inheritedReason : undefined;
-  const show = (element: HTMLButtonElement) => { trigger.current = element; cancelHide(); setDismissed(false); setAnchor(element.getBoundingClientRect()); setPortal(element.closest("dialog") ?? document.body); };
+  const explanation = disabled ? [reason || title || inheritedReason, tooltip].filter(Boolean).join(" ") : tooltip;
+  const show = (element: HTMLButtonElement) => { clearTimeout(showTimer.current); trigger.current = element; cancelHide(); setDismissed(false); setAnchor(element.getBoundingClientRect()); setPortal(element.closest("dialog") ?? document.body); };
   return <>
-    <button {...props} aria-disabled={disabled || undefined} title={disabled ? undefined : title}
+    <button {...props} aria-disabled={disabled || undefined} title={disabled || tooltip ? undefined : title}
       aria-describedby={[props["aria-describedby"], explanation ? id : undefined].filter(Boolean).join(" ") || undefined}
-      onClick={(event) => { if (disabled) { event.preventDefault(); event.stopPropagation(); show(event.currentTarget); } else onClick?.(event); }}
-      onKeyDown={(event) => { if (event.key === "Escape" && anchor) { event.preventDefault(); event.stopPropagation(); setDismissed(true); setAnchor(null); } onKeyDown?.(event); }}
-      onFocus={(event) => { if (disabled) show(event.currentTarget); onFocus?.(event); }}
+      onClick={(event) => { clearTimeout(showTimer.current); if (disabled) { event.preventDefault(); event.stopPropagation(); show(event.currentTarget); } else { setAnchor(null); onClick?.(event); } }}
+      onKeyDown={(event) => { if (event.key === "Escape") { clearTimeout(showTimer.current); if (anchor) { event.preventDefault(); event.stopPropagation(); } setDismissed(true); setAnchor(null); } onKeyDown?.(event); }}
+      onFocus={(event) => { if (explanation) show(event.currentTarget); onFocus?.(event); }}
       onBlur={(event) => { hide(); onBlur?.(event); }}
-      onPointerEnter={(event) => { if (disabled) show(event.currentTarget); onPointerEnter?.(event); }}
+      onPointerEnter={(event) => { if (explanation) { const element = event.currentTarget; clearTimeout(showTimer.current); cancelHide(); if (tooltipDelay) showTimer.current = setTimeout(() => show(element), tooltipDelay); else show(element); } onPointerEnter?.(event); }}
       onPointerLeave={(event) => { if (document.activeElement !== event.currentTarget) hide(); onPointerLeave?.(event); }} />
     {explanation && <span id={id} className="sr-only">{explanation}</span>}
     {explanation && anchor && portal && !dismissed && createPortal(<span role="tooltip" className="action-tooltip" onPointerEnter={cancelHide} onPointerLeave={hide} style={{ left: Math.max(8, Math.min(anchor.left, window.innerWidth - Math.min(360, window.innerWidth - 16) - 8)), top: anchor.bottom < window.innerHeight - 120 ? anchor.bottom + 8 : Math.max(8, anchor.top - 112), maxHeight: 104 }}>{explanation}</span>, portal)}

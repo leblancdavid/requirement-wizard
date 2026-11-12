@@ -1,5 +1,24 @@
 # Browser workspace, epics, and estimated completeness
 
+## Footer guidance tooltips (2026-11-12)
+
+The Discover, Refine, Prepare plan and implementation footer buttons now carry
+their explanations in tooltips instead of adjacent text. Hover for two seconds,
+or focus a button with the keyboard to show its explanation immediately. Escape
+dismisses it. Disabled buttons retain their blocking reason alongside the guidance;
+AI-usage and coding-permission reminders remain available in the tooltip and its
+accessible description. Other disabled-action tooltips keep their existing timing.
+
+This is presentation-only: no saved data, settings, assessment semantics or
+freshness rules change, so no forward migration is needed.
+
+Verification: type checking, 79 focused UI tests, UI build and diff checking passed.
+The workspace-layout browser runner passed delayed/cancelled hover, keyboard focus,
+Escape dismissal, disabled guidance and mobile footer checks. Model-selection and
+assessment-tools browser runners also passed. The full browser command then stopped
+at the previously recorded Design badge assertion in `src/web/browser-check.ts:1126`
+(expected 2, actual 1); later runners did not execute. No live model calls were made.
+
 ## Exact completed discovery reuse (2026-11-12)
 
 Discover can retain an earlier completed questions-only package when its original

@@ -47,6 +47,30 @@ try {
   await expect(footer.getByRole("button", { name: "Discover", exact: true })).toBeEnabled();
   await expect(footer.getByRole("combobox")).toHaveValue("all");
   await expect(footer.getByRole("combobox").locator('option[value="all"]')).toHaveText("All epics");
+  // Footer guidance stays off the layout, waits for sustained hover, and is
+  // immediately available to keyboard users without starting any work.
+  const discover = footer.getByRole("button", { name: "Discover", exact: true });
+  await expect(footer.locator("small")).toHaveCount(0);
+  await expect(discover).toHaveAccessibleDescription(/Find missing decisions.*Uses your AI plan/);
+  await expect(discover).not.toHaveAttribute("title");
+  await discover.hover();
+  await page.waitForTimeout(600);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(2100);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await discover.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Find missing decisions for all epics", { timeout: 4000 });
+  await expect(page.getByRole("tooltip")).toBeInViewport();
+  await discover.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await footer.getByRole("combobox").focus();
+  await page.keyboard.press("Tab");
+  await expect(discover).toBeFocused();
+  await expect(page.getByRole("tooltip")).toContainText("Uses your AI plan");
+  await page.mouse.move(0, 0);
+  await footer.getByRole("combobox").focus();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await expect(page.locator(".work-heading")).toHaveCount(0);
   await expect(page.locator(".workspace-status")).toHaveCount(0);
   await expect(page.locator(".question-cleanup")).toHaveCount(0);
@@ -111,6 +135,8 @@ try {
   const refinementFooter = page.getByRole("contentinfo", { name: "Refinement controls", exact: true });
   await expect(refinementFooter).toBeInViewport();
   await expect(refinementFooter.getByRole("button", { name: "Refine", exact: true })).toBeEnabled();
+  await expect(refinementFooter.locator("small")).toHaveCount(0);
+  await expect(refinementFooter.getByRole("button", { name: "Refine", exact: true })).toHaveAccessibleDescription(/Uses your AI plan; no coding/);
   await page.route(analyzeRoute, async route => { requests.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
   await refinementFooter.getByRole("combobox").selectOption("inbox");
   await refinementFooter.getByRole("button", { name: "Refine", exact: true }).click();
@@ -136,6 +162,11 @@ try {
   await expect(buildFooter).toBeInViewport();
   await expect(buildFooter.getByRole("button", { name: "Prepare plan", exact: true })).toBeDisabled();
   await expect(buildFooter.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
+  await expect(buildFooter.locator("small")).toHaveCount(0);
+  await buildFooter.getByRole("button", { name: "Prepare plan", exact: true }).focus();
+  await expect(page.getByRole("tooltip")).toContainText("Review and approve it before coding");
+  await buildFooter.getByRole("button", { name: "Start implementation", exact: true }).focus();
+  await expect(page.getByRole("tooltip")).toContainText("can run commands and commit code");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(buildFooter).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

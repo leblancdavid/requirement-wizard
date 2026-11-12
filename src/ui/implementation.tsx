@@ -160,9 +160,8 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
     </>;
   return <ActionScope reason={assessmentReason || (resumable ? "Archive the current run to change its frozen settings. Saved sessions and delivery evidence are retained." : "Wait for the current implementation request to finish.")}><div className="implementation-tab">
     {footerTarget && createPortal(<>
-      <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} title="Prepare a plan for all approved requirements. Review and approve it before coding." onClick={() => void start("plan")}>Prepare plan</ActionButton>
-      <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
-      <small>All approved requirements · Plan first, then approve and implement. Uses your AI plan; implementation can run commands and commit code.</small>
+      <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} tooltip="Prepare a plan for all approved requirements. Review and approve it before coding. Uses your AI plan; no coding." tooltipDelay={2000} onClick={() => void start("plan")}>Prepare plan</ActionButton>
+      <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} tooltip="Implement the approved plan for all approved requirements, or continue its saved implementation and delivery. Uses your AI plan; can run commands and commit code." tooltipDelay={2000} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
     </>, footerTarget)}
     {controls}
     {starting && <ActivityFeedback label="Starting implementation task…" />}
