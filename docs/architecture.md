@@ -1,5 +1,16 @@
 # Architecture outline
 
+Requirement pair decisions now have a small app-owned path separate from AI proposal
+review. `src/core/requirement-resolution.ts` validates explicit remove/replace/combine
+choices and preserves the two original records in human evidence. The store applies
+the decision inside its normal expected-revision transaction and existing pending-work
+gates; the loopback API retains authentication/origin checks. The browser's single
+comparison form holds a local draft and never synthesizes or applies a merge on open.
+`src/ui/review-reason.tsx` projects known state into plain explanations, without
+classifying diagnostic prose as a product conflict. Existing SQLite/portable shapes,
+paid work and freshness rules are unchanged. See
+[compatibility](migrations.md#plain-language-requirement-resolution-2026-11-11).
+
 SQLite 67 / conditional portable 41 adds a new-schedule-only empty-proposal terminal
 policy to staged discovery. Replay authenticates every original read and the exact
 empty boundary, without synthetic checks or changing old ledgers. Surviving proposals

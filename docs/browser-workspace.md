@@ -1,5 +1,102 @@
 # Browser workspace, epics, and estimated completeness
 
+## One place to resolve overlapping requirements (2026-11-11)
+
+This replaces the earlier pair of keep/remove buttons and duplicate selectors in
+ordinary requirement comparisons. An issue names the **other requirement** and its
+feature, explains whether the review found a possible duplicate or rules to reconcile,
+and offers one **Resolve** action. Similar wording alone is labelled **Possible
+overlap**, not an established conflict or proof that anything needs removal.
+
+Resolve shows both complete requirements and their expected behavior together. Choose:
+
+- **Remove this requirement** — keep the other one unchanged.
+- **Replace the other requirement with this one** — keep this one unchanged.
+- **Combine both requirements** — review and edit one complete version before saving.
+
+Nothing is preselected. **Save resolution** is the one commit action; Cancel changes
+nothing. The result is shown before saving, including which behavior is removed.
+No AI request is needed. An existing checked combined suggestion may seed the editor,
+but its wording is not applied without the human's explicit choice. Original records,
+supporting decisions and revision history remain saved. Other choices, such as
+keeping both unchanged or rechecking an outdated suggestion, are under **More options**.
+Manual full-list duplicate search remains available under the less prominent
+**Find another requirement to remove** action, not on every requirement's button row.
+
+Each opened review explains **why this needs review** in plain language: new
+requirement, suggested change, missing decision, outdated suggestion, or saved answer
+waiting for its check. These labels come from current application state, not guesses
+about error messages. Processing errors do not imply a conflict. Conflicting saved
+answers show exactly linked requirements and both original answers; the detailed
+diagnostic stays collapsed. A true unresolved answer conflict still needs an explicit
+governing rule rather than deleting an answer or pretending the check passed.
+
+Restart the backend and reload the browser to load the updated flow. No data migration,
+automatic resolution, paid-work reset or automatic model request occurs. See
+[preservation and recovery boundaries](migrations.md#plain-language-requirement-resolution-2026-11-11).
+
+Verification: type check, full `npm test`, full `npm run test:browser`, focused
+recovery browser checks and diff checks passed. The focused runner additionally
+checks an editable combined version, retained text after a failed save and after
+a project change, explicit reselection of the latest pair, mobile layout, local
+authentication, stale writes, unchanged originals and no AI requests. Its example
+screenshot is `.reqwizit-state/browser-requirement-resolution.png`. Unit coverage
+includes remove/replace/combine, malformed combinations, pending input, and repeated
+reopen/portable preservation. These are deterministic checks, not proof that live
+AI will identify every duplicate or explain every conflict correctly.
+
+## Requirement holds and duplicate resolution (2026-11-11)
+
+A blocked requirement now lists the actual saved responses that need processing,
+including original question/answer or review feedback, with **View & resolve saved
+response** for each. A processing failure is not labelled proof of a duplicate or
+contradiction. Pending replacements have a direct **Review proposed update** action
+on the current requirement, opening the existing comparison and keep-current controls.
+Historical “Automatic update held” review notes are collapsed as history, not a
+current conflict verdict.
+
+**Remove as duplicate…** supports search by wording, feature, acceptance scenario or
+ID, rendering up to 25 matches per selector plus any selected item. Survivor choices
+rank by wording similarity without automatically selecting a survivor. Existing
+overlap comparisons offer both explicit keep/remove directions with the exact pair
+prefilled, so no full-list search is required. Compare both complete scenario lists;
+removal does not merge unique behavior. All existing revision/pending-input gates
+remain, and the survivor is kept unchanged.
+
+Automatic updates no longer acquire a hold solely from an already-outdated suggestion;
+an exact checked no-op also creates no additional approval or replacement. Current
+proposals, real unresolved decisions and unfinished related responses still hold
+changes. No saved answers, suggestions, paid checks or histories are reset. Restart
+the backend and reload the UI to load the changes; opening the workspace starts no
+recovery work. See [compatibility and limits](migrations.md#requirement-update-holds-and-focused-resolution-2026-11-11).
+
+Verification: `npm run check`, `npm test`, `npm run test:browser`, and the focused
+`npm run test:browser:review-recovery` passed; the final focused unit set passed
+96 tests after the UI refinements. The new browser check covers direct replacement
+navigation/dismissal, search among 60 requirements, prefilled pair removal, retained
+selection, mobile width, exact saved-blocker navigation and unchanged survivor/history,
+without model calls. A unit fixture bounds selectors with 600 requirements. Reopen
+coverage retains an older pending proposal and failed response across repeated startup,
+then applies explicit continuation without a parallel replacement. These checks do
+not qualify the supplied live project's unknown publication error or guarantee that
+new model-generated requirements/questions will never overlap.
+
+## Immediate answer-save acknowledgement (2026-11-11)
+
+Design responses now leave **Saving…** as soon as the server acknowledges durable
+storage, including outside batch collection. The saved response appears locally;
+workspace and project-list refreshes run independently. A refresh failure reports
+that the answer is saved instead of treating it as a failed save. Actual save
+failures still retain the draft for retry. AI processing remains separate and keeps
+its existing permissions and checks. Older in-flight polls cannot undo the local
+acknowledgement. This UI-only change does not alter persisted formats, freshness
+rules or saved work; no migration is needed. It does not address server-side delays
+before the storage acknowledgement.
+
+The deterministic browser reliability check covers held and failed post-save
+refreshes outside collection, plus a failed save followed by a draft-preserving
+retry. It makes no model calls; actual-user latency has not been measured.
+
 ## Empty discovery results and publication profiling (2026-11-11)
 
 Once all mandatory discovery reads finish, new staged runs can finish if no suggestions

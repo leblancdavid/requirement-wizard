@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { Job, Project } from "../core/model.js";
-import { sharedAnswerDecision, type ClarificationOutcome } from "./shared-answer-decision.js";
+import { sharedAnswerDecision, sharedConflictRequirements, type ClarificationOutcome } from "./shared-answer-decision.js";
+import { PagedList } from "./pagination.js";
 
 export function SharedAnswerClarification({ project, conflict, disabled, working = false, save, resume }: {
   project: Project; conflict: NonNullable<Job["answerGroupClarification"]>; disabled: boolean;
@@ -15,6 +16,7 @@ export function SharedAnswerClarification({ project, conflict, disabled, working
   const [saved, setSaved] = useState(false);
   const decision = sharedAnswerDecision(project, conflict, choice, text);
   const hasSaved = saved || !!conflict.savedText;
+  const requirements = sharedConflictRequirements(project, conflict.conflictIDs);
   return <section className="save-notice shared-answer-clarification" aria-label="Resolve conflicting saved answers">
     <h3>{hasSaved ? "Your decision is saved" : conflict.previousText ? "Your decision needs clarification" : conflict.conflictIDs.length === 2 ? "Two earlier answers disagree" : `${conflict.conflictIDs.length} earlier answers disagree`}</h3>
     {hasSaved ? <>
@@ -32,8 +34,8 @@ export function SharedAnswerClarification({ project, conflict, disabled, working
         if (!outcome.continued) setError("Your decision was saved, but review could not start. You can continue without entering it again.");
       }).catch(() => setError("Could not confirm the save. Your draft is retained; refresh to check whether the decision was saved before trying again.")).finally(() => setSaving(false));
     }}>
-    <p>Which answer should apply when these situations overlap? Or describe an exception below. Nothing is selected for you.</p>
-    <p>{conflict.reason.replace(/[a-f0-9]{8}-[a-f0-9-]{27,}/gi, "[saved answer]")}</p>
+    <p>These answers give different rules for the same situation. Choose which rule to use, or explain how both should work together. Nothing is selected for you.</p>
+    {requirements.length > 0 && <section aria-label="Requirements affected by these answers"><h4>Requirements affected</h4><PagedList items={requirements} itemID={r => r.id} label="Affected requirements">{r => <p><strong>{r.statement}</strong> · {project.epics.find(e => e.id === r.epicID)?.title}</p>}</PagedList></section>}
     {conflict.previousText && <><p>The last review could not apply your earlier clarification. Choose an explicit priority or explain the exception. Your new decision replaces that clarification for this conflict; the earlier note remains in history.</p><details><summary>Your earlier clarification</summary><p className="source-excerpt">{conflict.previousText}</p></details></>}
     <fieldset disabled={disabled || saving}><legend>Choose the rule to follow</legend>
     {conflict.conflictIDs.map((id, index) => {

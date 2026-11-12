@@ -3,9 +3,11 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import { ProjectStore } from "./store.js";
-import { portableSnapshot } from "./portable-snapshots.js";
+import { portableSnapshot, portableSnapshotRecords } from "./portable-snapshots.js";
+import { portableRecords, projectFromPortableRecords } from "./portable-records.js";
 import { projectSchema } from "../core/model.js";
 import { continuationState } from "./portable.js";
 import { renderWorkspace } from "./workspace.js";
@@ -51,4 +53,69 @@ test("portable snapshots reuse exact normalized evidence across reopen and recov
     assert.equal(read().sources.length, 1000); assert.equal(calls, largeCalls + 1, "Replacing another original invalidates potential lazy assessment-projection dependencies too");
     assert.throws(() => portableSnapshot(db, p.id, 9999, normalize), /not found/);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("generation-1 cache upgrades preserve originals and exact artifacts without normalization, including interrupted upgrade and reopen", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "portable-record-upgrade-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  const p = store.create("Older portable computation", "Keep original evidence", { providerID: "openai", modelID: "fixture", connectionID: "private-account" });
+  const job = store.beginJob(p.id, p.revision).job;
+  const current = store.note(p.id, p.revision, "Later evidence is independent");
+  const normalized = store.get(p.id, p.revision);
+  store.close();
+  let db = new Database(path);
+  const digest = (s: string) => createHash("sha256").update(s).digest("hex");
+  const originalRows = () => db.prepare("SELECT * FROM revisions ORDER BY revision").all();
+  const before = originalRows(), version = db.pragma("user_version", { simple: true });
+  const source = (db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=?").get(p.id, p.revision) as { payload: string }).payload;
+  const olderText = JSON.stringify({ ...normalized, model: { providerID: normalized.model.providerID, modelID: normalized.model.modelID } });
+  const seed = () => db.prepare("INSERT OR REPLACE INTO portable_snapshot_cache VALUES (?, ?, 1, ?, ?, ?)")
+    .run(p.id, p.revision, digest(source), digest(olderText), deflateSync(olderText));
+  const read = () => portableSnapshotRecords(db, p.id, p.revision, () => { assert.fail("A valid older computation must upgrade without re-normalizing evidence"); });
+  try {
+    seed();
+    db.exec("CREATE TRIGGER fail_cache_upgrade BEFORE UPDATE ON portable_snapshot_cache BEGIN SELECT RAISE(ABORT, 'Interrupted cache upgrade'); END");
+    assert.throws(read, /Interrupted cache upgrade/);
+    assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 1);
+    assert.deepEqual(originalRows(), before);
+    db.exec("DROP TRIGGER fail_cache_upgrade");
+    const upgraded = read();
+    assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 2);
+    assert.deepEqual(projectFromPortableRecords(upgraded), JSON.parse(olderText));
+    const ordinary = continuationState(current, [job], [], () => normalized);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      db.close(); db = new Database(path);
+      const records = read();
+      const profile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0, serializedRecords: 0, digestComputations: 0, digestHits: 0 };
+      const work = continuationState(current, [job], [], () => normalized, () => records, undefined, profile);
+      assert.deepEqual(renderWorkspace(current, undefined, work), renderWorkspace(current, undefined, ordinary), "All artifact bytes stay identical after upgrade/reopen");
+      assert.equal(profile.serializedRecords, 0, "Cached historical array records are compared without serializing them again");
+      records.fields.find(([key]) => key === "name")![1] = JSON.stringify("Caller mutation");
+      assert.equal(projectFromPortableRecords(read()).name, p.name, "Mutable returned metadata is not retained across invocations");
+      assert.deepEqual(originalRows(), before);
+      assert.equal(db.pragma("user_version", { simple: true }), version, "Derived generations never change the schema or revision counter");
+    }
+    const malformed = JSON.stringify({ format: "future-disposable-cache", fields: [] });
+    db.prepare("UPDATE portable_snapshot_cache SET payload=?, payload_digest=?").run(deflateSync(malformed), digest(malformed));
+    let calls = 0;
+    const recovered = portableSnapshotRecords(db, p.id, p.revision, () => { calls++; return normalized; });
+    assert.equal(calls, 1); assert.deepEqual(recovered, portableRecords(normalized));
+    assert.deepEqual(originalRows(), before);
+  } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("encoded historical records preserve optional/scalar/array distinctions and caller mutation cannot change cached evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("Exact strings", "Escapes: \"quoted\" \\ backslash \n newline 😀", { providerID: "openai", modelID: "fixture", connectionID: "private" });
+    const historical = { ...p, summary: "", analysisRevision: null, origin: undefined, goals: ["a", "\"a\"", "", "null", "undefined"] };
+    const records = portableRecords(historical);
+    assert.deepEqual(projectFromPortableRecords(records), { ...historical, model: { providerID: "openai", modelID: "fixture" } });
+    assert.equal(JSON.stringify(records).includes("private"), false);
+    // Cached readers return independent arrays/strings on each invocation; no
+    // process-wide object memo may retain mutable project records.
+    records.fields.find(([key]) => key === "sources")![1] = [];
+    assert.equal(projectFromPortableRecords(portableRecords(historical)).sources.length, 1);
+  } finally { store.close(); }
 });

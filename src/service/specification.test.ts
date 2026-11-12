@@ -5,7 +5,11 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
-import { type Analysis, type Project, reviewFingerprint, projectSchema, analysisSchema } from "../core/model.js";
+import { type Analysis, type Project, type Submission, type Job, reviewFingerprint, projectSchema, analysisSchema } from "../core/model.js";
+import { applySpecificationUpdates } from "../core/specification.js";
+import { proposeRefinements } from "../core/refinement.js";
+import { refinementIsStale } from "../core/resolution.js";
+import { buildContext } from "../core/context.js";
 import { eligibleRequirements, emptyExecution } from "../core/execution.js";
 import { pendingReviews, reviewItems, ReviewQueue } from "../ui/review.js";
 import { createElement } from "react";
@@ -27,6 +31,50 @@ function seed(store: ProjectStore) {
   return store.get(p.id);
 }
 const wording = { statement: "Save reports offline", rationale: "The user chose offline operation", acceptance: ["A report can be saved without a network connection"] };
+
+for (const stale of [true, false]) test(`${stale ? "outdated" : "current"} replacement ${stale ? "does not manufacture another hold" : "still requires review"} for an explicit update`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); p.requirements[0]!.status = "accepted";
+    const target = p.requirements[0]!;
+    const addInput = () => p.sources.push({ id: "current-input", kind: "note", epicID: "inbox", text: "Save reports offline" });
+    if (!stale) addInput();
+    proposeRefinements(p, [{ ...wording, requirementID: target.id, reason: "Earlier proposed wording" }], () => "earlier-proposal");
+    if (stale) addInput();
+    assert.equal(refinementIsStale(p, p.refinements[0]!), stale);
+    const originalProposal = structuredClone(p.refinements[0]);
+    const item: Submission = { id: "current-submission", projectID: p.id, input: { type: "note", epicID: "inbox", text: "Save reports offline" },
+      status: "processing", applied: true, appliedSourceID: "current-input", conflict: false, auto: false, research: false, submittedAt: "2026-11-11T00:00:00Z" };
+    const job: Job = { id: "current-job", projectID: p.id, model: p.model, expectedRevision: p.revision, status: "running", leaseUntil: null,
+      context: { revision: p.revision, focusEpicID: "inbox", budget: 96000, characters: 0, includedIDs: [target.id, ...p.sources.map(s => s.id)], omittedIDs: [], submissionIDs: [item.id] } };
+    applySpecificationUpdates(structuredClone(p), p, { ...empty(), specificationUpdates: { format: 1, changes: [{ ...wording, type: "revise", requirementID: target.id,
+      sourceIDs: ["current-input"], reason: "Explicit current answer" }] } }, new Map(), job, [item], randomUUID);
+    assert.equal(target.statement, stale ? wording.statement : "Save reports");
+    assert.equal(p.refinements.length, 1, "No parallel replacement is created");
+    assert.deepEqual(p.refinements[0], originalProposal, "Original proposal and evidence are never overwritten");
+    assert.equal(target.authority?.kind, stale ? "answer-derived" : undefined);
+    assert.equal(p.roundChanges.some(s => s.startsWith("Update awaiting review")), !stale);
+  } finally { store.close(); }
+});
+
+test("an exact checked no-op cannot create a hold, approval or replacement while another response waits", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); p.requirements[0]!.status = "accepted";
+    const target = p.requirements[0]!, original = structuredClone(target);
+    p.sources.push({ id: "input", kind: "note", epicID: "inbox", text: "Keep the existing rule" });
+    const item: Submission = { id: "submission", projectID: p.id, input: { type: "note", epicID: "inbox", text: "Keep the existing rule" },
+      status: "processing", applied: true, appliedSourceID: "input", conflict: false, auto: false, research: false, submittedAt: "2026-11-11T00:00:00Z" };
+    const job: Job = { id: "job", projectID: p.id, model: p.model, expectedRevision: p.revision, status: "running", leaseUntil: null,
+      context: { revision: p.revision, focusEpicID: "inbox", budget: 96000, characters: 0, includedIDs: [target.id, ...p.sources.map(s => s.id)], omittedIDs: [], submissionIDs: [item.id] } };
+    applySpecificationUpdates(structuredClone(p), p, { ...empty(), specificationUpdates: { format: 1, changes: [{ type: "revise", requirementID: target.id,
+      statement: target.statement, rationale: target.rationale, acceptance: [...target.acceptance], sourceIDs: ["input"], reason: "Already supported" }] } },
+    new Map(), job, [item, { ...item, id: "waiting", status: "saved", applied: false }], randomUUID);
+    assert.deepEqual(target, original); assert.deepEqual(p.refinements, []);
+    assert.ok(p.roundChanges.some(s => s.startsWith("Already recorded")));
+    assert.equal(p.sources.at(-1)!.id, "input");
+  } finally { store.close(); }
+});
 async function idle(queue: DiscoveryQueue, id: string) {
   for (let i = 0; i < 1500; i++) { if (!queue.isActive(id)) return; await new Promise((done) => setTimeout(done, 5)); }
   assert.fail("Specification queue did not finish");
@@ -120,7 +168,7 @@ test("a new linked unresolved choice holds automatic activation without losing t
     answer(queue, p); await idle(queue, p.id);
     assert.equal(store.submissions(p.id)[0]!.status, "completed");
     const current = store.get(p.id); assert.equal(current.requirements[0]!.status, "proposed");
-    assert.equal(current.requirements[0]!.authority, undefined); assert.ok(current.roundChanges.some((s) => s.startsWith("Needs your decision")));
+    assert.equal(current.requirements[0]!.authority, undefined); assert.ok(current.roundChanges.some((s) => s.startsWith("Update awaiting review")));
   } finally { await queue?.close(); store.close(); }
 });
 
@@ -130,6 +178,10 @@ test("legacy saved work reopens unchanged, explicit retry updates once, and futu
   let store = new ProjectStore(path), queue: DiscoveryQueue | undefined;
   try {
     let p = seed(store); p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "Old saved approval");
+    const proposalJob = store.beginJob(p.id, p.revision).job; store.claimJob(proposalJob.id, Date.now() + 60000);
+    store.attachContext(proposalJob.id, buildContext(p).manifest);
+    store.finishJob(proposalJob.id, { ...empty(), refinements: [{ ...wording, requirementID: p.requirements[0]!.id, reason: "Legacy replacement waiting before this answer" }] });
+    p = store.get(p.id);
     const legacy = structuredClone(p); let calls = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { calls++; throw new Error("Fixture interruption"); } }));
     answer(queue, p); await idle(queue, p.id); const retained = store.get(p.id), submissions = store.submissions(p.id);
@@ -142,6 +194,8 @@ test("legacy saved work reopens unchanged, explicit retry updates once, and futu
     queue.resume(p.id); await idle(queue, p.id);
     const updated = store.get(p.id); assert.equal(store.submissions(p.id)[0]!.status, "completed", store.submissions(p.id)[0]!.diagnostic);
     assert.equal(updated.requirements[0]!.authority?.kind, "answer-derived"); assert.equal(calls, 2);
+    assert.equal(updated.refinements.length, legacy.refinements.length, "Upgrade/continuation creates no parallel replacement");
+    assert.deepEqual(store.get(p.id, legacy.revision), legacy, "The old saved proposal and evidence remain unchanged in history");
     await queue.close(); queue = undefined; store.close(); store = new ProjectStore(path); assert.deepEqual(store.get(p.id), updated); store.close();
     const db = new Database(path);
     const future = structuredClone(updated) as unknown as { requirements: { authority?: { format: number } }[] };

@@ -18,7 +18,10 @@ export const submissionStageResponseSchema = z.union([analysisSchema,
    z.object({ submissionBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
 /** Prompt-only constrained draft. The persisted legacy response parser stays
  * unchanged so upgrading never rewrites earlier wire receipts. */
+const draftAlias = z.string().regex(/^new:[\s\S]*\S[\s\S]*$/, "Use a nonempty new: alias, or omit localID.").optional();
 export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]), actors: z.tuple([]), assumptions: z.tuple([]),
+  questions: z.array(analysisSchema.shape.questions.element.extend({ localID: draftAlias })).max(5),
+  requirements: z.array(analysisSchema.shape.requirements.element.extend({ localID: draftAlias })).max(10),
   organization: z.tuple([]).optional(), assessments: z.tuple([]).optional(), researchFindings: z.tuple([]).optional(),
   scopeAssessment: z.undefined().optional(), resolutionCheck: z.undefined().optional(),
   refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true })).max(10).optional(),

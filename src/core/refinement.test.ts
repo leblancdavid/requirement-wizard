@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "./model.js";
@@ -26,6 +26,75 @@ import Database from "better-sqlite3";
 import { refinementEvidenceRecords, assertRefinementEvidence } from "./refinement-context.js";
 import { coverage } from "./coverage.js";
 import { dimensions } from "./epics.js";
+import { requirementResolutionSchema } from "./requirement-resolution.js";
+
+function humanPair(store: ProjectStore) {
+  let p = store.create("Human pair decision", "Choose an upgrade rule", { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { summary: "Upgrade choices", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [
+    { statement: "Apply upgrades between missions", rationale: "Prepare first", acceptance: ["No upgrades during a mission"], sourceIDs: [p.sources[0]!.id], epicID: "inbox" },
+    { statement: "Explain upgrade tradeoffs", rationale: "Choose knowingly", acceptance: ["Show all ability changes before applying"], sourceIDs: [p.sources[0]!.id], epicID: "inbox" },
+  ] });
+  p = store.get(p.id);
+  for (const r of p.requirements) p = store.review(p.id, p.revision, r.id, "accepted", "Reviewed original");
+  return p;
+}
+
+for (const action of ["remove", "replace", "combine"] as const) test(`one human ${action} decision resolves an exact pair without AI or losing original history`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = humanPair(store), [left, right] = p.requirements, jobs = store.jobs(p.id);
+    const input = { requirementID: left!.id, otherRequirementID: right!.id, action,
+      ...(action === "combine" ? { statement: "Explain upgrade changes and apply upgrades between missions", rationale: "Keep both decisions", acceptance: [...left!.acceptance, ...right!.acceptance] } : {}) };
+    const result = store.resolveRequirementPair(p.id, p.revision, requirementResolutionSchema.parse(input));
+    const kept = result.requirements[action === "remove" ? 1 : 0]!, removed = result.requirements[action === "remove" ? 0 : 1]!;
+    assert.equal(removed.status, "rejected");
+    if (action !== "combine") assert.deepEqual(kept, action === "remove" ? right : left, "The retained requirement stays exact");
+    else {
+      assert.equal(kept.status, "accepted"); assert.deepEqual(kept.acceptance, [...left!.acceptance, ...right!.acceptance]);
+      assert.ok([...left!.sourceIDs, ...right!.sourceIDs].every(id => kept.sourceIDs.includes(id)));
+      assert.equal(kept.authority, undefined, "Human approval is not AI answer-derived authority");
+    }
+    assert.deepEqual(store.get(p.id, p.revision), p); assert.deepEqual(store.jobs(p.id), jobs);
+    assert.ok(result.sources.some(s => s.kind === "rejection" && s.text.includes(JSON.stringify(left)) && s.text.includes(JSON.stringify(right))));
+    assert.throws(() => store.resolveRequirementPair(p.id, p.revision, requirementResolutionSchema.parse(input)), /changed|stale|revision/i);
+    assert.throws(() => store.resolveRequirementPair(p.id, result.revision, requirementResolutionSchema.parse(input)), /no longer active|active requirements/);
+    assert.deepEqual(store.get(p.id), result, "A stale retry cannot repeat the decision");
+  } finally { store.close(); }
+});
+
+test("pair resolution refuses malformed combinations, inactive targets, missing decisions and unfinished input atomically", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = humanPair(store), [left, right] = p.requirements;
+    const base = { requirementID: left!.id, otherRequirementID: right!.id, action: "combine" as const, statement: "Keep both", rationale: "Both choices", acceptance: ["Preserve both behaviors"] };
+    for (const bad of [{ ...base, acceptance: Array(9).fill("Do not truncate") }, { ...base, statement: "" }, { ...base, guessed: true }]) assert.equal(requirementResolutionSchema.safeParse(bad).success, false);
+    assert.throws(() => store.resolveRequirementPair(p.id, p.revision, { action: "remove", requirementID: left!.id, otherRequirementID: left!.id }), /different/);
+    assert.deepEqual(store.get(p.id), p);
+    const note = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", epicID: "inbox", text: "Keep a further restriction" } });
+    assert.throws(() => store.resolveRequirementPair(p.id, p.revision, base), /pending human input/);
+    assert.deepEqual(store.get(p.id), p); assert.equal(store.submissions(p.id)[0]!.id, note.id);
+  } finally { store.close(); }
+});
+
+test("older saved pairs reopen unchanged; human combination and original evidence survive repeated restart and portable export", async () => {
+  const { renderWorkspace } = await import("../storage/workspace.js");
+  const { decodePortable } = await import("../storage/portable.js");
+  const { emptyExecution } = await import("./execution.js");
+  const dir = mkdtempSync(join(tmpdir(), "reqwizit-human-pair-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const original = humanPair(store); store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.get(original.id), original); assert.equal(store.jobs(original.id).length, 1);
+    const [left, right] = original.requirements;
+    assert.throws(() => store.resolveRequirementPair(original.id, original.revision, { requirementID: left!.id, otherRequirementID: "missing", action: "remove" }));
+    assert.deepEqual(store.get(original.id), original);
+    const result = store.resolveRequirementPair(original.id, original.revision, { requirementID: left!.id, otherRequirementID: right!.id, action: "combine",
+      statement: "Explain tradeoffs and apply upgrades between missions", rationale: "Keep both decisions", acceptance: [...left!.acceptance, ...right!.acceptance] });
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(path); assert.deepEqual(store.get(original.id), result); assert.deepEqual(store.get(original.id, original.revision), original); }
+    assert.deepEqual(decodePortable(renderWorkspace(result, emptyExecution()), result.model).project.requirements, result.requirements);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 const empty = (): Analysis => ({ summary: "Game", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 async function seed(store: ProjectStore) {

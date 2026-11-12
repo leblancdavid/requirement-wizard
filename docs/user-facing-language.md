@@ -30,6 +30,14 @@ Plain language is the default throughout the app, not only in interview question
 
 ## Implemented presentation pass
 
+Requirement review now leads with a short **Why this needs review** explanation and
+names the other requirement in an overlap. **Resolve → remove, replace or combine →
+Save resolution** is the ordinary pair flow. Full expected behavior stays available
+side by side (stacked on phones). Processing holds, possible similarity, actual saved
+answer conflicts and outdated suggestions use different explanations. Technical
+diagnostics and secondary tools are not the main decision. See
+[the revised review flow](browser-workspace.md#one-place-to-resolve-overlapping-requirements-2026-11-11).
+
 Initial shared-answer conflicts now show original answers and unselected decisions
 directly on the blocked requirement. **Save decision & continue** replaces the separate
 save/dialog/Play detour; progress and checked changed/unchanged wording feedback stay

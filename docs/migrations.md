@@ -1,5 +1,141 @@
 # Data migrations and upgrade compatibility
 
+## Plain-language requirement resolution (2026-11-11)
+
+**Source → target: unchanged SQLite 67 / portable formats up to 41.** A new explicit
+human operation resolves two exact current requirements through remove, replace or
+combine. It stores existing confirmation/rejection sources and revision history;
+there are no new persisted envelope fields, authority kinds or freshness rules.
+Older workspaces open unchanged, including paid checks, pending proposals, original
+answers and assessments. Startup performs no resolution or model work. No reset or
+reassessment is required just to use the revised UI.
+
+The authenticated, same-origin `resolve-requirements` API requires the current
+project revision, two distinct active IDs and an explicit choice. Existing job,
+unfinished-input, execution and unresolved-question gates still apply. Remove and
+replace retire only the chosen record; the other record is unchanged. Combine
+requires the human-reviewed statement, rationale and complete acceptance list within
+existing schema bounds. It retains one stable ID, both originals' supporting source
+IDs, exact original snapshots in human evidence/history, and marks the combined
+wording human-approved, never answer-derived. No AI synthesis or silent concatenation
+is authorized by the operation. The editor supplies an editable draft; opening or
+selecting it changes no project state. More than eight examples must be consolidated
+explicitly, never truncated. Pending suggestions overtaken by the direct decision
+are dismissed, not falsely recorded as approved in their original form.
+
+Writes are transactional and revision-checked. Failed validation leaves originals
+unchanged; a stale or lost-ack retry cannot apply the same retirement twice. A save
+whose acknowledgement is uncertain tells the user to inspect current state, not
+that nothing changed. Drafts are retained while the comparison remains open. A
+project change disables saving until the person reviews the latest pair; their
+text is kept and the choice is cleared for explicit reselection. Closing without
+saving changes nothing.
+
+Read-only review reasons distinguish new behavior, suggested changes, missing
+decisions, outdated suggestions and unfinished checks. Wording similarity is still
+only a possible overlap, not a confirmed duplicate or a new review requirement.
+Shared-answer conflicts show only exactly linked affected requirements, never
+similarity-inferred relationships. Historical generated prose is kept in details.
+
+Upgrade tests reopen older saved pairs without new jobs, reject a failed operation
+without data loss, combine explicitly, then reopen repeatedly and round-trip portable
+requirements. Additional tests cover all three directions, complete supporting
+evidence, stale retries, malformed/oversized combinations and unfinished input.
+No live-model or reported-personal-project recovery is claimed by these checks.
+
+## Requirement update holds and focused resolution (2026-11-11)
+
+**Source → target: unchanged SQLite 67 / existing portable formats (up to 41).**
+No schema migration, evidence/fingerprint rewrite, assessment invalidation, startup
+model call or automatic retry is introduced. On explicit publication/continuation,
+the automatic-update gate now uses the existing `refinementIsStale` predicate:
+an outdated pending suggestion is not a current competing replacement. Current
+proposals, unfinished related input and linked unresolved questions still hold
+actual changes. Authorization, complete evidence, exact target scope and original
+staged verification checks remain mandatory. Prior suggestions and receipts are
+not overwritten; normal successful-completion reconciliation retains withdrawal
+history. Already-outdated legacy suggestions may remain available for dismissal.
+
+An exact revision no-op (same statement, rationale and ordered acceptance scenarios)
+records no new requirement authority, source links, approval or replacement. Human
+input remains saved. New hold explanations separate the actual gate reason from
+the proposed change; old reasons remain intact and are labelled historical in UI.
+
+UI recovery projects existing submission/proposal IDs directly. Duplicate search
+and ranked choices are local navigation, not semantic matching or merge authority.
+Selected pairs survive filtering and are rechecked against the current revision
+and pending-work gates before the existing atomic duplicate removal. No bodies or
+scenarios are truncated. No changes are made to the surviving requirement.
+
+Regression coverage includes stale versus current proposals, exact no-ops with
+waiting input, a 600-item bounded picker, original blocker visibility and historical
+hold labels. Existing reopen/future-format and cancellation/stale-worker tests remain
+applicable. The supplied metadata-only diagnostics cannot establish its exact
+publication error; recovery of that particular live project is not qualified.
+
+## Exact serialized portable-snapshot computation (2026-11-11)
+
+**Source → target: unchanged SQLite 67 / portable formats (up to 41); disposable
+`portable_snapshot_cache` generation 1 → 2.** Only the derived computation changes:
+the compressed cache now stores ordered exact JSON strings for scalar fields and
+individual array records. Exports compare those strings directly, decoding each
+distinct retained delta object only once. They still select the same jobs, revisions
+and original evidence and emit identical artifact bytes. No assessment, context,
+fingerprint, paid receipt, history, spent attempt or project revision is rewritten.
+
+On demand, a generation-1 entry with matching original-source and decompressed-payload
+SHA-256 digests is converted without repeating schema normalization. Source bytes are
+checked on every read; existing revision-change invalidation triggers remain. New
+entries use fast level-1 compression. Entry decompression remains capped at 64 MiB;
+larger computed representations are processed without caching, never truncated.
+There is no unbounded process-wide historical-project cache. The existing bounded
+per-publication digest memo remains; `serializedRecords` measures serialization in
+the delta phase, excluding records encoded while building/upgrading the snapshot cache.
+
+Each conversion is one atomic cache-row replacement. Failure leaves original
+evidence and the old row intact for retry. Missing, corrupt, mismatched or unknown
+disposable generations rebuild from the original normalized evidence; none authorize
+freshness, grant calls or retry model work. Older app versions can rebuild their own
+derived representation. Unsupported future **source/portable** formats retain the
+existing rejection rules; a disposable cache generation is not an evidence version.
+
+Verified: type checking, 39 targeted portable/cache/workspace tests, the portable
+browser check and the complete `npm test` run (938 pre-test + 789 main + 279
+post-test = 2,006 passing tests),
+including generation-1 conversion, injected conversion-write failure/retry, repeated
+file-backed reopen, unchanged original bytes, corrupt/stale caches, >8 MiB snapshots,
+independent legacy artifact comparisons, clone/adoption and capped-heap publication.
+The extended `npm run benchmark:continuation` checks all result bytes against an
+independent generation-1 reader. In a synthetic 64-snapshot/1,600-record in-memory
+SQLite fixture, cold computation was about 1.11s versus 1.27s; warm computation
+about 0.48s versus 0.62s. Initial conversion was about 0.85s and performed zero schema
+normalizations. A subsequent run measured about 0.46s versus 0.58s warm; compressed
+cache rows occupied about 925kB versus 858kB (roughly 8% more). Faster compression
+can trade additional disposable local storage for less CPU. These are fixture
+timings, not resolution of the observed 45-second
+real-project pause. No live calls or user database edits were made.
+
+## Saved-response declaration guidance (2026-11-11)
+
+**Source → target: unchanged SQLite 67 / portable formats (up to 41).** The
+prompt-only saved-response draft schema now restricts question/requirement local
+aliases to nonempty `new:` strings. Instructions recommend omitting unused aliases
+and require uniqueness across both arrays, including retained draft declarations.
+Cross-array uniqueness remains enforced by the existing acceptance validator;
+schema guidance is not proof that a model will comply.
+
+No migration or receipt rewrite is needed: the persisted response parser, accepted
+draft semantics, exact context/plan keys, verification rules and request allowances
+are unchanged. Invalid declarations still fail atomically, never receive fabricated
+IDs, and do not publish a partial result. Explicit continuation retains the spent
+attempt and saved schedule; startup does not retry a model call. This prevents a
+prompt/schema mismatch, not automatic recovery of rejected response text.
+
+Verified: type checking and 138 targeted saved-response, discovery, clarification
+and workflow-resilience tests. Added tests cover omitted/valid/malformed aliases,
+cross-array duplicates, no partial publication, two file-backed reopens and explicit
+continuation charging attempt two. No live model call or user-data edit was made.
+
 ## Empty discovery completion and exact continuation computation (2026-11-11)
 
 **Source → target: SQLite 66 → 67; conditional portable format 41.** This is an
@@ -58,10 +194,11 @@ attempts, transactional failure/retry for future policy data, explicit new-forma
 portable round trips/downgrade rejection, late proposals, final-proposal removal,
 stale/cancelled empty replies and no-call reuse of retained empty completion. Export
 tests retain independent byte-for-byte comparison and capped-heap historical loading.
-Type checking, targeted tests, UI build, the benchmark and the complete browser suite
-(including its post-test checks) passed. The full unit suite is running after fixing
-an older pause fixture that returned no proposals and now correctly finishes early;
-that fixture now retains a proposal until verification. No live model call or
+Verified: type checking; targeted boundary/upgrade tests; UI build; the benchmark;
+the complete browser suite including post-test checks; and the full `npm test` run
+(936 pre-test + 789 main + 277 post-test = 2,002 passing tests). An older pause fixture
+now retains a proposal until verification instead of returning an empty draft that
+correctly finishes early. Diff whitespace checks passed. No live model call or
 user-database modification was made.
 
 ## Measured individual-answer packing and input-change diagnostics (2026-11-11)

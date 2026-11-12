@@ -20,6 +20,70 @@ import { DiscoveryMeasurement } from "./discovery-metrics.js";
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
 
+test("saved-response authoring schema constrains declaration aliases and prompt explains shared uniqueness", () => {
+  const f = fixture();
+  try {
+    const output = f.output();
+    output.questions = [{ text: "When should offline copies expire?", whyItMatters: "Retention", options: [{ label: "Never", consequence: "Keep copies" }, { label: "After a month", consequence: "Remove older copies" }], epicID: "inbox" }];
+    output.requirements = [{ statement: "Save reports offline", rationale: "Explicit input", acceptance: ["Save without a network"], sourceIDs: [f.item.appliedSourceID!], epicID: "inbox" }];
+    assert.equal(submissionDraftSchema.safeParse(output).success, true, "Aliases may be omitted");
+    for (const alias of ["", "new:", "new: \t\r\n", "question-1", f.project.requirements[0]!.id]) {
+      for (const field of ["questions", "requirements"] as const) {
+        const bad = structuredClone(output); bad[field][0]!.localID = alias;
+        assert.equal(submissionDraftSchema.safeParse(bad).success, false, `${field}: ${JSON.stringify(alias)}`);
+      }
+    }
+    output.questions[0]!.localID = "new:q-retention"; output.requirements[0]!.localID = "new:req-offline";
+    assert.equal(submissionDraftSchema.safeParse(output).success, true);
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const context = submissionStageContext(m, w, replaySubmissionStages(m, w).draft);
+    const prompt = discoveryPrompt(f.project, context, false);
+    assert.match(prompt, /Omit localID on new questions\/requirements unless/);
+    assert.match(prompt, /unique across BOTH questions and requirements/);
+    assert.match(prompt, /"pattern":"\^new:/);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    for (const alias of ["", "new:", "new: \t", "question-1", "new:duplicate"]) {
+      const bad = structuredClone(output); bad.questions[0]!.localID = alias; bad.requirements[0]!.localID = alias;
+      w.attempts = 1;
+      assert.throws(() => acceptSubmissionStage(m, w, replaySubmissionStages(m, w).draft, bad, job), /unique nonempty new: aliases/);
+      assert.equal(w.receipts.length, 0); assert.equal(w.attempts, 1);
+      assert.deepEqual(f.store.get(f.project.id), f.project);
+    }
+  } finally { f.store.close(); }
+});
+
+test("alias-rejected saved response reopens unchanged and continues with its spent attempt", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-alias-retry-")), file = join(directory, "state.sqlite");
+  const f = fixture(file); let store = f.store;
+  try {
+    const original = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(original.id, Date.now() + 60000);
+    await assert.rejects(runSubmissionStages(store, { async analyze() {
+      return { ...f.output(), questions: [{ localID: "question-1", text: "When should copies expire?", whyItMatters: "Retention", options: [{ label: "Never", consequence: "Keep copies" }, { label: "After a month", consequence: "Remove older copies" }], epicID: "inbox" }] };
+    } }, f.project, original, f.item, f.task, { signal: new AbortController().signal, research: false }), /unique nonempty new: aliases/);
+    store.failJob(original.id, "failed", "Invalid saved-response alias");
+    const saved = store.getJob(original.id);
+    assert.equal(saved.submissionWork!.attempts, 1); assert.equal(saved.submissionWork!.receipts.length, 0);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(file);
+      assert.deepEqual(store.getJob(original.id), saved);
+      assert.deepEqual(store.get(f.project.id), f.project);
+    }
+    const next = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+    let calls = 0;
+    const completed = await runSubmissionStages(store, { async analyze(p, options) {
+      if (!calls++) assert.equal(store.getJob(next.id).submissionWork!.attempts, 2);
+      return adapter(f).analyze(p, options);
+    } }, f.project, next, f.item, f.task, { signal: new AbortController().signal, research: false });
+    assert.equal(completed.status, "completed");
+    assert.equal(calls, saved.submissionWork!.batches.length * 2);
+    assert.deepEqual(completed.submissionWork!.batches, saved.submissionWork!.batches);
+    assert.equal(completed.submissionWork!.planKey, saved.submissionWork!.planKey);
+    assert.equal(completed.submissionWork!.receipts[0]!.attempt, 2);
+    assert.deepEqual(store.getJob(original.id), saved);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 // Exact pre-upgrade planner: retained here to exercise real old schedules, not
 // schedules newly generated by the implementation under test.
 function legacySubmissionPlan(m: ReturnType<typeof submissionMaterials>) {

@@ -10,6 +10,7 @@ import type { coverage } from "../core/coverage.js";
 import { dimensionLabels } from "../core/epics.js";
 import "./appearance.css";
 import "./review.css";
+import "./requirement-resolution.css";
 import "./action-button.css";
 import { ReviewQueue, reviewItems, type ReviewDraft } from "./review.js";
 import { Pagination, PagedList, usePagination } from "./pagination.js";
@@ -342,15 +343,21 @@ function App() {
     try {
       const saved = await api<Submission>(`projects/${projectID}/submit`, { id: submissionID, input, auto: processAutomatically, research: useResearch, ...(replaces ? { replaces } : {}) });
       requests.current.delete(payload);
-      if (input.type === "answer" && data?.workflow?.answerBatch?.waiting) {
+      if (input.type === "answer") {
         const snapshot = refresh.current.acknowledge(projectID, (current) => ({ ...current,
           submissions: current.submissions.some(s => s.id === saved.id) ? current.submissions : [
             ...current.submissions.map(s => s.id === saved.replaces && s.status === "queued"
               ? { ...s, status: "superseded" as const, conflict: true } : s), saved],
         }), ["submissions"]);
         if (snapshot && selected.current === projectID) setData(snapshot);
-        // Polling refreshes progress and any subsequent processing independently.
         // The response is already durable; an unrelated refresh cannot fail its save.
+        // Collection already polls independently. Other modes refresh immediately,
+        // but never keep the answer card in "Saving…" while waiting for that work.
+        if (!data?.workflow?.answerBatch?.waiting) {
+          void Promise.all([load(projectID, undefined, true), list()]).catch((error: unknown) => {
+            if (selected.current === projectID) setError(`Your answer is saved, but the workspace could not refresh. ${error instanceof Error ? error.message : "Refresh failed."}`);
+          });
+        }
       } else { await load(projectID); await list(); }
       return saved.status !== "needs-attention";
     } catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not submit response. Your draft is retained." })); return false; }
@@ -512,6 +519,10 @@ function App() {
       removeDuplicate={async (revision, removeID, keepID, note) => {
         let saved = false;
         await act(async () => { await api(`projects/${project.id}/remove-duplicate`, { revision, removeID, keepID, note }); saved = true; });
+        return saved;
+      }} resolvePair={async (revision, decision) => {
+        let saved = false;
+        await act(async () => { await api(`projects/${project.id}/resolve-requirements`, { revision, decision }); saved = true; });
         return saved;
       }} />;
   };

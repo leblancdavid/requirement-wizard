@@ -122,7 +122,7 @@ try {
   });
   await coldPage.goto(app.origin); await within(coldList.arrived, "cold project-list request");
   await expect(coldPage.getByLabel("Project name", { exact: true })).toHaveCount(0);
-  await expect(coldPage.getByText("Loading your workspace…", { exact: true })).toBeVisible();
+  await expect(coldPage.getByRole("region", { name: "Opening workspace", exact: true })).toContainText("Loading your saved project list…");
   coldList.release(); await expect(coldPage.getByRole("tab", { name: /^Design/ })).toBeVisible();
   await coldContext.close();
   const emptyContext = await browser.newContext();
@@ -174,8 +174,74 @@ try {
   assert.deepEqual(store.get(first.id), originals[0]);
   assert.deepEqual(store.get(retained.id).sources, originals[1]!.sources);
   assert.deepEqual(store.get(retained.id, originals[1]!.revision), originals[1]);
-  assert.deepEqual(errors, []);
-  console.log("Browser reliability checks passed: controlled reload response orders, overtaking poll, project switching, tooltip Escape/hover precondition, blur-timer cancellation, keyboard/touch dismissal and zero inference.");
+
+  // Outside collection, durable saves must finish even with both refreshes held.
+  const answers = store.create("Immediate answer saves", "Keep original responses", first.model);
+  const seed = store.beginJob(answers.id, answers.revision).job;
+  store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { summary: "Save acknowledgement fixture", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+    questions: ["Which response should be saved first?", "Which response should survive a refresh failure?", "Which draft should survive a save failure?"].map(text => ({
+      epicID: "inbox", text, whyItMatters: "Keep each original response", options: [{ label: "Keep it", consequence: "Retain the response" }, { label: "Defer", consequence: "Decide later" }],
+    })) });
+  store.pauseQueue(answers.id, true);
+  const answerContext = await browser.newContext();
+  const answerPage = await answerContext.newPage();
+  answerPage.on("pageerror", error => errors.push(error.message));
+  await answerPage.addInitScript(projectID => {
+    localStorage.setItem("reqwizit-project", projectID);
+    localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false");
+  }, answers.id);
+  await answerPage.goto(app.origin);
+  await expect(answerPage.getByRole("heading", { name: answers.name, exact: true })).toBeVisible();
+  assert.equal(store.workflow(answers.id).enabled, false, "Exercise the non-collection save path");
+  const questions = store.get(answers.id).questions;
+  for (const [index, failure] of [false, true].entries()) {
+    const question = questions[index]!;
+    const card = answerPage.locator(".question-card").filter({ has: answerPage.getByRole("heading", { name: question.text, exact: true }) });
+    if (!(await card.getAttribute("class"))?.includes("expanded")) await card.getByRole("button", { name: "Answer", exact: true }).click();
+    await card.getByRole("textbox").fill(`Original response ${index}`);
+    const snapshotGate = gate(), listGate = gate(); otherGates.push(snapshotGate, listGate);
+    await answerContext.route("**/api/projects**", async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      const controlled = pathname === "/api/projects" ? listGate : pathname === `/api/projects/${answers.id}` ? snapshotGate : null;
+      if (route.request().method() !== "GET" || !controlled) { await route.continue(); return; }
+      const response = failure ? null : await route.fetch();
+      controlled.arrive(); await controlled.released;
+      if (response) await route.fulfill({ response });
+      else await route.fulfill({ status: 503, json: { error: "Controlled answer refresh failure" } });
+    });
+    await card.getByRole("button", { name: "Save response →", exact: true }).click();
+    await within(Promise.all([snapshotGate.arrived, listGate.arrived]), "independent answer refreshes");
+    await expect(answerPage.locator(".save-notice").filter({ hasText: "Answer saved." })).toBeVisible();
+    await expect(card).toHaveCount(0);
+    assert.equal(store.submissions(answers.id).filter(s => s.input.type === "answer" && s.input.questionID === question.id).length, 1);
+    snapshotGate.release(); listGate.release();
+    if (failure) {
+      await expect(answerPage.getByRole("alert")).toBeVisible();
+      await answerPage.locator(".error").getByRole("button", { name: "View logs", exact: true }).click();
+      const logs = answerPage.getByRole("dialog", { name: "Logs", exact: true });
+      await expect(logs).toContainText("Your answer is saved, but the workspace could not refresh.");
+      await logs.getByRole("button", { name: "Close logs", exact: true }).click();
+      await expect(answerPage.locator(".save-notice").filter({ hasText: "Answer saved." })).toBeVisible();
+    }
+    await answerContext.unrouteAll({ behavior: "wait" });
+  }
+  const failedQuestion = questions[2]!;
+  const failedCard = answerPage.locator(".question-card").filter({ has: answerPage.getByRole("heading", { name: failedQuestion.text, exact: true }) });
+  if (!(await failedCard.getAttribute("class"))?.includes("expanded")) await failedCard.getByRole("button", { name: "Answer", exact: true }).click();
+  await failedCard.getByRole("textbox").fill("Keep my unsaved draft");
+  await answerContext.route(`**/api/projects/${answers.id}/submit`, route => route.fulfill({ status: 503, json: { error: "Controlled answer save failure" } }));
+  await failedCard.getByRole("button", { name: "Save response →", exact: true }).click();
+  await expect(failedCard.getByRole("textbox")).toHaveValue("Keep my unsaved draft");
+  await expect(failedCard.getByRole("button", { name: "Save response →", exact: true })).toBeEnabled();
+  assert.equal(store.submissions(answers.id).length, 2, "Failed storage must not acknowledge a new response");
+  await answerContext.unrouteAll({ behavior: "wait" });
+  await failedCard.getByRole("button", { name: "Save response →", exact: true }).click();
+  await expect(failedCard).toHaveCount(0);
+  assert.equal(store.submissions(answers.id).length, 3, "Retry saves exactly one response");
+  assert.equal(modelCalls, 0); assert.deepEqual(errors, []);
+  await answerContext.close();
+  console.log("Browser reliability checks passed: controlled reload response orders, overtaking poll, project switching, tooltip interactions, immediate answer acknowledgements despite delayed/failed refreshes, retained drafts after save failure and zero inference.");
 } catch (error) {
   await diagnose?.(".reqwizit-state/browser-reliability-failure").catch((diagnosticError: unknown) => console.error("Could not save browser diagnostics", diagnosticError));
   throw error;

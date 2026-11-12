@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { portableSnapshot } from "./portable-snapshots.js";
+import { portableSnapshotRecords } from "./portable-snapshots.js";
 import { readRefinementEvidence } from "./refinement-evidence.js";
 import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
@@ -75,6 +75,7 @@ import { definitionPublicationKey as jointKey } from "../core/definition-publica
 import { completedDefinitionAssessment, definitionWorkSchema, definitionBlockedSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
+import { resolveRequirementPair, type RequirementResolution } from "../core/requirement-resolution.js";
 import { specificationUpdatesSchema, stagedDefinitionAnalysisSchema } from "../core/model.js";
 import { wordingKey } from "../core/similarity.js";
 import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
@@ -609,7 +610,7 @@ export class ProjectStore {
       metrics.continuationProfile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0,
         serializedRecords: 0, digestComputations: 0, digestHits: 0 };
       const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
-        (revision) => portableSnapshot(this.db, id, revision, () => this.get(id, revision)),
+        (revision) => portableSnapshotRecords(this.db, id, revision, () => this.get(id, revision)),
         (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile);
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
@@ -2755,6 +2756,14 @@ export class ProjectStore {
       const availability = decisionAvailability(project, ids, this.submissions(id), this.jobs(id));
       if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
       removeRequirementAsDuplicate(project, removeID, keepID, note, randomUUID);
+    });
+  }
+
+  resolveRequirementPair(id: string, revision: number, input: RequirementResolution) {
+    return this.mutate(id, revision, "Human resolved two requirements", project => {
+      const availability = decisionAvailability(project, [input.requirementID, input.otherRequirementID], this.submissions(id), this.jobs(id));
+      if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
+      resolveRequirementPair(project, input, randomUUID);
     });
   }
 

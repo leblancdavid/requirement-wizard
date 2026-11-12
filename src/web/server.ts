@@ -6,6 +6,7 @@ import { defaultDataDirectory } from "../storage/paths.js";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { requirementResolutionSchema } from "../core/requirement-resolution.js";
 import { processingPolicyChangeSchema } from "../core/processing-policy.js";
 import { answerGroupProgress, answerGroupClarificationView } from "../core/answer-group.js";
 import { ProjectStore } from "../storage/store.js";
@@ -582,6 +583,11 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "remove-duplicate") {
         const input = z.object({ revision, removeID: z.string(), keepID: z.string(), note: z.string().max(12000).default("") }).strict().parse(raw);
         json(res, 200, options.store.removeDuplicate(id, input.revision, input.removeID, input.keepID, input.note)); return;
+      }
+      if (action === "resolve-requirements") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, decision: requirementResolutionSchema }).strict().parse(raw);
+        json(res, 200, options.store.resolveRequirementPair(id, input.revision, input.decision)); return;
       }
       if (action === "refresh-refinement") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

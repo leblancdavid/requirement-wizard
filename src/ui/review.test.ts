@@ -24,6 +24,83 @@ import { dimensions } from "../core/epics.js";
 import { currentSharedConflicts, sharedAnswerDecision, sharedConflictJob } from "./shared-answer-decision.js";
 import { SharedConflictNotice } from "./shared-conflict-notice.js";
 import { SharedAnswerClarification } from "./shared-answer-clarification.js";
+import { BlockingInputList } from "./decision-recovery.js";
+import { RequirementPairIssue, RequirementResolutionForm } from "./requirement-resolution.js";
+import { reviewReason } from "./review-reason.js";
+import { sharedConflictRequirements } from "./shared-answer-decision.js";
+
+test("a possible duplicate names the exact other story and offers one plain Resolve action", () => {
+  const p = fixture(), original = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(RequirementPairIssue, { project: p, requirementID: "jump", otherRequirementID: "aim", submissions: [], jobs: [], disabled: false,
+    save: async () => { assert.fail("No decisions on render"); } }));
+  assert.match(html, /Other requirement:<\/strong> Behavior aim/); assert.match(html, /Possible overlap/);
+  assert.equal((html.match(/<button/g) ?? []).length, 1); assert.match(html, />Resolve<\/button>/);
+  assert.doesNotMatch(html, /Remove as duplicate|fingerprint|Approve refinement|<select/);
+  const form = renderToStaticMarkup(createElement(RequirementResolutionForm, { project: p, requirementID: "jump", otherRequirementID: "aim", submissions: [], jobs: [], disabled: false,
+    save: async () => true, close() {} }));
+  assert.match(form, /This requirement/); assert.match(form, /Other requirement/);
+  assert.match(form, /Remove this requirement/); assert.match(form, /Replace the other requirement with this one/); assert.match(form, /Combine both requirements/);
+  assert.doesNotMatch(form, /checked=""/); assert.match(form, /aria-disabled="true"[^>]*>Save resolution/);
+  assert.deepEqual(p, original);
+});
+
+test("review explanations distinguish new behavior, changed suggestions, missing choices and saved processing without invented conflict claims", () => {
+  const p = fixture();
+  assert.equal(reviewReason(p, ["aim"], [], [])?.title, "New requirement");
+  assert.equal(reviewReason(p, ["jump"], [], [], p.refinements[0])?.title, "A change is suggested");
+  const note: Submission = { id: "waiting", projectID: p.id, input: { type: "note", epicID: "inbox", text: "Explain ability tradeoffs" }, status: "needs-attention", applied: false,
+    conflict: false, auto: false, research: false, submittedAt: "2026-11-11T00:00:00Z" };
+  const reason = reviewReason(p, ["jump"], [note], []);
+  assert.equal(reason?.actionNeeded, false); assert.equal(reason?.title, "A saved answer needs checking");
+  assert.match(reason!.explanation, /does not mean the requirements conflict/);
+  p.questions.push({ id: "choice", text: "Can upgrades reduce another ability?", whyItMatters: "Define tradeoffs", epicID: "inbox", status: "pending", evidenceIDs: ["jump"], options: [{ label: "Yes", consequence: "Tradeoffs allowed" }, { label: "No", consequence: "Only benefits" }] });
+  assert.equal(reviewReason(p, ["jump"], [], [])?.explanation, "Can upgrades reduce another ability?");
+});
+
+test("saved-answer conflicts show only requirements linked by exact originals, not guessed similar stories", () => {
+  const p = fixture();
+  p.sources.push({ id: "answer", kind: "answer", text: "Between missions only", questionID: "upgrade-question", epicID: "inbox" });
+  p.questions.push({ id: "upgrade-question", text: "When can upgrades apply?", whyItMatters: "Timing", epicID: "inbox", status: "answered", sourceID: "answer", evidenceIDs: ["aim"], options: [{ label: "Before", consequence: "Prepare" }, { label: "During", consequence: "Adapt" }] });
+  p.requirements[0]!.sourceIDs.push("answer");
+  assert.deepEqual(sharedConflictRequirements(p, ["answer"]).map(r => r.id), ["jump", "aim"]);
+});
+
+test("duplicate choices are bounded, searchable and retain explicitly selected pairs outside the first page", () => {
+  const p = fixture();
+  const base = p.requirements[0]!;
+  p.requirements = Array.from({ length: 600 }, (_, i) => ({ ...base, id: `large-${i}`, statement: `Rule ${String(i).padStart(3, "0")}`, acceptance: [`Scenario ${i}`] }));
+  const original = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(DuplicateRemovalForm, { project: p, removeID: "large-598", keepID: "large-599", disabled: false,
+    save: async () => { assert.fail("Never remove on render"); }, close() {} }));
+  assert.match(html, /Search remove requirements/); assert.match(html, /Search keep unchanged requirements/);
+  assert.match(html, /showing the first 25/);
+  assert.ok((html.match(/<option/g) ?? []).length <= 54, "Do not render hundreds of options");
+  assert.match(html, /value="large-598" selected=""/); assert.match(html, /value="large-599" selected=""/);
+  assert.match(html, /Scenario 598/); assert.match(html, /Scenario 599/);
+  assert.deepEqual(p, original);
+});
+
+test("blocked review identifies original responses and opens exact recovery without treating processing as duplication", () => {
+  const p = fixture();
+  const input: Submission = { id: "blocked", projectID: p.id, status: "needs-attention", applied: true, conflict: false, auto: false, research: false,
+    submittedAt: "2026-11-11T00:00:00Z", diagnostic: "Publication failed <script>", input: { type: "note", epicID: "inbox", text: "Preserve all existing benefits <script>" } };
+  const html = renderToStaticMarkup(createElement(BlockingInputList, { availability: { state: "waiting", submissionIDs: [input.id], jobIDs: [] },
+    submissions: [input, { ...input, id: "unrelated", input: { type: "note", epicID: "inbox", text: "Unrelated private note" } }], open() { assert.fail("Never open on render"); } }));
+  assert.match(html, /not proof of a conflict or duplicate/); assert.match(html, /View &amp; resolve saved response/);
+  assert.match(html, /Preserve all existing benefits &lt;script&gt;/);
+  assert.doesNotMatch(html, /Unrelated private note|<script>/);
+});
+
+test("focused approved requirement links its pending replacement and labels old hold notes as history", () => {
+  const p = fixture(); const target = p.requirements.find(r => r.id === "aim")!;
+  target.status = "accepted"; target.reviewNote = "Automatic update held for a decision: Earlier update";
+  const proposal = p.refinements[0]!; proposal.requirementID = target.id; proposal.status = "pending";
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    focusRequirementID: target.id, refine() {}, submit: async () => true, reviewRefinement: async () => true }));
+  assert.match(html, /A replacement proposal is not an extra requirement/);
+  assert.match(html, /Review proposed update:/);
+  assert.match(html, /saved history, not a current conflict verdict/);
+});
 
 test("shared conflict choices preserve exact originals, require an explicit selection and allow a custom exception without guessed precedence", () => {
   const p = fixture();

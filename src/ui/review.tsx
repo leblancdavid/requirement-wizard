@@ -3,7 +3,7 @@ import { reviewFingerprint, type Job, type Project, type Submission, type Review
 import { ChangeRequestForm } from "./change-request.js";
 import { captureAnswerScope } from "../core/input-scope.js";
 import { decisionAvailability, decisionClarifications, decisionContextKey, decisionEvidenceSources } from "../core/decision-availability.js";
-import { relatedRequirements } from "../core/similarity.js";
+import { relatedRequirements, wordingSimilarity } from "../core/similarity.js";
 import { ActionButton, ActionScope } from "./action-button.js";
 import { refinementIsStale, refinementStaleReason } from "../core/resolution.js";
 import { SubmissionOverlapStatus } from "./submission-overlap.js";
@@ -11,7 +11,7 @@ import { PagedList } from "./pagination.js";
 import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { reviewUpdateFor } from "../core/review-completion.js";
-import { ClarificationLinks, ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
+import { BlockingInputList, ClarificationLinks, ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { AttentionInbox } from "./attention.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
@@ -19,6 +19,8 @@ import { LogLink } from "./log-access.js";
 import { statusLabel } from "./user-messages.js";
 import { definitionDecisions } from "../core/definition-decisions.js";
 import { DefinitionDecisionCard, DefinitionReviewSuggestions } from "./definition-decisions.js";
+import { RequirementPairIssue, type ResolveRequirements } from "./requirement-resolution.js";
+import { ReviewReason, reviewReason } from "./review-reason.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -117,7 +119,15 @@ export function DuplicateRemovalForm({ project, submissions = [], jobs = [], rem
   const [note, setNote] = useState("");
   const [revision, setRevision] = useState(project.revision);
   const [saving, setSaving] = useState(false);
-  const candidates = project.requirements.filter((r) => r.status !== "rejected" && project.epics.some((e) => e.id === r.epicID && !e.archived));
+  const [removeSearch, setRemoveSearch] = useState("");
+  const [keepSearch, setKeepSearch] = useState("");
+  const candidates = useMemo(() => project.requirements.filter((r) => r.status !== "rejected" && project.epics.some((e) => e.id === r.epicID && !e.archived)), [project.requirements, project.epics]);
+  const ranked = useMemo(() => {
+    const removed = candidates.find(r => r.id === removeID);
+    return candidates.map(requirement => ({ requirement, score: removed ? wordingSimilarity(removed.statement, requirement.statement) : 0 }))
+      .sort((a, b) => b.score - a.score || a.requirement.statement.localeCompare(b.requirement.statement) || a.requirement.id.localeCompare(b.requirement.id))
+      .map(item => item.requirement);
+  }, [candidates, removeID]);
   const changed = revision !== project.revision;
   const valid = removeID !== keepID && [removeID, keepID].every((id) => candidates.some((r) => r.id === id));
   const availability = decisionAvailability(project, [removeID, keepID], submissions, jobs);
@@ -129,9 +139,16 @@ export function DuplicateRemovalForm({ project, submissions = [], jobs = [], rem
   }}>
     <h4>Remove as duplicate</h4>
     <p>This is your decision, not approval of the old AI proposal. No AI call is needed. Compare the current scenarios: any behavior unique to the removed requirement will no longer be active.</p>
-    {([ ["Remove", removeID, setRemoveID], ["Keep unchanged", keepID, setKeepID] ] as const).map(([label, id, select]) => {
+    <p>Search by wording, feature, scenario or ID. Survivor choices are ranked by wording similarity, not proven equivalence. Nothing is removed until you compare and confirm.</p>
+    {([ ["Remove", removeID, setRemoveID, removeSearch, setRemoveSearch], ["Keep unchanged", keepID, setKeepID, keepSearch, setKeepSearch] ] as const).map(([label, id, select, searchText, searchChange]) => {
       const r = candidates.find((r) => r.id === id);
-      return <section key={label}><label>{label}<select aria-label={label} value={id} disabled={saving} onChange={(e) => select(e.target.value)}><option value="">Choose a requirement</option>{candidates.map((r) => <option key={r.id} value={r.id}>{r.statement} · {r.id}</option>)}</select></label>
+      const matches = (label === "Keep unchanged" ? ranked.filter(r => r.id !== removeID) : candidates).filter(r => matchesRequirementSearch(searchText,
+        [r.id, r.statement, r.rationale, ...r.acceptance, project.epics.find(e => e.id === r.epicID)?.title ?? ""]));
+      const visible = matches.slice(0, 25);
+      if (r && !visible.some(item => item.id === r.id)) visible.unshift(r);
+      return <section key={label}><label>Search {label.toLowerCase()} requirements<input type="search" maxLength={500} value={searchText} disabled={saving} onChange={e => searchChange(e.target.value)} /></label>
+        <p role="status">{matches.length} matching requirements{matches.length > 25 ? " · showing the first 25; narrow your search" : ""}.</p>
+        <label>{label}<select aria-label={label} value={id} disabled={saving} onChange={(e) => select(e.target.value)}><option value="">Choose a requirement</option>{visible.map((r) => <option key={r.id} value={r.id}>{r.statement} · {r.id}</option>)}</select></label>
         {r && <><p><strong>{requirementStatus(r.status)}</strong> · {r.id}</p><p>{r.statement}</p><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Current supporting evidence</summary>{r.sourceIDs.map((id) => <p key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details></>}
       </section>;
     })}
@@ -143,17 +160,18 @@ export function DuplicateRemovalForm({ project, submissions = [], jobs = [], rem
   </form>;
 }
 
-function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabled, save }: { project: Project; submissions: Submission[]; jobs: Job[]; removeID?: string; keepID?: string; disabled: boolean; save: RemoveDuplicate }) {
+function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabled, save, label = "Remove as duplicate…" }: { project: Project; submissions: Submission[]; jobs: Job[]; removeID?: string; keepID?: string; disabled: boolean; save: RemoveDuplicate; label?: string }) {
   const [open, setOpen] = useState(false);
   return open ? <DuplicateRemovalForm project={project} submissions={submissions} jobs={jobs} removeID={removeID} keepID={keepID} disabled={disabled} save={save} close={() => setOpen(false)} />
-    : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
+    : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>{label}</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, renderInputConflict, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, clarifyDefinition }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, resolvePair, openQuestion, renderClarification, renderInputConflict, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, clarifyDefinition }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
   refreshRefinement?: (proposalID: string) => void; removeDuplicate?: RemoveDuplicate;
+  resolvePair?: ResolveRequirements;
   openQuestion?: (id: string) => void;
   renderClarification?: (question: Project["questions"][number]) => React.ReactNode;
   renderInputConflict?: (submissionIDs: string[], onBegin?: () => void) => React.ReactNode;
@@ -245,7 +263,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const clarifications = (ids: string[]) => {
     const questions = decisionClarifications(project, ids);
     if (!questions.length || !renderClarification) return null;
-    return <section className="review-clarifications" aria-label="Decisions needed before approval"><h4>{questions.length} {questions.length === 1 ? "decision" : "decisions"} needed before approval</h4><p>Answer here or in Design. Explicit answers can update the specification automatically; ambiguous choices remain here. Deferring or delegating does not settle this choice.</p>{questions.map((q) => <React.Fragment key={q.id}>{captureAnswerScope(project, q.id) && <p className="save-notice">This answer's queued follow-up is limited to its {captureAnswerScope(project, q.id)!.requirementIDs.length} linked requirements. Use Add information in Design for broader constraints.</p>}{renderClarification(q)}</React.Fragment>)}</section>;
+    return <section className="review-clarifications" aria-label="Decisions needed before approval"><h4>{questions.length} {questions.length === 1 ? "decision" : "decisions"} needed before approval</h4><p>{resolvePair ? "Answer the question below so we know which behavior you want. Your answer will be checked before the requirement is updated." : "Answer here or in Design. Explicit answers can update the specification automatically; ambiguous choices remain here. Deferring or delegating does not settle this choice."}</p>{questions.map((q) => <React.Fragment key={q.id}>{!resolvePair && captureAnswerScope(project, q.id) && <p className="save-notice">This answer's queued follow-up is limited to its {captureAnswerScope(project, q.id)!.requirementIDs.length} linked requirements. Use Add information in Design for broader constraints.</p>}{renderClarification(q)}</React.Fragment>)}</section>;
   };
   const renderItem = (item: ReviewItem) => {
       if (item.kind === "refinement") {
@@ -263,15 +281,36 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             advance(item.id); setMessage(p.resolution ? accept ? "Resolution approved. The reviewed changes were applied together; original records and evidence remain in history." : "Resolution dismissed. Both requirements were kept unchanged." : accept ? "Refinement approved. Replacement wording is now active; the comparison is saved under Reviewed." : "Current wording kept. The dismissed refinement is saved under Reviewed.");
           }
         };
+        if (pending && p.resolution && resolvePair) return <article className="question-card review-card refinement-card" key={item.id}>
+          <ItemProcessingNotice error={itemErrors[item.id]} />
+          <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}>
+            <span className="badge">{p.resolution.basis === "duplicate" ? "Possible duplicate" : "Requirements to reconcile"}</span>
+            <strong>{target?.statement ?? p.original.statement}</strong><small>With: {project.requirements.find(r => r.id === p.resolution!.relatedRequirementID)?.statement ?? p.relatedOriginal?.statement ?? "Other requirement unavailable"}</small>
+          </button>
+          {active === item.id && <div className="requirement-card">
+            <ReviewReason reason={reviewReason(project, [p.requirementID, p.resolution.relatedRequirementID], submissions, jobs, p)} />
+            {inputConflict}
+            {!inputConflict && <RequirementPairIssue project={project} requirementID={p.requirementID} otherRequirementID={p.resolution.relatedRequirementID}
+              kind={p.resolution.basis === "duplicate" ? "duplicate" : "conflict"} submissions={submissions} jobs={jobs} disabled={disabled} save={resolvePair}
+              suggestion={!stale && p.resolution.change.type === "consolidate" ? p : undefined} openIssue={openIssue} openQuestion={openQuestion} />}
+            {p.resolution.change.type === "revise" && <details><summary>Suggested fix</summary><p>{p.statement}</p><ul>{p.acceptance.map((t, i) => <li key={i}>{t}</li>)}</ul><p>{p.resolution.change.statement}</p><ul>{p.resolution.change.acceptance.map((t, i) => <li key={i}>{t}</li>)}</ul>
+              <ActionButton className="primary" disabled={disabled || stale || waiting} reason={availability.reason} onClick={() => void save(true)}>Use suggested fix</ActionButton></details>}
+            <details><summary>More options</summary><ActionButton className="secondary" disabled={disabled || !!availability.jobIDs.length} onClick={() => void save(false)}>Keep both requirements</ActionButton>
+              {stale && refreshRefinement && <ActionButton className="secondary" disabled={disabled || waiting} onClick={() => refreshRefinement(p.id)}>Check latest version</ActionButton>}
+              <details><summary>Review details</summary><p>{p.reason}</p></details>
+            </details>
+          </div>}
+        </article>;
         return <article className="question-card review-card refinement-card" key={item.id}>
           <ItemProcessingNotice error={itemErrors[item.id]} />
           <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}>
-            <span className="badge">{withdrawn ? p.resolution ? "Resolution withdrawn" : "Refinement withdrawn" : p.resolution ? pending ? "Resolution proposed" : p.status === "accepted" ? "Resolution approved" : "Resolution dismissed" : pending ? "Refinement proposed" : p.status === "accepted" ? "Refinement approved" : "Current wording kept"}{stale ? " · Outdated" : ""}</span>
+            <span className="badge">{resolvePair && pending ? "Suggested change" : withdrawn ? p.resolution ? "Resolution withdrawn" : "Refinement withdrawn" : p.resolution ? pending ? "Resolution proposed" : p.status === "accepted" ? "Resolution approved" : "Resolution dismissed" : pending ? "Refinement proposed" : p.status === "accepted" ? "Refinement approved" : "Current wording kept"}{stale ? " · Outdated" : ""}</span>
             <strong>{p.statement}</strong><small>{project.epics.find((e) => e.id === (target?.epicID ?? p.original.epicID))?.title} · Current requirement: {requirementStatus(target?.status ?? p.original.status)}</small>
-            {pending && <span className="badge">{readinessLabels[readiness(item)]}</span>}
+            {pending && !resolvePair && <span className="badge">{readinessLabels[readiness(item)]}</span>}
           </button>
           {active === item.id && <div className="requirement-card">
-            <p><strong>Why refine:</strong> {p.reason}</p>
+            <ReviewReason reason={reviewReason(project, [p.requirementID], submissions, jobs, p)} />
+            {resolvePair ? <details><summary>More context</summary><p>{p.reason}</p></details> : p.reason.startsWith("Automatic update held for a decision:") ? <><p>This proposed update was held during earlier processing. Current blockers are shown below; an earlier hold does not prove a conflict or duplicate.</p><details><summary>Earlier hold reason · saved history</summary><p>{p.reason}</p></details></> : <p><strong>{p.reason.startsWith("Update awaiting review:") ? "Why this update was held:" : "Why refine:"}</strong> {p.reason}</p>}
             <ReviewUpdateNotice project={project} recordType="refinement" recordID={p.id} />
             <h4>{pending && !stale ? "Current wording" : "Original wording"} ({requirementStatus(p.original.status).toLowerCase()})</h4><p>{p.original.statement}</p><ul>{p.original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
             <h4>Proposed wording</h4><p>{p.statement}</p><ul>{p.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.rationale}</p>
@@ -282,21 +321,23 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
               <details><summary>Other supporting evidence and resolution basis</summary>{[...new Set([...p.relatedOriginal.sourceIDs, ...p.resolution.evidenceIDs])].map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
             </section>}
             <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
-            {stale && <p role="status">{refinementStaleReason(project, p)} This proposal cannot be approved as-is. Refresh only this {p.resolution ? "comparison" : "requirement"}, make your own duplicate-removal decision, or dismiss the proposal. No full refinement run is needed.</p>}
+            {stale && <p role="status">{resolvePair ? "This suggestion is based on earlier information. Check the latest version, or keep the current wording." : <>{refinementStaleReason(project, p)} This proposal cannot be approved as-is. Refresh only this {p.resolution ? "comparison" : "requirement"}, make your own duplicate-removal decision, or dismiss the proposal. No full refinement run is needed.</>}</p>}
             {pending && inputConflict}
-            {pending && waiting && !inputConflict && <p className="save-notice" role="status">{availability.jobIDs.length ? "Project processing—decisions temporarily paused. You can keep reading; use Processing & queue to view or stop the work." : availability.reason ?? "Finish the pending human input before approving this refinement or resolution."}</p>}
+            {pending && !inputConflict && <BlockingInputList availability={availability} submissions={submissions} open={openIssue} />}
+            {pending && waiting && !inputConflict && !resolvePair && <p className="save-notice" role="status">{availability.jobIDs.length ? "Project processing—decisions temporarily paused. You can keep reading; use Processing & queue to view or stop the work." : availability.reason ?? "Finish the pending human input before approving this refinement or resolution."}</p>}
             {pending && <ClarificationLinks availability={availability} openQuestion={openQuestion} />}
             {pending && clarifications([p.requirementID, ...(p.resolution ? [p.resolution.relatedRequirementID] : [])])}
             {pending && !inputConflict && !!availability.submissionIDs.length && processBlocking && <ActionButton className="secondary" disabled={disabled} onClick={() => processBlocking(availability.submissionIDs)}>Process blocking input</ActionButton>}
-            {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "This proposal is outdated. Refresh only this item, remove a duplicate yourself, or dismiss the proposal." : availability.reason} onClick={() => void save(true)}>{p.resolution ? "Approve resolution" : "Approve refinement"}</ActionButton>
-              {stale && refreshRefinement && <ActionButton className="secondary" disabled={disabled || waiting} reason="Process pending human input before refreshing this comparison." onClick={() => refreshRefinement(p.id)}>{p.resolution ? "Refresh this comparison" : "Refresh this requirement"}</ActionButton>}
+            {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "This suggestion is out of date. Check the latest version first." : availability.reason} onClick={() => void save(true)}>{p.resolution ? "Approve resolution" : resolvePair ? "Replace requirement" : "Approve refinement"}</ActionButton>
+              {stale && refreshRefinement && <ActionButton className="secondary" disabled={disabled || waiting} reason="Finish checking saved answers first." onClick={() => refreshRefinement(p.id)}>{resolvePair ? "Check latest version" : p.resolution ? "Refresh this comparison" : "Refresh this requirement"}</ActionButton>}
               <ActionButton className="secondary" disabled={disabled || !!availability.jobIDs.length} reason={availability.reason} onClick={() => void save(false)}>{stale ? "Dismiss outdated proposal" : p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton>
-              {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={p.resolution?.relatedRequirementID ?? p.requirementID} keepID={p.resolution ? p.requirementID : undefined} disabled={disabled} save={saveDuplicate} />}</div>
+              {!resolvePair && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={p.resolution?.relatedRequirementID ?? p.requirementID} keepID={p.resolution ? p.requirementID : undefined} disabled={disabled} save={saveDuplicate} />}</div>
               : <p className="save-notice">{withdrawn ? "This outdated suggestion left the actionable review list automatically. It was not a human rejection. Use Improve requirements under More actions if a current suggestion is still needed." : p.status === "accepted" ? "This replacement was approved. Later requirement decisions may have changed its wording." : "This refinement was dismissed without applying its proposed changes. Later decisions may have changed or removed its requirements."}</p>}
           </div>}
         </article>;
       }
       const r = item.requirement;
+      const pendingUpdates = project.refinements.filter(p => p.status === "pending" && (p.requirementID === r.id || p.resolution?.relatedRequirementID === r.id));
       const withdrawn = r.status === "rejected" && reviewUpdateFor(project, "requirement", r.id)?.kind === "withdrawn";
       const fingerprint = reviewFingerprint(r);
       const contextKey = decisionContextKey(project, [r.id]);
@@ -345,13 +386,22 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           if (latest.input.action === "changes-requested") { drafts.current[r.id]!.changeNote ??= latest.input.note; setChangeTarget(r.id); }
           refreshDrafts((version) => version + 1); setRecoveryTarget(r.id); setExpanded(item.id);
         }} />}
-        <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}><span className={`badge ${r.status}`}>{withdrawn ? "Proposal withdrawn" : r.status === "accepted" && r.authority ? "Recorded from your answer" : r.status === "proposed" ? "New requirement" : r.status === "needs-review" ? "Revised requirement" : requirementStatus(r.status)}</span><strong>{r.statement}</strong><small>{project.epics.find((e) => e.id === r.epicID)?.title}</small>{filter === "pending" && <span className="badge">{readinessLabels[readiness(item)]}</span>}</button>
-          {active === item.id && <div className="requirement-card"><ReviewUpdateNotice project={project} recordType="requirement" recordID={r.id} /><p>{r.rationale}</p><h4>Acceptance scenarios</h4><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{r.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
-          {related.length > 0 && <details className="save-notice"><summary>Possible overlaps or conflicts ({related.length})</summary>
+        <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}><span className={`badge ${r.status}`}>{resolvePair && filter === "pending" ? reviewReason(project, [r.id], submissions, jobs)?.title ?? "Review requirement" : withdrawn ? "Proposal withdrawn" : r.status === "accepted" && r.authority ? "Recorded from your answer" : r.status === "proposed" ? "New requirement" : r.status === "needs-review" ? "Revised requirement" : requirementStatus(r.status)}</span><strong>{r.statement}</strong><small>{project.epics.find((e) => e.id === r.epicID)?.title}</small>{filter === "pending" && !resolvePair && <span className="badge">{readinessLabels[readiness(item)]}</span>}</button>
+          {active === item.id && <div className="requirement-card">{!inputConflict && <ReviewReason reason={reviewReason(project, [r.id], submissions, jobs)} />}<ReviewUpdateNotice project={project} recordType="requirement" recordID={r.id} /><p>{r.rationale}</p><h4>Acceptance scenarios</h4><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{r.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+           {resolvePair && related.some(other => other.status !== "rejected" && project.epics.some(e => e.id === other.epicID && !e.archived)) && <section aria-label="Similar requirements"><h4>Similar requirements</h4><p>These comparisons are optional. Similar wording alone does not mean anything needs to change.</p>
+             {related.filter(other => other.status !== "rejected" && project.epics.some(e => e.id === other.epicID && !e.archived)).map(other => <RequirementPairIssue key={other.id} project={project} requirementID={r.id} otherRequirementID={other.id}
+               submissions={submissions} jobs={jobs} disabled={disabled} save={resolvePair} openIssue={openIssue} openQuestion={openQuestion} />)}
+           </section>}
+           {!resolvePair && related.length > 0 && <details className="save-notice"><summary>Possible overlaps or conflicts ({related.length})</summary>
             <p>Similar wording does not prove duplication. Compare scope, decisions and scenarios before approving. No records have been merged or changed. Use your review note to explain a conflict or requested correction.</p>
-            {related.map((other) => <section key={other.id} aria-label={`Compare requirement ${other.id}`}><h4>{other.statement}</h4><p>{requirementStatus(other.status)} · {project.epics.find((e) => e.id === other.epicID)?.title} · {other.id}</p><p>{other.rationale}</p><ul>{other.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{other.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details></section>)}
+            {related.map((other) => <section key={other.id} aria-label={`Compare requirement ${other.id}`}><h4>{other.statement}</h4><p>{requirementStatus(other.status)} · {project.epics.find((e) => e.id === other.epicID)?.title} · {other.id}</p><p>{other.rationale}</p><ul>{other.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{other.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+              {saveDuplicate && [r, other].every(item => item.status !== "rejected" && project.epics.some(e => e.id === item.epicID && !e.archived)) && <div className="button-row">
+                <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} keepID={other.id} disabled={disabled || blocked} save={saveDuplicate} label="Keep compared requirement; remove this one…" />
+                <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={other.id} keepID={r.id} disabled={disabled || blocked} save={saveDuplicate} label="Keep this requirement; remove compared one…" />
+              </div>}
+            </section>)}
           </details>}
-          {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
+            {r.reviewNote && (r.reviewNote.startsWith("Automatic update held for a decision:") ? <details><summary>Earlier update hold · saved history, not a current conflict verdict</summary><p>{r.reviewNote}</p></details> : <p>{r.reviewNote}</p>)}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
            {r.authority && r.status === "accepted" && <aside className="save-notice"><strong>Recorded from explicit input</strong><p>{r.authority.reason}</p><p>No separate approval of this generated wording was claimed. Use Request changes to correct it.</p></aside>}
            {!(r.status === "accepted" && r.authority) && <ReviewNote key={latest?.conflict ? latest.id : r.id} initialValue={draft?.note ?? (latest?.conflict && latest.input.type === "review" && latest.input.action !== "changes-requested" ? latest.input.note : "")} change={(note) => {
             const current = drafts.current[r.id];
@@ -360,16 +410,18 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             // edits it, keep that card open even if a poll changes its readiness.
             setExpanded(item.id);
            }} />}
-          {inputConflict}
+           {inputConflict}
+           {!inputConflict && <BlockingInputList availability={availability} submissions={submissions} open={openIssue} />}
+           {pendingUpdates.length > 0 && <section aria-label="Pending updates for this requirement"><h4>Proposed changes for this requirement</h4><p>A replacement proposal is not an extra requirement. Compare the proposed wording or pair resolution before removing anything. Keeping current wording does not delete a requirement.</p>{pendingUpdates.map(p => <button type="button" className="secondary" key={p.id} onClick={() => { setFilter("pending"); setReadinessFilter("all"); setSearch(""); setExpanded(`refinement:${p.id}`); }}>Review proposed update: {p.statement}</button>)}</section>}
           {completedDecision && <p className="save-notice" role="status">{r.statement !== decisionReview.statement || JSON.stringify(r.acceptance) !== JSON.stringify(decisionReview.acceptance) ? "Your decision was reviewed. The updated requirement and acceptance scenarios are shown above." : "Your decision was reviewed. This requirement's wording is unchanged."} Original answers remain in history.</p>}
-          {availability.state !== "ready" && !inputConflict && <p className="save-notice" role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : availability.jobIDs.length ? <><strong>Project processing—decisions temporarily paused.</strong> Discovery or a folder scan is running; this does not necessarily mean this requirement is changing. You can keep reading and writing notes. Use Processing & queue to view or stop the work.</> : availability.submissionIDs.length ? <><strong>{submissions.some((s) => availability.submissionIDs.includes(s.id) && s.status === "needs-attention") ? "Related processing needs attention." : "Waiting for related input to finish processing."}</strong> {availability.reason} Your notes stay here; review the result before deciding.</> : availability.reason}</p>}
+          {availability.state !== "ready" && !inputConflict && !resolvePair && <p className="save-notice" role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : availability.jobIDs.length ? <><strong>Project processing—decisions temporarily paused.</strong> Discovery or a folder scan is running; this does not necessarily mean this requirement is changing. You can keep reading and writing notes. Use Processing & queue to view or stop the work.</> : availability.submissionIDs.length ? <><strong>{submissions.some((s) => availability.submissionIDs.includes(s.id) && s.status === "needs-attention") ? "Related processing needs attention." : "Waiting for related input to finish processing."}</strong> {availability.reason} Your notes stay here; review the result before deciding.</> : availability.reason}</p>}
           <ClarificationLinks availability={availability} openQuestion={openQuestion} />
           {clarifications([r.id])}
           {!retainedConflict && !inputConflict && !!availability.submissionIDs.length && (processBlocking || resume) && <ActionButton className="secondary" disabled={disabled} onClick={() => processBlocking ? processBlocking(availability.submissionIDs) : resume?.()}>Process blocking input</ActionButton>}
           {changed && <ReviewComparison original={draft?.original} evidenceIDs={draft?.evidenceIDs} current={r} project={project} />}
           {changed && <p className="save-notice" role="alert"><strong>Updated since you started reviewing.</strong> This requirement or its supporting information changed. Your note is retained. Check the changes above before choosing a decision below.</p>}
            <div className="button-row">{!(r.status === "accepted" && r.authority) && <ActionButton className="primary" disabled={blocked || decisionPaused || approvalNeedsDecision} reason={decisionPaused ? pauseReason : approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton>}<ActionButton className="secondary" disabled={blocked || decisionPaused} reason={decisionPaused ? pauseReason : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
-          {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
+           {!resolvePair && r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
            {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => { setExpanded(item.id); setChangeTarget(r.id); }}>Request changes</ActionButton>}
             </div>
           {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked || decisionPaused} reason={pauseReason || "This requirement already has a response being saved or processed."} change={(text) => {
@@ -423,7 +475,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
         <p>Scope: {epicID === "all" ? "All project areas" : project.epics.find((epic) => epic.id === epicID)?.title ?? epicID}.</p>
         <ActionButton className="secondary" disabled={disabled} onClick={() => refine()}>Improve requirements</ActionButton>
       </details>
-      {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} />}
+       {saveDuplicate && (resolvePair ? <details><summary>Find another requirement to remove</summary><DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} /></details> : <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} />)}
     </div>}
   </section></ActionScope>;
 }

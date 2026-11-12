@@ -16,6 +16,25 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Requirement overlaps now name the other requirement and offer one **Resolve** flow:
+compare both, choose remove/replace/combine, and save. Review cards explain why they
+need attention in plain language; processing holds stay distinct from product conflicts.
+Originals and paid work remain saved. See [the review flow](docs/browser-workspace.md#one-place-to-resolve-overlapping-requirements-2026-11-11).
+
+Requirement holds now expose their saved blocking responses and link directly to
+pending replacement reviews. Duplicate removal supports search and prefilled pairs
+from overlap comparisons. Outdated suggestions no longer manufacture new update
+holds; exact no-ops create no extra approval. Existing answers/history remain saved.
+Restart the backend and reload to load these changes; the reported live project's
+exact failure remains unqualified. See [resolution and compatibility](docs/browser-workspace.md#requirement-holds-and-duplicate-resolution-2026-11-11).
+
+Portable workspace publication now reuses exact serialized historical records instead
+of rebuilding every full snapshot for each comparison. Old computation caches upgrade
+without repeating normalization or changing exported bytes. A synthetic warm-cache
+fixture improved by about 23%; the observed real-project 45-second pause remains
+unqualified. Restart the backend to load it. See
+[cache compatibility](docs/migrations.md#exact-serialized-portable-snapshot-computation-2026-11-11).
+
 New staged discovery finishes an explicit empty result when no proposals remain,
 without paying for empty verification calls. All evidence is still read and every
 surviving proposal still needs every check; started schedules keep their old protocol.

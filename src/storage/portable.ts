@@ -22,6 +22,7 @@ import { recoveryRevisionSchema, recoveryRevisionCurrent, definitionRevisionSche
 import { upgradeExecutionPayload } from "./migrations.js";
 import { refinementCheckCurrentMatcher } from "../core/refinement-identity.js";
 import type { DecisionEvidenceProject } from "../core/decision-availability.js";
+import { isPortableRecords, portableRecords, type PortableSnapshotRecords } from "./portable-records.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -69,7 +70,7 @@ function portableJob(job: Job, linked: boolean, definitionKey: (epicID: string) 
 /** Retain reusable outcomes and unfinished work, not the activity stream. Snapshots
  * are exact deltas against the current project, not every intermediate revision. */
 export function continuationState(project: Project, jobs: Job[], submissions: Submission[], snapshot: (revision: number) => Project,
-  portableSnapshot: (revision: number) => Project = snapshot,
+  portableSnapshot: (revision: number) => Project | PortableSnapshotRecords = snapshot,
   refinementSnapshot: (revision: number) => DecisionEvidenceProject = snapshot, profile?: ContinuationProfile): Continuation {
   const started = performance.now();
   const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending");
@@ -274,7 +275,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   // Invocation-local exact-string memo: identical historical records need one
   // hash, not hundreds. Bound retained key bytes; never omit an uncached value.
   const digests = new Map<string, string>(); let digestBytes = 0;
-  const intern = (value: unknown, encoded = JSON.stringify(value)) => {
+  const intern = (encoded: string) => {
     let key = digests.get(encoded);
     if (key) { if (profile) profile.digestHits++; }
     else {
@@ -284,14 +285,17 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
         digests.set(encoded, key); digestBytes += encoded.length * 2;
       }
     }
-    objects[key] ??= value; return key;
+    // Most historical objects already exist in another delta. Parse each distinct
+    // retained object once, not every repeated record in every full snapshot.
+    if (!Object.hasOwn(objects, key)) objects[key] = JSON.parse(encoded) as unknown;
+    return key;
   };
   for (const revision of [...revisions].sort((a, b) => a - b)) {
     if (revision === project.revision) continue;
     // Only one full historical project is live at a time. Retaining every
     // assessment publication here multiplies a large project's entire evidence
     // set by its number of areas, even when the resulting deltas are tiny.
-    let original: Project;
+    let original: Project | PortableSnapshotRecords;
     const readStarted = performance.now();
     try { original = portableSnapshot(revision); }
     catch (error) {
@@ -300,23 +304,27 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       throw error;
     } finally { if (profile) profile.snapshotReadMs += performance.now() - readStarted; }
     const deltaStarted = performance.now();
-    const previous = portableProject(original) as Record<string, unknown>;
-    const delta: Delta = { model: { value: intern(withoutAccount(original.model)) } };
-    for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
-      const before = previous[key], after = base[key];
+    const records = isPortableRecords(original) ? original : portableRecords(original);
+    const cached = records === original;
+    const previous = new Map(records.fields);
+    const model = previous.get("model");
+    if (typeof model !== "string") throw new Error("Portable historical model is missing; saved evidence was not replaced.");
+    const delta: Delta = { model: { value: intern(model) } };
+    for (const key of new Set([...Object.keys(base), ...previous.keys()])) {
+      const before = previous.get(key), after = base[key];
       if (Array.isArray(before) && Array.isArray(after)) {
-        const encoded = before.map(item => JSON.stringify(item) ?? "null");
-        if (profile) profile.serializedRecords += encoded.length;
-        if (`[${encoded.join(",")}]` === baseJSON.get(key)) continue;
+        const encoded = before;
+        if (profile && !cached) profile.serializedRecords += encoded.length;
         const items = baseItems.get(key)!;
+        if (encoded.length === items.length && encoded.every((item, index) => item === items[index])) continue;
         let prefix = 0, suffix = 0;
         while (prefix < Math.min(before.length, after.length) && encoded[prefix] === items[prefix]) prefix++;
         while (suffix < Math.min(before.length, after.length) - prefix && encoded[before.length - suffix - 1] === items[after.length - suffix - 1]) suffix++;
-        delta[key] = { prefix, suffix, items: before.slice(prefix, before.length - suffix).map((item, index) => intern(item, encoded[prefix + index])) };
+        delta[key] = { prefix, suffix, items: encoded.slice(prefix, encoded.length - suffix).map(intern) };
       } else {
-        const encoded = JSON.stringify(before);
+        const encoded = Array.isArray(before) ? `[${before.join(",")}]` : before ?? undefined;
         if (encoded === baseJSON.get(key)) continue;
-        delta[key] = { value: intern(before ?? null, before == null ? "null" : encoded) };
+        delta[key] = { value: intern(encoded ?? "null") };
       }
     }
     snapshots[String(revision)] = delta;

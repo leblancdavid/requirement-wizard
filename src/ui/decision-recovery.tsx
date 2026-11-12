@@ -3,6 +3,24 @@ import { decisionAvailability, type DecisionAvailability } from "../core/decisio
 import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
+import { PagedList } from "./pagination.js";
+
+/** Show the actual dependencies, not just a generic retry that can loop forever. */
+export function BlockingInputList({ availability, submissions, open }: {
+  availability: DecisionAvailability; submissions: Submission[]; open?: (id: string) => void;
+}) {
+  const items = submissions.filter(s => availability.submissionIDs.includes(s.id));
+  if (!items.length) return null;
+  return <section aria-label="Responses blocking this review"><h4>Saved responses to review first</h4>
+    <p>This is unfinished processing, not proof of a conflict or duplicate. Do not remove a requirement to clear it.</p>
+    <PagedList items={items} itemID={s => s.id} label="Blocking responses">{s => <article className="queue-item">
+      <strong>{s.input.type === "answer" ? s.input.questionText : s.input.type === "review" ? s.input.requirementText : "Saved project information"}</strong>
+      <p className="source-excerpt">{s.input.type === "answer" ? s.input.answer.text : s.input.type === "review" ? s.input.note || "Review decision saved without a note" : s.input.text}</p>
+      {s.status === "needs-attention" ? <DiagnosticNotice detail={s.diagnostic} summary="This response is saved, but processing did not finish. Inspect the saved response before retrying." /> : <p>Waiting for processing to finish.</p>}
+      {open && <button type="button" className="secondary" onClick={() => open(s.id)}>View &amp; resolve saved response</button>}
+    </article>}</PagedList>
+  </section>;
+}
 
 export function ItemProcessingNotice({ submission, error, resume, disabled }: {
   submission?: Submission; error?: string; resume?: () => void; disabled?: boolean;

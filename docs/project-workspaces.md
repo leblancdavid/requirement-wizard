@@ -12,6 +12,13 @@ ordinary folder. SQLite remains the working store and revision history; generate
 files provide readable, versionable specification and progress artifacts. Under
 DEC-029, `.reqwizit/` also contains portable continuation state for clone-and-open.
 
+Historical export comparisons reuse a local, integrity-checked cache of exact JSON
+record strings. Existing normalized-snapshot caches upgrade on demand without
+changing the evidence or generated artifact bytes; the first conversion has a
+one-time cost. Restart the backend to load this optimization. It does not reduce AI
+verification or establish a real-project speed guarantee. See
+[cache compatibility and measured fixtures](migrations.md#exact-serialized-portable-snapshot-computation-2026-11-11).
+
 During a continuous **Refresh definition coverage** action, SQLite commits each
 result/checkpoint immediately, but portable folder publication waits until the
 action finishes, fails or pauses. This avoids rebuilding the entire continuation

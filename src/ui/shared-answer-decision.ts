@@ -1,6 +1,16 @@
 import type { Job, Project, Submission } from "../core/model.js";
 export { sharedAnswerDecision, type SharedConflict, type ClarificationOutcome } from "../core/shared-answer-decision.js";
 
+/** Exact saved links only; similar wording must not invent a conflicting story. */
+export function sharedConflictRequirements(project: Project, conflictIDs: string[]) {
+  const ids = new Set(conflictIDs);
+  const answers = project.sources.filter(s => ids.has(s.id));
+  const linked = new Set(answers.flatMap(s => [s.requirementID, ...(s.answerScope?.requirementIDs ?? []),
+    ...project.questions.filter(q => q.id === s.questionID).flatMap(q => q.evidenceIDs ?? [])]).filter((id): id is string => !!id));
+  return project.requirements.filter(r => r.status !== "rejected" && project.epics.some(e => e.id === r.epicID && !e.archived)
+    && (linked.has(r.id) || r.sourceIDs.some(id => ids.has(id))));
+}
+
 /** Match the actual blocking cohort, not every historical failure in a feature. */
 export function sharedConflictJob(jobs: Job[], submissionIDs: string[]) {
   const ids = new Set(submissionIDs);

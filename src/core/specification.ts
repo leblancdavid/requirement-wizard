@@ -1,6 +1,7 @@
 import { decisionAvailability } from "./decision-availability.js";
 import { requirementEvidenceIDs, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { proposeRefinements } from "./refinement.js";
+import { refinementIsStale } from "./resolution.js";
 
 export function specificationAuthorizationSources(project: Project, batch: Submission[], includedIDs: string[]) {
   const eligible = new Set(requirementEvidenceIDs(project)), included = new Set(includedIDs);
@@ -52,12 +53,22 @@ export function applySpecificationUpdates(before: Project, project: Project, res
     if (change.type === "activate" && (!created && !["proposed", "needs-review"].includes(target.status)
       || change.sourceIDs.some((id) => !target.sourceIDs.includes(id)))) throw new Error("Activation must capture current input in a new or revised unapproved requirement.");
     if (change.type === "revise" && (!old || !["accepted", "needs-review"].includes(old.status))) throw new Error("Automatic revisions require an existing active specification requirement.");
+    // A checked no-op must not manufacture another decision merely because
+    // unrelated follow-up or an older proposal is still pending.
+    if (change.type === "revise" && target.statement === change.statement && target.rationale === change.rationale
+      && JSON.stringify(target.acceptance) === JSON.stringify(change.acceptance)) {
+      project.roundChanges.push(`Already recorded: ${target.statement}. No replacement or additional approval was created; original input remains saved.`);
+      continue;
+    }
     // Safe exceptions stay visible without failing the user's successfully processed answer.
     const availability = decisionAvailability(project, [id], waiting);
-    if (availability.state !== "ready" || project.refinements.some((p) => p.status === "pending" && (p.requirementID === id || p.resolution?.relatedRequirementID === id))) {
+    const pendingReplacement = project.refinements.some((p) => p.status === "pending" && !refinementIsStale(project, p)
+      && (p.requirementID === id || p.resolution?.relatedRequirementID === id));
+    if (availability.state !== "ready" || pendingReplacement) {
+      const reason = availability.reason ?? "A replacement proposal is awaiting a decision.";
       if (change.type === "revise") proposeRefinements(project, [{ requirementID: id, statement: change.statement, rationale: change.rationale, acceptance: change.acceptance,
-        reason: `Automatic update held for a decision: ${change.reason}` }], newID);
-      project.roundChanges.push(`Needs your decision: ${target.statement}. ${availability.reason ?? "A replacement proposal is awaiting a decision."}`);
+        reason: `Update awaiting review: ${reason}\nRequested update: ${change.reason}` }], newID);
+      project.roundChanges.push(`Update awaiting review: ${target.statement}. ${reason}`);
       continue;
     }
     if (change.type === "revise") Object.assign(target, { statement: change.statement, rationale: change.rationale, acceptance: [...change.acceptance] });

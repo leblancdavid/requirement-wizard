@@ -737,7 +737,7 @@ try {
       fingerprint: reviewFingerprint(legacyRequirement), action: "accepted", note: "Saving jobs is essential.", reviewedRevision: legacyProject.revision } });
   await expect.poll(() => store.submissions(safetyProjectID).some((s) => s.input.type === "review" && s.status === "needs-attention" && s.conflict && !s.applied)).toBe(true);
   assert.equal(store.get(safetyProjectID).requirements[0]!.status, "proposed", "A review cannot bypass pending related human input");
-  await expect(safetyReview).toContainText("Waiting for related input to finish processing");
+  await expect(safetyReview.getByRole("complementary", { name: "Why this needs review", exact: true })).toContainText("A saved answer needs checking");
   await page.screenshot({ path: ".reqwizit-state/browser-decision-safety.png", fullPage: true });
   await runQueueAction(page, "Process saved responses only");
   await expect.poll(() => releases.length).toBe(1);
@@ -1361,16 +1361,17 @@ try {
       await page.getByRole("tab", { name: /Specification/ }).click();
        const overlapPanel = page.getByRole("region", { name: "Requirement review", exact: true });
        await expandReviewEpics();
-      const overlapDisclosure = overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true });
-      await overlapDisclosure.click();
-      await expect(overlapPanel.getByRole("heading", { name: "Guests cannot access private reports", exact: true })).toBeVisible();
-      await expect(overlapPanel.getByText(/Similar wording does not prove duplication/)).toBeVisible();
+       const overlapIssue = overlapPanel.getByRole("region", { name: "Requirement overlap", exact: true });
+       await expect(overlapIssue).toContainText("Guests cannot access private reports");
+       await expect(overlapIssue).toContainText("They may describe the same behavior or different situations");
+       await overlapIssue.getByRole("button", { name: "Resolve", exact: true }).click();
+       await expect(overlapPanel.getByRole("form", { name: "Resolve these requirements", exact: true })).toBeVisible();
       assert.deepEqual(store.get(overlapProject.id), overlapBefore, "comparison must not change decisions or evidence");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Overlap comparison must fit mobile width");
       await page.reload();
        await page.getByRole("tab", { name: /Specification/ }).click();
        await expandReviewEpics();
-       await expect(overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true })).toBeVisible();
+        await expect(overlapPanel.getByRole("region", { name: "Requirement overlap", exact: true })).toContainText("Guests cannot access private reports");
       assert.deepEqual(store.get(overlapProject.id), overlapBefore);
        for (const kind of ["answer", "review"] as const) {
          let automatic = store.create(`Automatic ${kind} fixture`, "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
@@ -1420,7 +1421,7 @@ try {
           await page.getByRole("tab", { name: /Specification/ }).click();
           await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
           await expandReviewEpics();
-           await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).toBeVisible();
+            await expect(reviewPanel.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
            await page.locator(".topbar .queue-trigger").click();
            await expect(page.getByRole("dialog").getByText(/^Recent completed work/)).toHaveCount(0);
            const completedPairCheck = store.submissions(automatic.id)[0]!.overlapFollowup!;
@@ -1478,10 +1479,10 @@ try {
            await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
         }
          await expandReviewEpics();
-         await expect(reviewPanel).toContainText("Resolution proposed");
-        await expect(reviewPanel.getByRole("region", { name: "Related requirement resolution", exact: true })).toContainText("reject the redundant");
+          await expect(reviewPanel.getByRole("region", { name: "Requirement overlap", exact: true })).toContainText(ambiguous ? "These requirements need a decision" : "Possible duplicate");
+         await expect(reviewPanel).toContainText("Other requirement:");
         assert.deepEqual(store.get(resolutionProject.id).requirements, originals, "AI resolution must not alter approved records before review");
-        await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+         await expect(reviewPanel.getByRole("button", { name: "Resolve", exact: true })).toBeEnabled();
          if (!ambiguous) {
            const currentComparison = store.get(resolutionProject.id);
            const previousProposalID = currentComparison.refinements[0]!.id;
@@ -1489,13 +1490,15 @@ try {
            await page.reload(); await page.getByRole("tab", { name: /Specification/ }).click();
             await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
             await expandReviewEpics();
-            await expect(reviewPanel.getByRole("button", { name: "Dismiss outdated proposal", exact: true })).toBeVisible();
+             await expect(reviewPanel).toContainText("This suggestion is out of date");
+             await reviewPanel.locator(".refinement-card").getByText("More options", { exact: true }).click();
            const jobsBeforeRefresh = store.jobs(currentComparison.id).length;
-           await reviewPanel.getByRole("button", { name: "Refresh this comparison", exact: true }).click();
+            await reviewPanel.getByRole("button", { name: "Check latest version", exact: true }).click();
            await expect.poll(() => store.get(currentComparison.id).refinements.find((p) => p.id === previousProposalID)?.status).toBe("dismissed");
            assert.equal(store.jobs(currentComparison.id).length, jobsBeforeRefresh + 1, "Refreshing one comparison must not repeat broad refinement");
-           await expect(reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true })).toBeVisible();
-           await reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true }).click();
+            await reviewPanel.locator(".refinement-card").getByText("More options", { exact: true }).click();
+            await expect(reviewPanel.getByRole("button", { name: "Keep both requirements", exact: true })).toBeVisible();
+            await reviewPanel.getByRole("button", { name: "Keep both requirements", exact: true }).click();
           assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
           const dismissedProject = store.get(resolutionProject.id);
           store.note(dismissedProject.id, dismissedProject.revision, "Please consolidate these duplicate access rules while retaining both scenarios");
@@ -1503,16 +1506,19 @@ try {
            await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
            await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
            await expandReviewEpics();
-           await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).toBeVisible();
-          await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+            await expect(reviewPanel.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
+           await expect(reviewPanel.getByRole("button", { name: "Resolve", exact: true })).toBeEnabled();
           await page.screenshot({ path: ".reqwizit-state/browser-resolution.png", fullPage: true });
         }
-        await reviewPanel.getByRole("button", { name: "Approve resolution", exact: true }).click();
+         await reviewPanel.getByRole("button", { name: "Resolve", exact: true }).click();
+         const resolutionForm = reviewPanel.getByRole("form", { name: "Resolve these requirements", exact: true });
+         await resolutionForm.getByRole("radio", { name: "Combine both requirements", exact: true }).check();
+         await resolutionForm.getByRole("button", { name: "Save resolution", exact: true }).click();
         await expect.poll(() => store.get(resolutionProject.id).requirements.filter((r) => r.status === "rejected").length).toBe(1);
         assert.equal(store.get(resolutionProject.id).requirements.length, 2);
          await reviewPanel.getByRole("button", { name: /^History/ }).click();
          await expandReviewEpics();
-         await expect(reviewPanel).toContainText("Resolution approved");
+          assert.ok(store.get(resolutionProject.id).requirements.some(r => r.reviewNote === "Combined by your decision."));
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
          if (restoreAutomatic !== undefined) {
            await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
@@ -1571,10 +1577,10 @@ try {
             assert.deepEqual(store.get(changes.id).requirements, original);
             await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
             await expandReviewEpics();
-            await expect(reviewPanel.getByRole("button", { name: "Approve refinement", exact: true })).toBeVisible();
+             await expect(reviewPanel.getByRole("button", { name: "Replace requirement", exact: true })).toBeVisible();
            await reviewPanel.getByText("Saved change requests", { exact: true }).click();
            await expect(reviewPanel.getByText(/Requested changes: Also save reports while offline\./)).toBeVisible();
-           await reviewPanel.getByRole("button", { name: "Approve refinement", exact: true }).click();
+            await reviewPanel.getByRole("button", { name: "Replace requirement", exact: true }).click();
            await expect.poll(() => store.get(changes.id).requirements[0]!.statement).toBe("Save reports offline");
          } else {
            await expect(reviewPanel.locator(".review-card-heading").filter({ hasText: "Save reports offline" })).toBeVisible();
@@ -1622,7 +1628,7 @@ try {
           assert.equal(narrowCalls, 0, "Manual processing preferences must not start inference");
            await runQueueAction(page, "Process saved responses only");
          await expect.poll(() => !!releaseNarrow).toBe(true);
-          await expect(reviewPanel).toContainText("Project processing—decisions temporarily paused");
+           await expect(reviewPanel).toContainText("A check is running");
           await reviewPanel.getByLabel("Anything to add? (optional)").fill("Keep this note while processing finishes");
           await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
           await page.screenshot({ path: ".reqwizit-state/browser-review-paused.png", fullPage: true });
@@ -1678,11 +1684,11 @@ try {
      await expect(reviewPanel.getByRole("button", { name: /^Needs your decision/ })).toContainText("3");
      await expect(page.getByRole("tab", { name: /Specification/ })).toContainText("3");
      await expect(reviewPanel.locator(".review-card").first()).toContainText("New requirement");
-      await expect(reviewPanel.getByRole("button", { name: "Approve refinement", exact: true })).toHaveCount(0);
+       await expect(reviewPanel.getByRole("button", { name: "Replace requirement", exact: true })).toHaveCount(0);
       await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
       await expandReviewEpics();
      await expect(reviewPanel.locator(".review-card")).toHaveCount(2);
-     await expect(reviewPanel.getByRole("button", { name: "Approve refinement", exact: true })).toHaveCount(1);
+      await expect(reviewPanel.getByRole("button", { name: "Replace requirement", exact: true })).toHaveCount(1);
      const firstRefinement = reviewPanel.locator(".refinement-card .review-card-heading").first();
      await firstRefinement.click();
      await expect(firstRefinement).toHaveAttribute("aria-expanded", "false");
@@ -1699,7 +1705,7 @@ try {
       await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
       await expandReviewEpics();
       await expect(reviewPanel).toContainText("Current wording (approved)");
-     await reviewPanel.getByRole("button", { name: "Approve refinement", exact: true }).click();
+      await reviewPanel.getByRole("button", { name: "Replace requirement", exact: true }).click();
      await expect.poll(() => store.get(cleanup.id).refinements.filter((p) => p.status === "accepted").length).toBe(1);
      assert.equal(store.get(cleanup.id).requirements[0]!.id, cleanup.requirements[0]!.id);
      assert.equal(store.get(cleanup.id).requirements[0]!.status, "accepted");
@@ -1726,7 +1732,7 @@ try {
      await reviewPanel.getByRole("button", { name: /Refinement approved/ }).click();
      await expect(reviewPanel).toContainText("Original wording (approved)");
      await expect(reviewPanel).toContainText("Jump() sets velocity to 420 for 0.15 seconds");
-     await expect(reviewPanel.getByRole("button", { name: "Approve refinement", exact: true })).toHaveCount(0);
+      await expect(reviewPanel.getByRole("button", { name: "Replace requirement", exact: true })).toHaveCount(0);
      await reviewPanel.getByRole("button", { name: /Current wording kept/ }).click();
      await expect(reviewPanel).toContainText("This refinement was dismissed");
       await reviewPanel.getByRole("button", { name: /^Needs your decision/ }).click();
@@ -1740,10 +1746,16 @@ try {
       await expect(reviewPanel.locator(".refinement-card")).toHaveCount(2);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Cleanup comparison must fit mobile width");
       const beforeRemoval = store.get(cleanup.id), removalJobs = store.jobs(cleanup.id).length;
-      await reviewPanel.locator(".review-toolbar").getByRole("button", { name: "Remove as duplicate…", exact: true }).click();
+       await reviewPanel.locator(".review-toolbar").getByText("Find another requirement to remove", { exact: true }).click();
+       await reviewPanel.locator(".review-toolbar").getByRole("button", { name: "Remove as duplicate…", exact: true }).click();
       const removalForm = reviewPanel.getByRole("form", { name: "Remove duplicate requirement", exact: true });
-      await removalForm.getByLabel("Remove", { exact: true }).selectOption(cleanup.requirements[1]!.id);
-      await removalForm.getByLabel("Keep unchanged", { exact: true }).selectOption(cleanup.requirements[0]!.id);
+       await removalForm.getByLabel("Remove", { exact: true }).selectOption(cleanup.requirements[1]!.id);
+       await removalForm.getByRole("searchbox", { name: "Search keep unchanged requirements", exact: true }).fill(cleanup.requirements[0]!.id);
+       await removalForm.getByLabel("Keep unchanged", { exact: true }).selectOption(cleanup.requirements[0]!.id);
+       await removalForm.getByRole("searchbox", { name: "Search keep unchanged requirements", exact: true }).fill("no matching requirement");
+       await expect(removalForm.getByLabel("Keep unchanged", { exact: true })).toHaveValue(cleanup.requirements[0]!.id);
+       await expect(removalForm.getByLabel("Keep unchanged", { exact: true }).locator("option")).toHaveCount(2);
+       await removalForm.getByRole("searchbox", { name: "Search keep unchanged requirements", exact: true }).clear();
       await expect(removalForm).toContainText(beforeRemoval.requirements[0]!.statement);
       await expect(removalForm).toContainText(beforeRemoval.requirements[1]!.statement);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Duplicate removal must fit mobile width");
