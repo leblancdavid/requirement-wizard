@@ -12,10 +12,16 @@ const port = parentPort!;
 const input = workerData as { project: Project; jobs: Job[]; focusEpicID?: string; submissions: Submission[];
   resolved: Map<string, EpicPlanningCheckpoint>; contexts: Map<string, EpicContextCheckpoint> };
 const snapshots = new Map<number, Project>();
+// A large history must not retain one full project for every rejected proof.
+// Proof results survive lazy retries, so at most two source projects are needed.
+const equivalenceSnapshots = new Map<number, Project>();
+const loadedRevisions = new Set<number>();
+const completedEquivalence = new Map<string, boolean>();
 const cache: NonNullable<EpicPlanningOptions["cache"]> = new Map();
 let contextPreparations = 0, examinedPackages = 0, checkpoints = 0, reusedGroups = 0, resolvedGroups = 0;
 let reusedContexts = 0, preparedContexts = 0;
 let reusedClosures = 0, closureRenderAttempts = 0;
+let completedEquivalenceChecks = 0, equivalentCompletedPackages = 0;
 let blockerSummary: PlanningBlockers = { contextLimit: 0, stagedTarget: 0, stagedSeed: 0, stageLimit: 0,
   savedBlocker: 0, attemptLimit: 0, unknown: 0, largestCharacters: null, smallestBudget: null };
 let activity: PlanningActivity = "catalog", lastActivity = performance.now();
@@ -29,10 +35,11 @@ const accumulate = () => {
 const progress = (next: PlanningProgress["phase"]) => {
   phase = next; accumulate();
   port.postMessage({ type: "progress", value: { format: 1, phase, examinedPackages, contextPreparations,
-    checkpoints: ++checkpoints, revisionsLoaded: snapshots.size, reusedGroups, resolvedGroups,
-    reusedContexts, preparedContexts, examinedStates, activity, activityMs, reusedClosures, closureRenderAttempts, blockerSummary } });
+    checkpoints: ++checkpoints, revisionsLoaded: loadedRevisions.size, reusedGroups, resolvedGroups,
+    reusedContexts, preparedContexts, examinedStates, activity, activityMs, reusedClosures, closureRenderAttempts, blockerSummary,
+    completedEquivalenceChecks, equivalentCompletedPackages } });
 };
-class MissingRevision extends Error { constructor(readonly revision: number) { super("Historical revision required."); } }
+class MissingRevision extends Error { constructor(readonly revision: number, readonly scope?: "equivalence") { super("Historical revision required."); } }
 function run() {
   try {
     progress("indexing");
@@ -41,8 +48,15 @@ function run() {
       const snapshot = snapshots.get(revision);
       if (!snapshot) throw new MissingRevision(revision);
       return snapshot;
-    }, { firstPending: true, cache, resolved: input.resolved, contexts: input.contexts,
+    }, { firstPending: true, cache, completedEquivalence, resolved: input.resolved, contexts: input.contexts,
+      readEquivalenceRevision: revision => {
+        if (revision === input.project.revision) return input.project;
+        const source = equivalenceSnapshots.get(revision);
+        if (!source) throw new MissingRevision(revision, "equivalence");
+        return source;
+      },
       onClosure: (reused) => { if (reused) reusedClosures++; else closureRenderAttempts++; progress("context"); },
+      onEquivalence: (reused) => { completedEquivalenceChecks++; if (reused) equivalentCompletedPackages++; progress("history"); },
       onActivity: (next) => { accumulate(); activity = next; progress(phase); },
       onContext: (key, value, reused) => {
         if (reused) reusedContexts++; else preparedContexts++;
@@ -62,15 +76,20 @@ function run() {
     examinedPackages = Math.max(examinedPackages, result.report.total);
     progress("ready"); port.postMessage({ type: "result", value: result });
   } catch (error) {
-    if (error instanceof MissingRevision) { progress("history"); port.postMessage({ type: "revision", revision: error.revision }); return; }
+    if (error instanceof MissingRevision) { progress("history"); port.postMessage({ type: "revision", revision: error.revision, scope: error.scope }); return; }
     port.postMessage({ type: "failure", message: error instanceof Error ? error.message : "Local planning failed.",
       ...(error instanceof ContextBudgetError ? { manifest: error.manifest } : {}) });
   }
 }
-port.on("message", (message: { revision: number; project: Project }) => {
+port.on("message", (message: { revision: number; project: Project; scope?: "equivalence" }) => {
   if (message.project.id !== input.project.id || message.project.revision !== message.revision) {
     port.postMessage({ type: "failure", message: "Historical planning snapshot does not match its immutable revision." }); return;
   }
-  snapshots.set(message.revision, message.project); run();
+  loadedRevisions.add(message.revision);
+  if (message.scope === "equivalence") {
+    equivalenceSnapshots.set(message.revision, message.project);
+    while (equivalenceSnapshots.size > 2) equivalenceSnapshots.delete(equivalenceSnapshots.keys().next().value!);
+  } else snapshots.set(message.revision, message.project);
+  run();
 });
 run();

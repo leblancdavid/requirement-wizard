@@ -1,5 +1,59 @@
 # Browser workspace, epics, and estimated completeness
 
+## Exact completed discovery reuse (2026-11-12)
+
+Discover can retain an earlier completed questions-only package when its original
+receipts replay correctly and its complete evidence/guidance is unchanged despite
+a different layout or record ordering. No old question is republished. Changed
+human decisions, scope, evidence or scan freshness still need review; unfinished
+paid schedules keep their existing path. Restart the backend to use the change.
+Diagnostic downloads add numeric equivalence-proof/match counts and staged
+draft/removal counts, including saved receipts from earlier runs. They do not give
+rejection reasons or prove completeness. Real-project request savings remain
+unverified; see [preservation and limits](migrations.md#exact-dependency-equivalent-completed-discovery-2026-11-12).
+
+## Task status and explicit footer actions (2026-11-12)
+
+The top status bar now names the current high-level task, or says **Idle · Ready
+when you are** when no worker is running. It no longer suggests that questions
+exist or can be answered. One contextual **Pause** replaces **Continue** while
+working; separate pause/stop/cancel buttons are removed from the ordinary header.
+Pause uses the existing worker's saved-progress interruption path; coordinated
+workflow pause finishes its current reply. Technical stop controls remain in Logs.
+
+**Continue** appears only for unfinished saved work, not as a general start button.
+Planning and coding continuation keep their operation; newer execution tasks do not
+revive an older discovery run. Special code checks retain their explicit retry
+controls rather than reconstructing their scope or permissions. Discovery/refinement
+continuation uses the saved task scope instead of the currently browsed epic.
+
+Persistent footers make new work explicit: **Discover** in Design, **Refine** in
+Specification, and **Prepare plan** / **Start implementation** (or the saved run's
+resume/delivery action) in Implement. Planning still requires review and approval;
+it never silently starts coding. Existing permission, setup, revision and busy-state
+gates remain. Activity and Settings have no process-start footer.
+
+This changes presentation and dispatch selection only. Saved records, paid checks,
+assessment validity and portable formats are unchanged; no data migration is needed.
+Verification: type checking, 67 focused UI/continuation tests, UI build, and the
+workspace-layout, model-selection and assessment-tools browser runners passed.
+The workspace runner checks mobile footers, exact Refine scope, one header action,
+and planning Pause/Continue routing without inference or changing saved data. The
+full browser command stopped later in the main runner at its Design badge assertion
+(expected 2, actual 1 after a saved-answer replacement); later runners did not run.
+The full unit suite and live provider calls were not run for this UI change.
+
+## Historical publication efficiency (2026-11-12)
+
+Workspace publication now reuses authenticated exact record strings across
+historical snapshots. Restart the backend to load it; the first publication may
+upgrade older computation caches before subsequent publications benefit. This does
+not rerun paid reviews, drop continuation evidence or change question selection.
+Discovery diagnostic downloads include optional numeric snapshot-cache subphase
+timings and reuse counts. The measured synthetic speedup is not qualification of
+the supplied project's 37-second publication; local cache storage can increase.
+See [upgrade, preservation and measurement limits](migrations.md#shared-exact-historical-record-computation-2026-11-12).
+
 ## Historical saved-answer attention loop (2026-11-11)
 
 An earlier failed answer no longer stays in Needs attention after a later durable

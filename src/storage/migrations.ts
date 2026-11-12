@@ -29,7 +29,7 @@ import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-p
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema } from "../core/gap-retrieval.js";
 
-export const databaseSchemaVersion = 68;
+export const databaseSchemaVersion = 69;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -359,6 +359,19 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 68, name: "saved-response-publication-support", apply() {
   // Reader boundary only. Explicit continuation can add a bounded evidence check
   // to an unchanged paid draft; startup never adopts it or rewrites old receipts.
+} }, { version: 69, name: "exact-portable-record-computation-cache", apply(db: Database.Database) {
+  // Disposable local computation only. Original revisions and portable evidence
+  // retain their formats; older normalized caches upgrade lazily without inference.
+  db.exec(`CREATE TABLE IF NOT EXISTS portable_record_cache (
+    project_id TEXT NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL,
+    PRIMARY KEY(project_id, digest), FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE TRIGGER IF NOT EXISTS portable_record_cache_revision_update AFTER UPDATE ON revisions BEGIN
+    DELETE FROM portable_record_cache WHERE project_id = OLD.project_id OR project_id = NEW.project_id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS portable_record_cache_revision_delete AFTER DELETE ON revisions BEGIN
+    DELETE FROM portable_record_cache WHERE project_id = OLD.project_id;
+  END;`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

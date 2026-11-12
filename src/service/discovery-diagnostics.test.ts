@@ -38,6 +38,12 @@ test("latest workspace publication diagnostics are numeric, separately scoped, r
   const detailed = discoveryDiagnosticReport([row], { format: 1, revision: 99, status: "saved", continuationProfile: { ...profile, "PRIVATE path": "PRIVATE input" } });
   assert.deepEqual(detailed.workspacePublication!.continuationProfile, profile);
   assert.ok(!JSON.stringify(detailed).includes("PRIVATE"));
+  const snapshotCache = { sourceReadMs: 1, sourceHashMs: 2, cacheReadMs: 3, inflateMs: 4, parseMs: 5,
+    normalizeMs: 6, cacheWriteMs: 7, hits: 8, misses: 9, upgrades: 10, objectReads: 11, objectHits: 12 };
+  const cached = discoveryDiagnosticReport([row], { format: 1, revision: 99,
+    continuationProfile: { ...profile, snapshotCache: { ...snapshotCache, path: "PRIVATE path", source: "PRIVATE input" } } });
+  assert.deepEqual(cached.workspacePublication!.continuationProfile!.snapshotCache, snapshotCache);
+  assert.ok(!JSON.stringify(cached).includes("PRIVATE"));
 });
 
 test("diagnostics export retains clarification/inspection/comparison receipt positions without exposing bodies or granting progress", async () => {

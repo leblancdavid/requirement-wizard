@@ -55,8 +55,9 @@ export function completeEmptyEpicStages(work: EpicStages): boolean {
   return true;
 }
 
+export type EpicProposalCounts = { draftedQuestions: number; draftedRequirements: number; removedQuestions: number; removedRequirements: number };
 /** Reconstruct all saved transitions independently before resuming or publishing. */
-export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review)): Analysis {
+export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review), counts?: EpicProposalCounts): Analysis {
   epicStagesSchema.parse(work);
   if ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(review.contextPolicy ?? "") && work.contextPolicy !== review.contextPolicy)
     || work.contextPolicy !== undefined && work.contextPolicy !== review.contextPolicy)
@@ -65,12 +66,20 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
   if (JSON.stringify(review.guardrailBatches) !== JSON.stringify(canonical.review.guardrailBatches)) throw new Error("Staged batch plan omits or regroups mandatory decisions; saved evidence was not overwritten.");
   if (!isStagedPolicy(review.contextPolicy) || work.planKey !== epicBatchKey(contexts) || work.batches !== contexts.length) throw new Error("Staged exact evidence changed; retain dated checkpoints, do not replay them as current.");
   let draft = emptyEpicDraft();
+  if (counts) Object.assign(counts, { draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 });
   for (const [index, receipt] of work.receipts.entries()) {
     const base = contexts[receipt.batch]!;
     if (receipt.evidenceKey !== retrievalEvidenceBasis(base).key) throw new Error("Staged receipt evidence does not match its exact batch.");
+    const before = draft;
     draft = receipt.phase === "discover"
       ? mergeEpicDraft(project, base, draft, analysisSchema.parse(receipt.response), receipt.batch)
       : applyGuardrailVerdict(draft, receipt.response);
+    if (counts) {
+      counts.draftedQuestions += Math.max(0, draft.questions.length - before.questions.length);
+      counts.draftedRequirements += Math.max(0, draft.requirements.length - before.requirements.length);
+      counts.removedQuestions += Math.max(0, before.questions.length - draft.questions.length);
+      counts.removedRequirements += Math.max(0, before.requirements.length - draft.requirements.length);
+    }
     if (work.completionPolicy && index + 1 >= work.batches && index + 1 < work.batches * 2
       && !draft.questions.length && !draft.requirements.length
       && (index !== work.receipts.length - 1 || !work.emptyCompletion || work.phase !== "complete"))

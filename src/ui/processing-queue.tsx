@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { MaintenanceQueue, type MaintenanceAction } from "./maintenance-controls.js";
-import { WorkflowControls, workflowLabels, type WorkflowConfigure } from "./workflow-controls.js";
+import { WorkflowControls, workflowLabels, mayContinueProject, type WorkflowConfigure } from "./workflow-controls.js";
+import { ProjectStatus } from "./project-status.js";
 import { answerIntegrationReasons } from "../core/answer-integration-diagnostics.js";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
@@ -25,7 +26,7 @@ import { openLogs } from "./log-access.js";
 import { processableSavedResponses, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 import { DefinitionBaselineNotice } from "./definition-progress.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, reusedClarification, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision, diagnostics = false }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, reusedClarification, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision, diagnostics = false, executionResume, executionSelected = false }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
@@ -43,6 +44,8 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   maintenanceSettings?: () => void; openRequest?: number;
   workflow?: WorkflowView; configureWorkflow?: WorkflowConfigure; openWorkflowDecision?: (decision: WorkflowDecision) => void;
   diagnostics?: boolean;
+  executionResume?: () => void;
+  executionSelected?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   useEffect(() => { if (openRequest) setOpen(true); }, [openRequest]);
@@ -57,7 +60,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const jobDiagnostic = !active && failed ? lastJob.definitionBlock?.reason ?? lastJob.diagnostic : undefined;
   const savedPause = lastJob?.status === "interrupted" && !!(lastJob.readinessProgress || lastJob.submissionProgress || lastJob.refinementStageProgress) || !!lastJob?.retrievalWork?.stagedRun?.paused;
   const running = activities.filter((item) => item.active);
-  const working = active || running.length > 0;
+  const working = active || !!workflow?.active || running.length > 0;
   const executionWaiting = running.some((item) => item.title !== "Question help");
   const taskCount = Number(active) + running.length;
   const refinement = refinementProgress ? refinementActivity(refinementProgress) : undefined;
@@ -75,7 +78,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     .find(({ job }) => job?.submissionAllowance?.canExtend);
   const resumeJob = discoveryResumeJob(lastJob);
   const actionablePause = (paused || !!resumeJob && ["failed", "cancelled", "interrupted", "stale"].includes(resumeJob.status)) && (hasUnfinishedInput || !!resumeJob && resumeJob.status !== "completed");
-    const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : lastJob?.kind === "definition-scope-review" ? "Reviewing selected dimensions" : lastJob?.kind === "definition-joint-review" ? "Checking findings together" : lastJob?.kind === "scan" ? "Reading project files" : lastJob?.context?.definitionAssessment ? "Checking definition" : "Reviewing your project")
+     const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? "Reviewing saved responses…" : lastJob?.context?.refinementOnly ? "Refining requirements…" : lastJob?.context?.readinessQuestions ? "Preparing Design questions…" : lastJob?.kind === "definition-scope-review" ? "Reviewing selected dimensions" : lastJob?.kind === "definition-joint-review" ? "Checking findings together" : lastJob?.kind === "scan" ? "Reading project files" : lastJob?.context?.definitionAssessment ? "Checking definition" : "Discovering missing decisions…")
       : blocked.length ? "Some responses need attention" : actionablePause ? "Processing paused" : attention.length ? "Needs attention"
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";
     const headline = reuse && !hasUnfinishedInput ? "Clarification complete · saved result reused" : taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
@@ -102,14 +105,21 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     </article>);
   }
 
-  if (!diagnostics) return <ActionScope><div className="queue-header" aria-label="Project assistance">
-    <div className="round-status project-status">{working && <Spinner />}<span className="status-copy" role="status" aria-live="polite"><strong>{working ? "Updating your project…" : attentionCount || workflow?.phase === "needs-decision" ? "Your project needs attention" : workflow?.phase === "blocked" ? "Review paused—your work is saved" : "Your work is saved"}</strong><small>{working ? "You can keep reading and answering questions." : "Questions in Design · Decisions in Specification"}</small></span>{working && <ActivityBar label="Project work" />}</div>
-    {workflow && configureWorkflow ? <>
-      <button className="primary queue-header-action" disabled={disabled || working} title="Review saved answers and update your specification using your AI plan. Does not start coding, read files or research the web." onClick={() => exhausted && extendSavedResponse ? openIssue?.(exhausted.item.id) : clarificationResume ? continueClarification?.() : refinementResume ? continueRefinement?.(refinementJob!.id) : configureWorkflow("play")}>Continue</button>
-      {workflow.active && <button className="secondary queue-header-action" disabled={stopDisabled || workflow.paused} onClick={() => configureWorkflow("pause")}>Pause</button>}
-      {(active || workflow.active) && <button className="quiet queue-header-action" disabled={stopDisabled} onClick={() => active && !workflow.active ? stop() : configureWorkflow("stop")}>Cancel current work</button>}
-    </> : working ? <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>Cancel current work</button> : <button className="primary queue-header-action" disabled={disabled} onClick={exhausted && extendSavedResponse ? () => openIssue?.(exhausted.item.id) : clarificationResume ? continueClarification : refinementResume ? () => continueRefinement!(refinementJob!.id) : processingFirst ? processSavedResponses : canResume ? resume : discover}>Continue</button>}
-  </div></ActionScope>;
+  const continueSaved = executionSelected ? executionResume : (exhausted && extendSavedResponse ? () => openIssue?.(exhausted.item.id)
+    : clarificationResume ? continueClarification : refinementResume ? () => continueRefinement!(refinementJob!.id)
+    : lastJob?.context?.refinementOnly && canResume ? resume
+    : workflow?.enabled && (workflow.grant || workflow.lastRun) && configureWorkflow && mayContinueProject(workflow) ? () => configureWorkflow("play")
+    : processingFirst ? processSavedResponses : canResume ? resume : continuationAvailable ? continueExploration : undefined);
+  const pauseCurrent = () => {
+    // Pause the owner of the actual work, not whichever tab is currently open.
+    if (workflow?.active && configureWorkflow) configureWorkflow("pause");
+    if (active && !workflow?.active) stop();
+    for (const activity of running) if (activity.stop) stopActivity(activity.stop);
+  };
+  if (!diagnostics) return <ActionScope><ProjectStatus working={working}
+    spinner={<Spinner />} progress={<ActivityBar label="Project work" />}
+    label={workflow?.active && workflow.paused ? "Pausing · Saving current progress…" : running[0]?.title ?? (active ? discoveryHeadline : "Reviewing your specification…")}
+    pending={stopDisabled || !!workflow?.active && workflow.paused} disabled={disabled} pause={pauseCurrent} resume={continueSaved} /></ActionScope>;
 
   return <ActionScope>
     <div className="queue-header">

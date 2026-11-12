@@ -1,5 +1,127 @@
 # Data migrations and upgrade compatibility
 
+## Exact dependency-equivalent completed discovery (2026-11-12)
+
+**Source → target: unchanged SQLite 69 / portable formats through 42; local
+resolved-prefix computation v2 → v3.** A read-time proof can retain completed
+questions-only v4/v5 workflow/boundary checks when record placement or broader
+input bookkeeping changes without changing their actual evidence dependencies.
+Original plans, input keys, final hashes, paid receipts, attempts and completed
+results are never relabelled or rewritten. There is no startup conversion,
+reassessment, model call, new usage permission or schema-version increment.
+
+The proof reconstructs the source's immutable original revision and canonical
+batch plan, independently replays every saved read/check, and authenticates its
+final output, exact final context hash, evidence hash and publication inventory.
+It then compares the entire expanded evidence union and every displayed global
+instruction/guidance field against today's canonical candidate. Only whole-record
+array ordering, batch placement/repetition and revision are representation-only.
+Record content, human decisions, task/group identity, policy, focused areas,
+guidance, dependency metadata and latest scan freshness must remain compatible;
+unknown extra instructions are not ignored. Both an added and a removed
+dependency prevent reuse. This is not semantic similarity, inferred independence,
+or a claim that the old model compared every possible pair of records together.
+
+Only fully published completed results qualify. Partial, failed, cancelled,
+exhausted, blocked or unpublished work cannot obtain a new stage allowance through
+this path. Existing exact-match resumption remains unchanged. Missing history or
+unverifiable receipts never establish equivalence. The owned worker requests
+historical revisions locally and preserves existing cancellation/deadline/stale
+revision checks; a source-read failure starts no inference. On successful proof,
+the planner marks the current candidate reviewed; it does not republish old drafts
+or manufacture a new model receipt. Portable exports retain the original source
+jobs/revisions under existing continuation rules, so clones can recompute the proof.
+An inventory mismatch rejects reuse before loading history. The owned worker
+retains at most two full source projects for these equivalence proofs and keeps
+invocation-local proof results across lazy history retries, so rejected old
+revisions neither accumulate full projects nor repeatedly replay earlier proofs.
+
+V3 local resolved-prefix keys bind the same exact project/history/submission inputs
+plus the new algorithm domain. Existing v1/v2 CPU receipts adopt only when those
+original inputs still match; they are conservative proofs and remain valid. Context
+packing caches and all paid-work identities are unchanged. Failed/interrupted local
+proofs leave original evidence intact; explicit retries need no data reset.
+
+Optional numeric diagnostics report completed-equivalence checks and matches for
+the current planning worker. A later exact-input CPU-cache hit can report zero new
+equivalence checks while still reusing reviewed packages. Staged proposal metrics
+now count drafts actually appended after exact deduplication and proposals removed
+by checks, including reconstruction across resumption. These counts describe the
+package's receipt history, not just new requests in the current run; they do not
+invent reasons for rejection. Older absent measurements remain unknown.
+
+Implemented scope is completed-package equivalence only: changed-evidence partial
+stage reuse, a semantic decision frontier and rejection-reason model output remain
+future work. The supplied cycle changed human/other evidence, so its 205 requests
+are not claimed avoidable by this narrower proof. Live speed remains unverified.
+Regression coverage includes valid ordered/rebatched evidence, genuine evidence/
+guidance/scan changes, corrupted/missing receipts, incomplete outcomes, repeated
+reopen, saved-order compatibility and portable round-trip with no repeated calls.
+The v2→v3 CPU-cache regression verifies adoption without context preparation or
+rewriting paid work; another regression walks five historical candidates through
+the two-project window with exactly one load/proof per revision.
+
+Verification: the full `npm test` aggregate passed 2,049 tests (950 pretests,
+819 main, 280 posttests) before the final bounded-history/cache-adoption hardening.
+After those final changes, all 135 focused epic-review/planning/diagnostic tests
+and type checking passed. UI build and diff check passed; browser automation and
+the live project/model account were not exercised. The full aggregate was not
+repeated after the final hardening.
+
+## Shared exact historical-record computation (2026-11-12)
+
+**Source → target: SQLite 68 → 69; disposable snapshot-cache generations 1/2 → 3;
+portable formats remain through 42.** The ordered transactional startup migration
+creates a local content-addressed record cache and invalidation triggers. It does
+not rewrite original revisions, jobs, answers, paid receipts, assessments, protocol
+keys or portable artifacts, and never starts inference. Unsupported future database
+versions remain rejected by the existing startup boundary.
+
+Generation 3 stores an integrity-checked manifest of exact serialized record hashes
+instead of repeating full record strings in every historical snapshot. Each read
+still reads/hashes original revision bytes and verifies the manifest; each distinct
+record is decompressed and authenticated before reuse. A publication-scoped memo
+retains at most an estimated 16 MiB of immutable strings/keys, not mutable projects.
+Uncached records are always loaded; hitting the memo bound never omits evidence.
+Record/manifest decompression and expanded record content retain a 64 MiB bound;
+oversized disposable computations fall back to original normalization.
+
+Existing valid generation-1/2 caches upgrade lazily without repeating normalization
+or model calls. Each record/manifest write is one transaction. Interrupted upgrades
+roll back and retry; corrupt, missing or unknown-generation computation rebuilds
+from original saved evidence. Original revision replacement/deletion invalidates
+both cache layers; appending a later revision preserves earlier computations.
+Deleting a project cascades to its computation cache. This is disposable local
+storage, never exported evidence; there is no new assessment/freshness semantics.
+
+Publication diagnostics add optional numeric snapshot-cache read/hash/inflate/parse/
+normalization/write times and cache/object reuse counts. Old measurements remain
+absent, not manufactured zeroes. These submeasurements overlap the enclosing
+snapshot-read timing and are not an exhaustive CPU profile. The export allowlist
+continues to strip IDs, paths, text and arbitrary extra fields.
+
+The synthetic 64-snapshot × 1,600-record benchmark verifies identical continuation
+bytes, compares against an independent generation-2 reader and reports cold,
+upgrade and warm costs. Initial measurements showed approximately halved warm
+time, but increased cached payload storage (~3.93 MB versus ~0.92 MB); migration
+and first publication are not warm-speed claims. The user's observed 37-second
+publication is not requalified by this fixture. Live-project speed, disk overhead
+and histories exceeding the memo budget still need real-world measurement.
+
+Upgrade tests cover a saved generation-2 computation at schema 68, failed schema
+upgrade rollback/retry, repeated startup, generation-1/2 promotion without
+normalization, interrupted manifest writes, missing/corrupt objects, original-byte
+replacement, unchanged revisions/jobs and byte-identical artifacts. A >8 MiB
+snapshot regression also exceeds the memo budget and verifies that nonretained
+records reload without another normalization or lost evidence.
+
+Verification: type check, UI build, 62 focused cache/migration/workspace/diagnostic
+tests and the four cache tests after strengthening the memory-bound regression
+passed. `benchmark:continuation` passed its exact-output comparisons. The full
+`npm test` aggregate passed all 2,045 tests (948 pretests, 817 main, 280 posttests).
+Both CLI help checks and the diff check passed. Browser automation and the user's
+live project/model account were not exercised.
+
 ## Superseded saved-answer attention reconciliation (2026-11-11)
 
 **Source → target: unchanged SQLite 68 / portable formats through 42.** Older

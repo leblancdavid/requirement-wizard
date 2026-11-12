@@ -14,6 +14,24 @@ export function discoveryResumeJob(job?: Job) {
     || job?.kind === "definition-mixed-review" || job?.context?.definitionMixedReview ? undefined : job;
 }
 
+/** Resume only the latest saved execution operation, never substitute discovery. */
+export function latestExecutionTask(execution: ExecutionState, lastJob?: Job) {
+  const latest = [
+    ...(execution.planning ? [{ at: execution.planning.createdAt, status: execution.planning.status, operation: "plan" as const }] : []),
+    ...(execution.run ? [{ at: execution.run.createdAt, status: execution.run.status, operation: "continue" as const }] : []),
+    ...(execution.assessmentRuns?.map(run => ({ at: run.startedAt, status: run.status, operation: "check" as const })) ?? []),
+  ].sort((a, b) => b.at.localeCompare(a.at))[0];
+  return !latest || lastJob?.createdAt && lastJob.createdAt > latest.at ? undefined : latest;
+}
+
+export function executionContinuation(execution: ExecutionState, lastJob?: Job) {
+  const latest = latestExecutionTask(execution, lastJob);
+  if (!latest || !["paused", "failed", "interrupted"].includes(latest.status)) return undefined;
+  // Checks can have a narrower scope or special preview/force permissions. Keep
+  // their explicit retry controls instead of reconstructing permission here.
+  return latest.operation === "check" ? undefined : latest.operation;
+}
+
 export function definitionActivityLabel(project: Project, job?: Job) {
   const epicID = job?.context?.definitionAssessment?.epicID ?? job?.definitionWork?.epicID;
   if (!epicID) return undefined;

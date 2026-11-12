@@ -16,6 +16,20 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Completed questions-only discovery can now retain an earlier check across lossless
+record-order/layout changes after replaying its original receipts and proving its
+full displayed evidence and guidance unchanged. Genuine decision changes still
+need review; partial paid schedules are not repacked. Diagnostics report reuse and
+draft-removal counts. Restart the backend; live savings are unverified. See
+[compatibility and implemented limits](docs/migrations.md#exact-dependency-equivalent-completed-discovery-2026-11-12).
+
+Historical workspace publication now shares authenticated exact records across
+snapshots instead of repeatedly expanding the same evidence. Existing computation
+caches upgrade without repeating model work; original evidence and portable bytes
+remain unchanged. A synthetic warm-cache benchmark roughly halved publication
+computation time at the cost of more local cache storage; live speed is unverified.
+Restart the backend to load the change. See [upgrade and measurement limits](docs/migrations.md#shared-exact-historical-record-computation-2026-11-12).
+
 The workspace now uses **Continue** with project-level status. Resolve conflicting
 answers directly in Specification and authorize extra review usage directly in
 Design, with optional details. Technical processing controls move to Logs, alongside

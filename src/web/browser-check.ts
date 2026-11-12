@@ -567,7 +567,7 @@ try {
   await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
   await discoveryActions(page);
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover", exact: true })).toBeDisabled();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toHaveCount(0);
   assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
   await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
   await page.getByRole("button", { name: "Save model", exact: true }).click();
@@ -800,7 +800,7 @@ try {
   await page.getByRole("tab", { name: /^Implement/ }).click();
   const implementationPanel = page.locator(".implementation-tab");
    await expect(page.getByRole("tab", { name: /Implement/ })).toContainText("1");
-   await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
+   await expect(page.getByRole("contentinfo", { name: "Planning and implementation controls" }).getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
    await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeDisabled();
   await expect(implementationPanel.getByRole("button", { name: "Verify main & refresh delivery", exact: true })).toHaveCount(0);
   await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Review and save the build setup");
@@ -854,12 +854,12 @@ try {
    await expect(boundaryTools.getByText(/Assessment reuse boundaries ·/, { exact: false })).toContainText("1 / 1 scoped");
    await boundaryTools.getByRole("button", { name: "Save implementation settings", exact: true }).click();
    await closeTechnicalViews(page);
-   await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
+   await expect(page.getByRole("contentinfo", { name: "Planning and implementation controls" }).getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
     await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeEnabled();
      const implementationActions = implementationPanel.getByRole("region", { name: "Implementation actions", exact: true });
      const preparation = implementationPanel.getByRole("region", { name: "Implementation preparation", exact: true });
-     await expect(preparation.locator(":scope > .button-row").getByRole("button")).toHaveCount(2);
-     await expect(implementationActions.getByRole("button")).toHaveCount(1);
+     await expect(preparation.locator(":scope > .button-row").getByRole("button")).toHaveCount(1);
+     await expect(implementationActions.getByRole("button")).toHaveCount(0);
     await expect(implementationActions.getByRole("status", { name: "Implementation next step" })).toContainText("Check progress");
      await expect(preparation).toContainText("Plan scope: all approved requirements");
     await expect(implementationPanel.getByRole("button", { name: "Preview changes", exact: true })).toHaveCount(0);
@@ -980,8 +980,8 @@ try {
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   await expect.poll(() => releases.length).toBe(1);
   const headerStatus = page.locator(".topbar .round-status");
-  await expect(headerStatus.locator("strong")).toHaveText("Updating your project…");
-  await expect(headerStatus.locator("small")).toContainText("You can keep reading and answering questions");
+  await expect(headerStatus.locator("strong")).toHaveText("Reviewing saved responses…");
+  await expect(headerStatus.locator("small")).toHaveCount(0);
   await expect(headerStatus.locator(".activity-spinner")).toBeVisible();
   await expect(headerStatus.getByRole("progressbar", { name: "Project work" })).toBeVisible();
   assert.equal(await headerStatus.getByRole("progressbar").getAttribute("aria-valuenow"), null, "Unknown duration is indeterminate");
@@ -1007,8 +1007,7 @@ try {
     } else {
       assert.ok(processingBounds.y >= progressBounds.y + progressBounds.height, "Processing moves below identity and progress on narrower screens");
     }
-    await expect(headerStatus.locator("small")).toHaveCSS("white-space", "nowrap");
-    await expect(headerStatus.locator("small")).toHaveCSS("text-overflow", "ellipsis");
+    await expect(headerStatus.locator("small")).toHaveCount(0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Compact header fits the viewport");
     const content = page.locator(".tab-content");
     await content.evaluate((element) => { element.scrollTop = element.scrollHeight; });
@@ -1052,7 +1051,7 @@ try {
       await expect(control).not.toHaveCSS("background-color", surfaceColor);
     }
     await expect(headerStatus.locator("strong")).toHaveCSS("color", headerInk);
-    await expect(headerStatus.locator("small")).toHaveCSS("color", headerInk);
+    await expect(headerStatus.locator("strong")).toHaveCSS("color", headerInk);
     await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("color", headerInk);
     await expect(header.locator(".header-progress small").first()).toHaveCSS("color", headerInk);
     await expect(header.locator(".meter > span")).toHaveCSS("background-color", headerInk);
@@ -1063,7 +1062,7 @@ try {
     }
     if (width >= 1440) assert.ok((await header.boundingBox())!.height < 220, "Desktop header uses a compact summary instead of a narrow, tall progress card");
     assert.ok((await workspaceTabs.boundingBox())!.y >= (await page.locator(".queue-header").boundingBox())!.y + (await page.locator(".queue-header").boundingBox())!.height, "Workspace tabs sit below current processing controls");
-    await expect(header.getByRole("button", { name: "Cancel current work", exact: true })).toBeInViewport();
+    await expect(header.getByRole("button", { name: "Pause", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });
     await (await applicationMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
@@ -1137,7 +1136,7 @@ try {
   await offline.fill("Keep offline work locally");
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What should happen offline?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await expect(headerStatus).toContainText("Updating your project");
+  await expect(headerStatus).toContainText("Reviewing saved responses");
   await page.reload();
   await expect(page.getByRole("heading", { name: "Your responses are in the queue.", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
@@ -1161,9 +1160,9 @@ try {
   const headerControls = page.locator(".queue-header");
   // Submission completion may precede the end of its background follow-up.
   // Stop the still-active work rather than trying to start a concurrent round.
-  await expect(headerControls.getByRole("button", { name: "Cancel current work", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await headerControls.getByRole("button", { name: "Cancel current work", exact: true }).focus();
+  await headerControls.getByRole("button", { name: "Pause", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(headerControls.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
@@ -1175,7 +1174,7 @@ try {
   await runQueueAction(page, "Process saved responses only");
   await expect.poll(() => releases.length).toBe(callsBeforeResume + 1);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
-  await headerControls.getByRole("button", { name: "Cancel current work", exact: true }).click();
+  await headerControls.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(headerControls.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
@@ -1668,7 +1667,7 @@ try {
      await (await workspaceMenu(page)).getByRole("button", { name: /Cleanup fixture/ }).click();
      await page.getByRole("tab", { name: /Specification/ }).click();
       await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
-      await expect(page.locator(".project-status")).toContainText("Updating your project");
+       await expect(page.locator(".project-status")).toContainText("Refining requirements");
       await expect(page.locator(".project-status [role=progressbar]")).not.toHaveAttribute("aria-valuenow");
       await processingQueue(page);
      const refinementDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
@@ -2008,7 +2007,7 @@ try {
         await page.reload(); await processingQueue(page); await expect(sharedQueueTrigger).toContainText("Main verification");
         await sharedQueue.getByRole("button", { name: "Stop implementation", exact: true }).click();
        await expect(sharedQueue.getByRole("button", { name: "Stop implementation", exact: true })).toHaveCount(0);
-         await expect(page.locator(".project-status")).toContainText("Your work is saved");
+         await expect(page.locator(".project-status")).toContainText("Idle");
         await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
         await expect(sharedQueueTrigger.locator(".activity-spinner")).toHaveCount(0);
         await expect(sharedQueue.getByText(/^Recent background work/)).toHaveCount(0);
@@ -2017,19 +2016,19 @@ try {
         const backgroundAssessment = backgroundLogs.locator(".log-record").filter({ hasText: "fixture-context-block" });
         await expect(backgroundAssessment).toContainText("Assessment stopped; earlier results retained.");
         queueAssessment.status = "failed"; queueAssessment.diagnostic = "Verification command failed; local assessment retained.";
-          await expect(page.locator(".project-status")).toContainText("Your work is saved");
+          await expect(page.locator(".project-status")).toContainText("Idle");
         await expect(backgroundAssessment).toContainText("Verification command failed; local assessment retained.");
         queueAssessment.status = "completed"; queueAssessment.diagnostic = "Verified main assessment finished.";
          await expect(backgroundAssessment).toContainText("Verified main assessment finished.");
          await backgroundLogs.getByRole("button", { name: "Close logs", exact: true }).click();
-         await expect(page.locator(".project-status")).toContainText("Your work is saved");
+         await expect(page.locator(".project-status")).toContainText("Idle");
         await page.keyboard.press("Escape");
          queueHasWaiting = false;
          queueAssessment.status = "interrupted";
-         await expect(page.locator(".project-status")).toContainText("Your work is saved");
+         await expect(page.locator(".project-status")).toContainText("Idle");
          await expect(page.locator(".project-status").getByRole("progressbar")).toHaveCount(0);
          await page.reload();
-         await expect(page.locator(".project-status")).toContainText("Your work is saved");
+         await expect(page.locator(".project-status")).toContainText("Idle");
         await page.unroute(snapshotRoute);
        await page.unroute(`**/api/projects/${listing.id}/cancel-help`);
         await page.unroute(`**/api/projects/${listing.id}/execution-stop`);
@@ -2120,7 +2119,7 @@ try {
           // Progress-only polls must not retransmit the 500-requirement project or
           // execution evidence, disturb focused input, or mount additional details.
           largeActive = true;
-           await expect(page.locator(".project-status")).toContainText("Updating your project");
+           await expect(page.locator(".project-status [role=progressbar]")).toBeVisible();
           await search.focus();
           for (let checkpoint = 1; checkpoint <= 3; checkpoint++) {
             const nextCheckpoint = page.waitForResponse(async (response) => response.url().endsWith(`/api/projects/${listing.id}`) && (await response.text()).includes(`Performance checkpoint ${checkpoint}`));
@@ -2634,7 +2633,7 @@ try {
    assert.deepEqual(store.get(gapProject.id).requirements, gapOriginal.requirements);
    assert.deepEqual(store.get(gapProject.id).sources, gapOriginal.sources);
      // Completed reuse is saved diagnostic history, not current queue activity.
-     await expect(page.locator(".project-status")).toContainText("Your work is saved");
+     await expect(page.locator(".project-status")).toContainText("Idle");
     await processingQueue(page);
     const gapQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
     await expect(gapQueue.getByRole("region", { name: "Gap exploration backlog", exact: true })).toHaveCount(0);

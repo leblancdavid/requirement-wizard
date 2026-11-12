@@ -94,7 +94,7 @@ export function canContinueGapExploration(job: Job): boolean {
 export const retrievalContextKey = (context: ContextPack) => createHash("sha256").update(JSON.stringify(context.data)).digest("hex");
 
 /** Expand only the app's lossless wire forms; human strings are never interpreted. */
-function expandedEvidence(input: unknown): Record<string, unknown> {
+export function expandedEvidence(input: unknown): Record<string, unknown> {
   const data = input as { identifierTable?: { values: string[] }; sharedText?: { values: Record<string, string> } };
   const expand = (value: unknown, field = ""): unknown => {
     if (typeof value === "number" && data.identifierTable && field !== "sharedTextID"

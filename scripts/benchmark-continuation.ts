@@ -5,7 +5,7 @@ import { deflateSync, inflateSync } from "node:zlib";
 import { ProjectStore } from "../src/storage/store.js";
 import { continuationState, type ContinuationProfile } from "../src/storage/portable.js";
 import { projectSchema } from "../src/core/model.js";
-import { portableSnapshotRecords } from "../src/storage/portable-snapshots.js";
+import { createPortableSnapshotReader, snapshotCacheProfile } from "../src/storage/portable-snapshots.js";
 import type { PortableSnapshotRecords } from "../src/storage/portable-records.js";
 import type { Project, Job } from "../src/core/model.js";
 
@@ -62,7 +62,8 @@ const db = new Database(":memory:");
 try {
   db.exec(`CREATE TABLE revisions (project_id TEXT, revision INTEGER, payload TEXT, PRIMARY KEY(project_id, revision));
     CREATE TABLE portable_snapshot_cache (project_id TEXT, revision INTEGER, generation INTEGER, source_digest TEXT, payload_digest TEXT, payload BLOB,
-      PRIMARY KEY(project_id, revision));`);
+      PRIMARY KEY(project_id, revision));
+    CREATE TABLE portable_record_cache (project_id TEXT, digest TEXT, payload BLOB, PRIMARY KEY(project_id, digest));`);
   const current = projectSchema.parse({ id: "snapshot-benchmark", name: "Synthetic snapshots", revision: 100, model: { providerID: "openai", modelID: "fixture" },
     questions: [], requirements: [], summary: "Exact synthetic evidence", goals: [], actors: [], assumptions: [],
     sources: Array.from({ length: 1600 }, (_, i) => ({ id: `s-${i}`, kind: "note", epicID: "project", text: `Original ${i}: ${"Exact original evidence. ".repeat(25)}` })) });
@@ -95,16 +96,35 @@ try {
     const start = performance.now(), before = normalizations;
     const result = continuationState(current, jobs, [], normalize, reader);
     const elapsedMs = performance.now() - start;
-    const cacheBytes = (db.prepare("SELECT SUM(length(payload)) AS bytes FROM portable_snapshot_cache").get() as { bytes: number }).bytes;
+    const cacheBytes = (db.prepare("SELECT COALESCE(SUM(length(payload)), 0) + (SELECT COALESCE(SUM(length(payload)), 0) FROM portable_record_cache) AS bytes FROM portable_snapshot_cache").get() as { bytes: number }).bytes;
     return { result, elapsedMs, normalizations: normalizations - before, cacheBytes };
   };
   const oldCold = measure(legacy), oldWarm = measure(legacy);
-  const promoted = measure(revision => portableSnapshotRecords(db, current.id, revision, () => normalize(revision)));
-  db.exec("DELETE FROM portable_snapshot_cache");
-  const cold = measure(revision => portableSnapshotRecords(db, current.id, revision, () => normalize(revision)));
-  const warm = measure(revision => portableSnapshotRecords(db, current.id, revision, () => normalize(revision)));
-  for (const run of [oldWarm, promoted, cold, warm]) assert.equal(JSON.stringify(run.result), JSON.stringify(oldCold.result));
+  const generation2 = (revision: number) => {
+    const sourceDigest = digest(source(revision));
+    const cache = db.prepare("SELECT * FROM portable_snapshot_cache WHERE project_id=? AND revision=?").get(current.id, revision) as
+      { generation: number; source_digest: string; payload_digest: string; payload: Buffer } | undefined;
+    if (cache?.generation === 2 && cache.source_digest === sourceDigest) {
+      const text = inflateSync(cache.payload).toString("utf8");
+      if (digest(text) === cache.payload_digest) return JSON.parse(text) as PortableSnapshotRecords;
+    }
+    const project = normalize(revision);
+    const records: PortableSnapshotRecords = { format: "portable-records-v1", fields: Object.entries({ ...project,
+      model: { providerID: project.model.providerID, modelID: project.model.modelID } }).map(([key, value]) => [key,
+      Array.isArray(value) ? value.map(item => JSON.stringify(item) ?? "null") : JSON.stringify(value) ?? null]) };
+    const text = JSON.stringify(records);
+    db.prepare("INSERT OR REPLACE INTO portable_snapshot_cache VALUES (?, ?, 2, ?, ?, ?)").run(current.id, revision, sourceDigest, digest(text), deflateSync(text, { level: 1 }));
+    return records;
+  };
+  const gen2Cold = measure(generation2), gen2Warm = measure(generation2);
+  const promoted = measure(createPortableSnapshotReader(db, current.id, normalize));
+  db.exec("DELETE FROM portable_snapshot_cache; DELETE FROM portable_record_cache");
+  const cold = measure(createPortableSnapshotReader(db, current.id, normalize));
+  const cacheProfile = snapshotCacheProfile();
+  const warm = measure(createPortableSnapshotReader(db, current.id, normalize, db, cacheProfile));
+  for (const run of [oldWarm, gen2Cold, gen2Warm, promoted, cold, warm]) assert.equal(JSON.stringify(run.result), JSON.stringify(oldCold.result));
   const summary = ({ elapsedMs, normalizations, cacheBytes }: ReturnType<typeof measure>) => ({ elapsedMs, normalizations, cacheBytes });
   console.log(JSON.stringify({ fixtureOnly: true, historicalSnapshots: 64, recordsPerSnapshot: 1600, legacyCold: summary(oldCold), legacyWarm: summary(oldWarm),
-    upgraded: summary(promoted), cold: summary(cold), warm: summary(warm), limitation: "In-memory SQLite fixture, not a user-project or filesystem-publication speed guarantee." }));
+    generation2Warm: summary(gen2Warm), upgraded: summary(promoted), cold: summary(cold), warm: summary(warm), cacheProfile,
+    limitation: "In-memory SQLite fixture, not a user-project or filesystem-publication speed guarantee." }));
 } finally { db.close(); }

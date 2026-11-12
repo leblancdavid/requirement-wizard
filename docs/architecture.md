@@ -1,5 +1,23 @@
 # Architecture outline
 
+Completed questions-only discovery may reuse exact evidence dependencies separately
+from batch layout. `src/core/epic-stage-reuse.ts` authenticates original v4/v5
+read/check ledgers against their historical revision and compares the complete
+expanded record union plus every displayed guidance field with today's candidate.
+Only fully completed published work qualifies; changed evidence and partial work
+retain existing checks. Local resolved-prefix keys use v3 without changing paid
+protocols or portable formats. Numeric diagnostics distinguish equivalence proofs
+and draft removals; see [compatibility and remaining scope](migrations.md#exact-dependency-equivalent-completed-discovery-2026-11-12).
+
+Historical portable publication uses generation-3 content-addressed exact-string
+computation in SQLite 69. A publication-scoped bounded reader authenticates source
+revisions and distinct cached records, then shares immutable strings across
+historical manifests without reconstructing full project objects. Generation-1/2
+computation upgrades lazily; portable formats, selection/freshness rules and paid
+protocols remain unchanged. Optional redacted numeric diagnostics distinguish
+source hashing, cache reads, inflation, parsing and upgrade work. See
+[compatibility and tradeoffs](migrations.md#shared-exact-historical-record-computation-2026-11-12).
+
 Requirement pair decisions now have a small app-owned path separate from AI proposal
 review. `src/core/requirement-resolution.ts` validates explicit remove/replace/combine
 choices and preserves the two original records in human evidence. The store applies

@@ -24,8 +24,188 @@ import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { emptyExecution } from "../core/execution.js";
 import { gapEvidence } from "../core/gap-backlog.js";
+import { completedRecordStagesEquivalent, recordStageEvidenceKey } from "../core/epic-stage-reuse.js";
+import { expandedEvidence } from "../core/gap-retrieval.js";
+import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("completed exact-record checks survive lossless ordering and rebatching, but never changed evidence or unverified history", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 10), task = planEpicReview(p, [], "orders").task!;
+    assert.equal(task.review.contextPolicy, "staged-dense-records-v5");
+    let calls = 0;
+    const finished = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      calls++;
+      if ((context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase === "validate")
+        return { guardrailVerdict: { keepQuestions: calls === task.batches!.length * 2 ? [] : [0], keepRequirements: [] } };
+      return calls === 1 ? { ...empty(), questions: [{ text: "How should order expiry behave?", whyItMatters: "Determine the expiration policy",
+        evidenceIDs: [p.requirements[0]!.id], options: [{ label: "Cancel", consequence: "Remove the expired order" }, { label: "Retain", consequence: "Keep it pending" }] }] } : empty();
+    } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(finished.status, "completed", finished.diagnostic);
+    const original = structuredClone(finished);
+    const changed = structuredClone(store.get(p.id)); changed.sources.reverse();
+    const current = planEpicReview(changed, [], "orders").task!;
+    assert.notEqual(current.review.inputKey, finished.context!.epicReview!.inputKey, "Lossless record order previously caused a new model schedule");
+    assert.equal(completedRecordStagesEquivalent(p, changed, finished, current.review, current.batches!), true);
+    let equivalent = 0;
+    const plan = planEpicReview(changed, [finished], "orders", [], revision => store.get(p.id, revision), { onEquivalence: reused => { if (reused) equivalent++; } });
+    assert.equal(plan.task, undefined); assert.equal(plan.report.reviewed, 1); assert.equal(equivalent, 1);
+    assert.equal(calls, task.batches!.length * 2, "Equivalence requires no new model requests");
+    assert.equal(finished.discoveryMetrics!.epicProposals!.draftedQuestions, 1);
+    assert.equal(finished.discoveryMetrics!.epicProposals!.removedQuestions, 1);
+    const diagnostics = store.discoveryDiagnostics(p.id, [finished.id]);
+    assert.equal(diagnostics.runs[0]!.measurements!.epicProposals!.draftedQuestions, 1);
+    assert.equal(diagnostics.runs[0]!.measurements!.epicProposals!.removedQuestions, 1);
+    assert.deepEqual(store.getJob(finished.id), original);
+
+    const rebatch = current.batches!.flatMap(context => {
+      const data = expandedEvidence(context.data), sources = data.sources as { id: string }[];
+      return [sources.slice(0, Math.ceil(sources.length / 2)), sources.slice(Math.ceil(sources.length / 2))].map(part => {
+        const split = structuredClone(context); split.data = { ...data, sources: part };
+        split.manifest.includedIDs = ["sources", "questions", "requirements", "research"].flatMap(field => ((split.data as Record<string, unknown>)[field] as { id: string }[]).map(record => record.id));
+        return split;
+      });
+    }).reverse();
+    assert.equal(recordStageEvidenceKey(rebatch), recordStageEvidenceKey(current.batches!));
+    assert.equal(completedRecordStagesEquivalent(p, changed, finished, current.review, rebatch), true);
+
+    for (const mutate of [
+      (value: Project) => { value.sources[0]!.text += " Genuine human constraint"; },
+      (value: Project) => { value.sources.push({ ...value.sources[0]!, id: "new-human-evidence", kind: "note", text: "Additional governing constraint" }); },
+      (value: Project) => { value.requirements[0]!.acceptance.push("Additional acceptance scenario"); },
+      (value: Project) => { value.goals.push("New governing goal"); },
+      (value: Project) => { value.epics.find(e => e.id === "orders")!.purpose += " Changed dependency meaning"; },
+    ]) {
+      const next = structuredClone(changed); mutate(next);
+      const candidate = planEpicReview(next, [], "orders").task!;
+      assert.equal(completedRecordStagesEquivalent(p, next, finished, candidate.review, candidate.batches!), false);
+      assert.ok(planEpicReview(next, [finished], "orders", [], revision => store.get(p.id, revision)).task, "Changed evidence still requires model work");
+    }
+    const rescan = structuredClone(changed); rescan.scans.push({ id: "different-scan", capturedAt: "later", files: [], omitted: [], traversalLimited: false, changes: [], affectedRequirementIDs: [] });
+    assert.equal(completedRecordStagesEquivalent(p, rescan, finished, current.review, current.batches!), false);
+    for (const mutate of [
+      (job: Job) => { job.status = "interrupted"; },
+      (job: Job) => { job.retrievalWork!.epicStages!.phase = "discover"; },
+      (job: Job) => { delete job.result; },
+      (job: Job) => { job.retrievalWork!.epicStages!.receipts[0]!.evidenceKey = "f".repeat(64); },
+      (job: Job) => { job.retrievalWork!.final!.contextKey = "f".repeat(64); },
+      (job: Job) => { job.retrievalWork!.final!.revision = p.revision + 100; },
+      (job: Job) => { job.retrievalWork!.research = true; },
+      (job: Job) => { job.result!.summary += " Unchecked change"; },
+      (job: Job) => { job.context!.includedIDs.pop(); },
+    ]) {
+      const corrupt = structuredClone(finished); mutate(corrupt);
+      assert.equal(completedRecordStagesEquivalent(p, changed, corrupt, current.review, current.batches!), false);
+    }
+    const missing = structuredClone(current.batches!); missing.pop();
+    assert.equal(completedRecordStagesEquivalent(p, changed, finished, current.review, missing), false);
+    assert.equal(completedRecordStagesEquivalent(p, changed, finished, { ...current.review, contextPolicy: "staged-records-v4" }, current.batches!), false);
+    const unknownGuidance = structuredClone(current.batches!);
+    (unknownGuidance[0]!.data as Record<string, unknown>).futureReviewInstruction = "Do not ignore unrecognized guidance";
+    assert.equal(completedRecordStagesEquivalent(p, changed, finished, current.review, unknownGuidance), false);
+    assert.deepEqual(store.getJob(finished.id), original);
+  } finally { store.close(); }
+});
+
+test("older completed receipts reuse after equivalent saved-order changes, repeated reopen and portable round-trip without inference", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "record-equivalence-reopen-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store, 1, 10);
+    const original = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(original.status, "completed", original.diagnostic);
+    const current = structuredClone(store.get(p.id)); current.sources.reverse(); store.close();
+    const db = new Database(path);
+    try {
+      // Emulate equivalent saved ordering from another compatible serializer.
+      // Only the later representation changes; original paid evidence stays exact.
+      db.prepare("UPDATE projects SET payload=? WHERE id=?").run(JSON.stringify(current), p.id);
+      db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(JSON.stringify(current), p.id, current.revision);
+    } finally { db.close(); }
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store = new ProjectStore(path);
+      const jobsBefore = store.epicReviewHistory(p.id), before = store.get(p.id);
+      let calls = 0;
+      const result = await new DiscoveryService(store, { async analyze() { calls++; assert.fail("Equivalent completed work must not repeat"); } })
+        .analyze(p.id, before.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+      assert.equal(result.status, "completed", result.diagnostic); assert.equal(calls, 0);
+      assert.equal(result.epicReviewReport!.reviewed, 1);
+      assert.deepEqual(result.discoveryMetrics!.requests, []);
+      assert.equal(result.discoveryMetrics!.planningProgress!.equivalentCompletedPackages, reopen === 0 ? 1 : 0,
+        "Later reopen reuses the exact-input local scheduling proof without another historical replay");
+      assert.deepEqual(store.get(p.id), before);
+      for (const job of jobsBefore) assert.deepEqual(store.getJob(job.id), job);
+      assert.deepEqual(store.getJob(original.id), original);
+      const projection = continuationState(before, store.jobs(p.id), [], revision => store.get(p.id, revision));
+      const portable = decodePortable(renderWorkspace(before, emptyExecution(), projection), p.model);
+      const snapshots = new Map([...portable.snapshots()].map(snapshot => [snapshot.revision, snapshot]));
+      const plan = planEpicReview(portable.project, portable.continuation.jobs, "orders", [], revision => snapshots.get(revision)!);
+      assert.equal(plan.task, undefined); assert.equal(plan.report.reviewed, 1);
+      store.close();
+    }
+    store = new ProjectStore(path);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("v2 exact-input scheduling receipts adopt into v3 without repeating context preparation or paid work", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1);
+    const job = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(job.status, "completed", job.diagnostic);
+    const current = store.get(p.id), history = store.epicReviewHistory(p.id), receipts = new Map<string, EpicPlanningCheckpoint>();
+    planEpicReview(current, history, "orders", [], revision => store.get(p.id, revision), { onResolved: (key, value) => receipts.set(key, value) });
+    const v2 = createHash("sha256").update(JSON.stringify(["resolved-prefix-v2", epicPlanningProjectKey(current), history, "orders", []])).digest("hex");
+    const v3 = epicPlanningInputKey(current, history, "orders", []);
+    for (const [key, value] of receipts) store.saveEpicPlanningReceipt(p.id, current.revision, v2, key, value);
+    assert.ok(receipts.size > 0); assert.equal(store.epicPlanningReceipts(p.id, v3).size, 0);
+    const progress: PlanningProgress[] = [];
+    const plan = await prepareEpicReview(current, history, "orders", [], { signal: new AbortController().signal,
+      readRevision: revision => store.get(p.id, revision), onProgress: value => progress.push(value),
+      loadReceipts: key => store.epicPlanningReceipts(p.id, key),
+      saveReceipt: (input, key, value) => store.saveEpicPlanningReceipt(p.id, current.revision, input, key, value) });
+    assert.equal(plan.task, undefined); assert.equal(plan.report.reviewed, 1);
+    assert.equal(progress.at(-1)!.contextPreparations, 0);
+    assert.ok(progress.at(-1)!.reusedGroups! > 0);
+    assert.deepEqual(store.epicPlanningReceipts(p.id, v3), receipts);
+    assert.equal(store.epicPlanningReceipts(p.id, v2).size, 0, "The existing single-generation CPU cache keeps adopted exact receipts under v3, not a duplicate generation");
+    assert.deepEqual(store.getJob(job.id), job); assert.deepEqual(store.get(p.id), current);
+  } finally { store.close(); }
+});
+
+test("lazy equivalence history retries do not repeat proofs when the bounded source-project window evicts older revisions", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 10);
+    const original = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(original.status, "completed", original.diagnostic);
+    const current = structuredClone(store.get(p.id)); current.sources.reverse();
+    const historical = new Map<number, Project>([[p.revision, p]]);
+    const older = Array.from({ length: 4 }, (_, index) => {
+      const revision = p.revision - index - 1, snapshot = structuredClone(p);
+      snapshot.revision = revision; snapshot.sources[0]!.text += ` Older different evidence ${index}`;
+      historical.set(revision, snapshot);
+      return { ...structuredClone(original), id: `older-equivalence-${index}`, expectedRevision: revision };
+    });
+    const loads = new Map<number, number>(), progress: PlanningProgress[] = [];
+    const plan = await prepareEpicReview(current, [original, ...older], "orders", [], { signal: new AbortController().signal,
+      readRevision: revision => { loads.set(revision, (loads.get(revision) ?? 0) + 1); return historical.get(revision)!; },
+      onProgress: value => progress.push(value) });
+    assert.equal(plan.task, undefined); assert.equal(plan.report.reviewed, 1);
+    assert.equal(loads.size, 5); assert.ok([...loads.values()].every(count => count === 1));
+    assert.equal(progress.at(-1)!.completedEquivalenceChecks, 5);
+    assert.equal(progress.at(-1)!.equivalentCompletedPackages, 1);
+    assert.equal(progress.at(-1)!.revisionsLoaded, 5);
+    assert.deepEqual(store.getJob(original.id), original);
+  } finally { store.close(); }
+});
 test("workflow CPU identity tolerates bookkeeping revisions but invalidates exact material, scope, history and wire-width changes", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -813,6 +993,8 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
       return { guardrailVerdict: { keepQuestions: resumedCalls === batches ? [] : [0], keepRequirements: [] } };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
     assert.equal(finished.status, "completed", finished.diagnostic); assert.equal(resumedCalls, batches);
+    assert.equal(finished.discoveryMetrics!.epicProposals!.draftedQuestions, 1, "Saved original drafting is included after resume");
+    assert.equal(finished.discoveryMetrics!.epicProposals!.removedQuestions, 1, "The final removal is measured without replaying paid calls");
     if (linkedNotes === 10) assert.equal(finished.discoveryMetrics!.planningProgress!.contextPreparations, 0,
       "Changed job receipts must not invalidate exact-snapshot packing across SQLite reopen");
     assert.equal(finished.retrievalWork!.epicStages!.receipts[batches]!.attempts, 2);

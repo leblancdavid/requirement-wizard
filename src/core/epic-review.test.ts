@@ -310,7 +310,8 @@ test("an empty sixteen-batch discovery stops without sixteen vacuous verificatio
     assert.equal(result.status, "completed", result.diagnostic);
     assert.equal(seen.size, 16); assert.equal(result.retrievalWork!.epicStages!.receipts.length, 16);
     assert.equal(result.discoveryMetrics!.requests.length, 16);
-    assert.deepEqual(result.discoveryMetrics!.epicProposals, { questions: 0, requirements: 0, phase: "complete", checksNotRequested: 16, emptyCompletion: true });
+    assert.deepEqual(result.discoveryMetrics!.epicProposals, { questions: 0, requirements: 0, phase: "complete", checksNotRequested: 16, emptyCompletion: true,
+      draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 });
     assert.equal(store.discoveryDiagnostics(p.id, [result.id]).runs[0]!.measurements!.requests.length, 16);
     assert.equal(result.retrievalWork!.stagedRun!.requestLimit, 32);
     assert.equal(result.retrievalWork!.stagedRun!.paused, undefined);

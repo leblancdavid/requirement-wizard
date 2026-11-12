@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { portableSnapshotRecords } from "./portable-snapshots.js";
+import { createPortableSnapshotReader, snapshotCacheProfile } from "./portable-snapshots.js";
 import { readRefinementEvidence } from "./refinement-evidence.js";
 import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
@@ -608,9 +608,11 @@ export class ProjectStore {
       const jobs = this.jobs(id), submissions = this.submissions(id);
       metrics.historyMs = performance.now() - started; started = performance.now();
       metrics.continuationProfile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0,
-        serializedRecords: 0, digestComputations: 0, digestHits: 0 };
+        serializedRecords: 0, digestComputations: 0, digestHits: 0, snapshotCache: snapshotCacheProfile() };
+      const historicalRecords = createPortableSnapshotReader(this.db, id, (revision) => this.get(id, revision), this.db,
+        metrics.continuationProfile.snapshotCache);
       const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
-        (revision) => portableSnapshotRecords(this.db, id, revision, () => this.get(id, revision)),
+        historicalRecords,
         (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile);
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;

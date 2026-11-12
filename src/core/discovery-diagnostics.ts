@@ -48,6 +48,7 @@ export const planningProgressSchema = z.object({ format: z.literal(1), phase: z.
   activityMs: z.object({ catalog: duration, savedPolicy: duration, staging: duration, splitting: duration, newPackage: duration }).strict().optional(),
   examinedStates: z.object({ reviewed: count, waiting: count, blocked: count, pending: count }).strict().optional(),
   blockerSummary: planningBlockersSchema.optional(), closureRenderAttempts: count.optional(), reusedClosures: count.optional(),
+  completedEquivalenceChecks: count.optional(), equivalentCompletedPackages: count.optional(),
 }).strict();
 export type PlanningProgress = z.infer<typeof planningProgressSchema>;
 export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.enum(["recording", "finished"]),
@@ -56,7 +57,8 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   planningProgress: planningProgressSchema.optional(),
   answerIntegration: answerIntegrationSchema.optional(),
   epicProposals: z.object({ questions: count, requirements: count, phase: z.enum(["discover", "validate", "complete"]),
-    checksNotRequested: count, emptyCompletion: z.boolean() }).strict().optional(),
+    checksNotRequested: count, emptyCompletion: z.boolean(),
+    draftedQuestions: count.optional(), draftedRequirements: count.optional(), removedQuestions: count.optional(), removedRequirements: count.optional() }).strict().optional(),
   epicSelection: z.object({ format: z.literal(1), reason: z.enum(["new-package", "saved-task-incompatible", "saved-work-resume"]),
     priorCompleted: z.boolean(),
     inputChanges: z.array(z.enum(["target-records", "human-evidence", "other-evidence", "project-guidance",
@@ -114,7 +116,10 @@ const workspacePublicationSchema = z.object({ format: z.literal(1), revision: co
   elapsedMs: duration.optional(), historyMs: duration.optional(), continuationMs: duration.optional(),
   renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional(),
   continuationProfile: z.object({ selectionMs: duration, snapshotReadMs: duration, deltaMs: duration,
-    serializedRecords: count, digestComputations: count, digestHits: count }).optional() });
+    serializedRecords: count, digestComputations: count, digestHits: count,
+    snapshotCache: z.object({ sourceReadMs: duration, sourceHashMs: duration, cacheReadMs: duration, inflateMs: duration,
+      parseMs: duration, normalizeMs: duration, cacheWriteMs: duration, hits: count, misses: count, upgrades: count,
+      objectReads: count, objectHits: count }).optional() }).optional() });
 export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePublication?: unknown) {
   if (!rows.length || rows.length > 20) throw new Error("Select between one and twenty discovery runs.");
   const packages = new Map<string, string>();

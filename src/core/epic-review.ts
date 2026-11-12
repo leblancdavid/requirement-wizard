@@ -12,6 +12,7 @@ import type { PlanningActivity, PlanningBlockers } from "./discovery-diagnostics
 import { reusablePlanningCheckpoint, rememberEpicContext } from "./epic-planning-checkpoint.js";
 import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js";
 import { epicPlanningProjectKey } from "./epic-planning-input.js";
+import { completedRecordStagesEquivalent, recordStagePolicy } from "./epic-stage-reuse.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -64,12 +65,16 @@ export type EpicPlanningOptions = {
   firstPending?: boolean;
   /** Invocation-local only, including retries to load immutable historical revisions. */
   cache?: Map<string, Candidate>;
+  /** Invocation-local proof results survive the worker's lazy history retries. */
+  completedEquivalence?: Map<string, boolean>;
+  readEquivalenceRevision?: (revision: number) => Project;
   onPackage?: (examined: number, states: { reviewed: number; waiting: number; blocked: number; pending: number }, blockers: PlanningBlockers) => void;
   onPrepare?: () => void;
   onActivity?: (activity: PlanningActivity) => void;
   contexts?: Map<string, EpicContextCheckpoint>;
   onContext?: (key: string, value: EpicContextCheckpoint, reused: boolean) => void;
   onClosure?: (reused: boolean) => void;
+  onEquivalence?: (reused: boolean) => void;
   /** Exact-input-bound root-group receipts. Non-pending tasks only. */
   resolved?: Map<string, EpicPlanningCheckpoint>;
   onResolved?: (key: string, value: EpicPlanningCheckpoint, reused: boolean) => void;
@@ -528,9 +533,28 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     // the same deterministic >16-batch preparation within this invocation.
     const candidate = { review, context, batches, batchKey, error, batchLimit }; candidates.set(cacheKey, candidate); return candidate;
   };
+  const equivalentCompleted = options.completedEquivalence ?? new Map<string, boolean>();
+  const completedInventories = new WeakMap<ContextPack[], Set<string>>();
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
-    if (!context || j.context?.epicReview?.packageID !== review.packageID || j.context.epicReview.inputKey !== review.inputKey) return false;
+    if (!context || j.context?.epicReview?.packageID !== review.packageID) return false;
+    if (j.context.epicReview.inputKey !== review.inputKey) {
+      if (!readRevision || !candidate.batches || j.status !== "completed" || !j.result || !j.retrievalWork?.final
+        || j.retrievalWork.epicStages?.phase !== "complete" || !recordStagePolicy(review.contextPolicy)
+        || j.context.epicReview.contextPolicy !== review.contextPolicy) return false;
+      let inventory = completedInventories.get(candidate.batches);
+      if (!inventory) { inventory = new Set(candidate.batches.flatMap(batch => batch.manifest.includedIDs)); completedInventories.set(candidate.batches, inventory); }
+      if (j.context.includedIDs.length !== inventory.size || j.context.includedIDs.some(id => !inventory!.has(id))) return false;
+      const key = JSON.stringify([j.id, review.inputKey]);
+      if (!equivalentCompleted.has(key)) {
+        // Read outside the validation catch: the owned planning worker must be
+        // able to request an immutable historical revision before retrying locally.
+        const previous = (options.readEquivalenceRevision ?? readRevision)(j.expectedRevision);
+        const reused = completedRecordStagesEquivalent(previous, project, j, review, candidate.batches);
+        equivalentCompleted.set(key, reused); options.onEquivalence?.(reused);
+      }
+      return equivalentCompleted.get(key)!;
+    }
     if ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(review.contextPolicy ?? "") || ["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(j.context.epicReview.contextPolicy ?? ""))
       && j.context.epicReview.contextPolicy !== review.contextPolicy) return false;
     if (isStagedPolicy(review.contextPolicy)) return j.retrievalWork?.epicStages?.planKey === candidate.batchKey;

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job, type Submission } from "../core/model.js";
-import { definitionActivityLabel, queueActivities, discoveryResumeJob } from "./queue-activity.js";
+import { definitionActivityLabel, queueActivities, discoveryResumeJob, executionContinuation } from "./queue-activity.js";
+import { ProjectStatus } from "./project-status.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls as ProjectWorkflowControls, LegacyWorkflowControls as WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
@@ -14,6 +15,43 @@ import { followThroughOutcome } from "../core/follow-through.js";
 import { ProcessingPreferences as ProcessingSettings, ProcessingSettings as ProjectAssistanceSettings } from "./processing-settings.js";
 import { ProjectReviewPermission, additionalReview } from "./project-review-permission.js";
 import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
+
+test("project status is idle without a start action and swaps saved continuation for pause", () => {
+  const render = (working: boolean, resume?: () => void, pending = false) => renderToStaticMarkup(createElement(ProjectStatus, {
+    working, label: "Planning implementation", pending, disabled: false,
+    pause() { assert.fail("Rendering cannot pause work"); }, resume,
+  }));
+  const idle = render(false);
+  assert.match(idle, /Idle · Ready when you are/);
+  assert.doesNotMatch(idle, /<button|answering questions|Questions in Design/);
+  const saved = render(false, () => assert.fail("Rendering cannot resume work"));
+  assert.match(saved, />Continue<\/button>/);
+  assert.doesNotMatch(saved, />Pause<\/button>/);
+  const working = render(true, () => assert.fail("Rendering cannot resume work"));
+  assert.match(working, /Planning implementation/);
+  assert.match(working, />Pause<\/button>/);
+  assert.doesNotMatch(working, />Continue<\/button>|>Stop<\/button>|Cancel current work|answering questions/);
+  assert.match(render(true, undefined, true), /disabled=""/);
+});
+
+test("execution continuation retains the chosen process and does not revive older work", () => {
+  const state = emptyExecution();
+  assert.equal(executionContinuation(state), undefined);
+  state.planning = { format: 1, id: "plan", revision: 1, bindingID: "workspace", createdAt: "2026-11-12T01:00:00Z", status: "interrupted", configFingerprint: "config", model: { providerID: "openai", modelID: "fixture" } };
+  const before = structuredClone(state);
+  assert.equal(executionContinuation(state), "plan");
+  assert.equal(executionContinuation(state, { createdAt: "2026-11-12T02:00:00Z" } as Job), undefined);
+  assert.deepEqual(state, before);
+  state.planning.status = "approved";
+  assert.equal(executionContinuation(state), undefined, "Approval must not start coding");
+  state.planning.status = "interrupted";
+  state.assessmentRuns = [{ startedAt: "2026-11-12T03:00:00Z", status: "completed" } as NonNullable<typeof state.assessmentRuns>[number]];
+  assert.equal(executionContinuation(state), undefined, "A newer completed task must not revive an old plan");
+  state.run = { createdAt: "2026-11-12T04:00:00Z", status: "paused" } as NonNullable<typeof state.run>;
+  assert.equal(executionContinuation(state), "continue");
+  state.run.status = "awaiting-merge";
+  assert.equal(executionContinuation(state), undefined, "Delivery verification remains an explicit action");
+});
 
 test("definition activity names the saved assessment area rather than the browsed area", () => {
   const snapshot = { ...project, epics: [{ ...project.epics[0]!, id: "awards", title: "Awards & achievements" },

@@ -6,6 +6,7 @@ import { ProjectStore } from "../storage/store.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { workspaceMenu } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
+import { emptyExecution } from "../core/execution.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -107,6 +108,18 @@ try {
   await page.unroute(analyzeRoute);
   await page.getByRole("tab", { name: /^Specification/ }).click();
   await expect(footer).toHaveCount(0);
+  const refinementFooter = page.getByRole("contentinfo", { name: "Refinement controls", exact: true });
+  await expect(refinementFooter).toBeInViewport();
+  await expect(refinementFooter.getByRole("button", { name: "Refine", exact: true })).toBeEnabled();
+  await page.route(analyzeRoute, async route => { requests.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
+  await refinementFooter.getByRole("combobox").selectOption("inbox");
+  await refinementFooter.getByRole("button", { name: "Refine", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(3);
+  assert.equal(requests[2]!.refinementOnly, true);
+  assert.equal(requests[2]!.focusEpicID, "inbox");
+  assert.equal(requests[2]!.research, false);
+  await refinementFooter.getByRole("combobox").selectOption("all");
+  await page.unroute(analyzeRoute);
   const specification = page.getByRole("region", { name: "Requirement review", exact: true });
   if (await specification.locator(".feature-group").getAttribute("open") === null) await specification.locator(".feature-group > summary").click();
   if (await specification.locator(".review-card-heading").getAttribute("aria-expanded") !== "true") await specification.locator(".review-card-heading").click();
@@ -118,6 +131,17 @@ try {
   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await expect(page.locator(".queue-header")).not.toContainText(/batch|checkpoint|request attempts|processing mode/i);
   await expect(page.locator(".queue-trigger")).toHaveCount(0);
+  await page.getByRole("tab", { name: /^Implement/ }).click();
+  const buildFooter = page.getByRole("contentinfo", { name: "Planning and implementation controls", exact: true });
+  await expect(buildFooter).toBeInViewport();
+  await expect(buildFooter.getByRole("button", { name: "Prepare plan", exact: true })).toBeDisabled();
+  await expect(buildFooter.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(buildFooter).toBeInViewport();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-implementation-footer-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await page.getByRole("tab", { name: /^Specification/ }).click();
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   const logs = page.getByRole("dialog", { name: "Logs", exact: true });
   const diagnostics = logs.locator("summary").filter({ hasText: /^Export discovery diagnostics$/ });
@@ -147,7 +171,7 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-workspace-logs-mobile.png", fullPage: true });
   await page.keyboard.press("Escape"); await expect(logs).toHaveCount(0);
   assert.deepEqual(store.get(p.id), before);
-  // Deterministic live snapshot: keep mechanics out of the queue, retain Stop,
+  // Deterministic live snapshot: keep mechanics out of the queue, swap to Pause,
   // and expose the exact current messages in the same Logs viewer.
   let running = true, stops = 0;
   const snapshotRoute = `**/api/projects/${p.id}`, stopRoute = `**/api/projects/${p.id}/cancel`;
@@ -158,9 +182,11 @@ try {
   });
   await page.route(stopRoute, async (route) => { stops++; running = false; await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
   await page.reload();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Cancel current work", exact: true })).toBeEnabled();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toHaveCount(0);
+  await expect(page.locator(".queue-header")).not.toContainText("You can keep reading and answering questions.");
   await expect(page.locator(".queue-header")).not.toContainText("internal-stage-marker");
-  await page.locator(".queue-header").getByRole("button", { name: "Cancel current work", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
   await expect.poll(() => stops).toBe(1);
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   await logs.getByLabel("Source", { exact: true }).selectOption("Live status");
@@ -168,6 +194,31 @@ try {
   await expect(logs.locator("pre")).toContainText("internal-stage-marker");
   await logs.getByRole("button", { name: "Close logs", exact: true }).click();
   await page.unroute(snapshotRoute); await page.unroute(stopRoute);
+  // A saved plan remains a plan even after browsing Specification or Design.
+  // Pausing must target execution, and Continue must never start coding/discovery.
+  let planning = true, executionStops = 0;
+  const continued: Record<string, unknown>[] = [];
+  await page.route(snapshotRoute, async route => {
+    const response = await route.fetch({ headers: { ...route.request().headers(), "if-none-match": "" } });
+    const snapshot = await response.json();
+    await route.fulfill({ response, json: { ...snapshot, active: false, implementationActive: planning, implementationOperation: planning ? "plan" : undefined,
+      execution: { ...emptyExecution(), ...snapshot.execution, planning: { format: 1, id: "saved-plan", revision: p.revision, bindingID: "fixture", createdAt: "2099-01-01T00:00:00.000Z",
+        status: planning ? "generating" : "interrupted", configFingerprint: "fixture", model: p.model } } } });
+  });
+  const executionStopRoute = `**/api/projects/${p.id}/execution-stop`, executionStartRoute = `**/api/projects/${p.id}/execution-start`;
+  await page.route(executionStopRoute, async route => { executionStops++; planning = false; await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
+  await page.route(executionStartRoute, async route => { continued.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
+  await page.reload();
+  await expect(page.locator(".project-status")).toContainText("Planning implementation");
+  await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(() => executionStops).toBe(1);
+  await expect(page.locator(".project-status")).toContainText("Idle");
+  await page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true }).click();
+  await expect.poll(() => continued.length).toBe(1);
+  assert.equal(continued[0]!.operation, "plan");
+  assert.equal(stops, 1, "Planning Pause did not cancel discovery");
+  assert.deepEqual(store.get(p.id), before);
+  await page.unroute(snapshotRoute); await page.unroute(executionStopRoute); await page.unroute(executionStartRoute);
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");

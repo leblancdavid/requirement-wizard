@@ -732,6 +732,7 @@ export class DiscoveryService {
         const prior = epicPlan.task.prior;
         const work: RetrievalWork = prior?.retrievalWork ? { ...structuredClone(prior.retrievalWork), originJobID: prior.id }
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
+        const proposalCounts = { draftedQuestions: 0, draftedRequirements: 0, removedQuestions: 0, removedRequirements: 0 };
         const reviewReport = { ...epicPlan.report, modelCalls: work.attempts };
         const checkpoint = () => {
           context.manifest.questionTarget = options.questionTarget;
@@ -740,6 +741,7 @@ export class DiscoveryService {
             batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
             ...(work.epicStages.emptyCompletion ? { emptyCompletion: work.epicStages.emptyCompletion } : {}) };
           if (measurement && work.epicStages) measurement.value.epicProposals = {
+            ...proposalCounts,
             questions: work.epicStages.candidates.questions.length, requirements: work.epicStages.candidates.requirements.length,
             phase: work.epicStages.phase, emptyCompletion: !!work.epicStages.emptyCompletion,
             checksNotRequested: work.epicStages.emptyCompletion ? work.epicStages.batches * 2 - work.epicStages.receipts.length : 0 };
@@ -764,7 +766,7 @@ export class DiscoveryService {
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
             completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
-          validateEpicStages(project, review, staged, batches);
+          validateEpicStages(project, review, staged, batches, proposalCounts);
           stagedRun = true;
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
           work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
@@ -792,9 +794,14 @@ export class DiscoveryService {
             if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
             const phase = staged.phase, batch = staged.nextBatch;
             const response = phase === "discover" ? parseDiscoveryAnalysis(raw).result : raw;
+            const beforeDraft = staged.candidates;
             staged.candidates = phase === "discover"
               ? mergeEpicDraft(project, batches[batch]!, staged.candidates, response as import("../core/model.js").Analysis, batch)
               : applyGuardrailVerdict(staged.candidates, response);
+            proposalCounts.draftedQuestions += Math.max(0, staged.candidates.questions.length - beforeDraft.questions.length);
+            proposalCounts.draftedRequirements += Math.max(0, staged.candidates.requirements.length - beforeDraft.requirements.length);
+            proposalCounts.removedQuestions += Math.max(0, beforeDraft.questions.length - staged.candidates.questions.length);
+            proposalCounts.removedRequirements += Math.max(0, beforeDraft.requirements.length - staged.candidates.requirements.length);
             staged.receipts.push({ phase, batch, attempts: work.attempts, evidenceKey: retrievalEvidenceBasis(batches[batch]!).key,
               response: phase === "discover" ? response as import("../core/model.js").Analysis : guardrailVerdictSchema.parse(response) });
             work.attempts = 0;
@@ -806,7 +813,7 @@ export class DiscoveryService {
             if (completeEmptyEpicStages(staged)) report("All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
             checkpoint();
           }
-          validateEpicStages(project, review, staged, batches);
+          validateEpicStages(project, review, staged, batches, proposalCounts);
           context = epicStagePublicationContext(batches, staged);
           validateEpicReviewFinal(project, context, staged.candidates);
           work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: staged.candidates };

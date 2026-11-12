@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Project } from "../core/model.js";
 import { assessmentCurrent, assessmentFreshness, eligibleRequirements, implementationPlan, type Assessment, type AssessmentRun, type ExecutionConfig, type ExecutionEvaluation, type ExecutionIndex, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
 import "./implementation.css";
@@ -15,11 +16,12 @@ import { LogLink } from "./log-access.js";
 import { statusLabel } from "./user-messages.js";
 
 export const ImplementationTab = React.memo(ImplementationView);
-function ImplementationView({ project, state, evaluation, executionIndex, active, disabled, discoveryActive = false, connected, workspaceID, epicID, action, inspectRepository, technical = false }: {
+function ImplementationView({ project, state, evaluation, executionIndex, active, disabled, discoveryActive = false, connected, workspaceID, epicID, action, inspectRepository, technical = false, footerTarget }: {
   project: Project; state: ExecutionState; evaluation: ExecutionEvaluation; executionIndex: ExecutionIndex; active: boolean; disabled: boolean; discoveryActive?: boolean; connected: boolean; workspaceID?: string; epicID: string;
   action: (name: string, body: Record<string, unknown>) => Promise<void>;
   inspectRepository: () => Promise<WorkspaceRepository>;
   technical?: boolean;
+  footerTarget?: HTMLElement | null;
 }) {
   const [filter, setFilter] = useState("remaining");
   const [search, setSearch] = useState("");
@@ -110,8 +112,7 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
       <h3>Build and verify</h3><p>Starting or resuming uses your AI plan, can run the saved project commands and commits checked code. Preparation and plan approval never start coding.</p>
       {state.config && <p>Destination: <strong>{state.config.repository}</strong> · {state.config.strategy === "main" ? "Commit directly to main" : state.config.strategy === "branch" ? `Commit to ${state.config.branch}` : state.config.strategy === "epic-pr" ? "Pull request per feature" : "Pull request per requirement"}.</p>}
       <div className="button-row">
-        <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
-        {active && <ActionButton className="secondary" disabled={disabled} reason="Another workspace request is being saved. Wait for it to finish." onClick={() => void action("execution-stop", {})}>Stop implementation</ActionButton>}
+        {!footerTarget && <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>}
       </div>
       <p role="status" aria-label="Implementation next step">{nextStep}</p>
       <small>{resumable ? "Resumes the saved run, not the current search or feature filter." : "Builds remaining approved requirements across the project. Feature and individual build actions have their own scopes."}</small>
@@ -126,7 +127,7 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
       <p>Check progress uses your AI plan, reads project code and may fetch the main branch and run your saved check commands. Prepare plan uses your AI plan but does not run commands or start coding.</p>
       <div className="button-row">
         <ActionButton className="secondary" disabled={!canAssess || starting} reason={assessmentReason || "Starting assessment…"} title="Assess new or outdated requirements; reuse compatible results and run verification on main" onClick={() => void start("check", epicID === "all" ? {} : { epicID })}>Check progress</ActionButton>
-        <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} title="Propose work packages for all approved requirements. Larger evidence sets need multiple AI requests; completed work is saved." onClick={() => void start("plan")}>Prepare plan</ActionButton>
+        {!footerTarget && <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} title="Propose work packages for all approved requirements. Larger evidence sets need multiple AI requests; completed work is saved." onClick={() => void start("plan")}>Prepare plan</ActionButton>}
       </div>
       <small>Check scope: {epicID === "all" ? "all approved requirements" : project.epics.find((epic) => epic.id === epicID)?.title ?? "selected feature"}. Plan scope: all approved requirements. Search and status filters do not narrow the plan.</small>
       <p role="status" aria-label="Implementation preparation next step">{preparationNext}</p>
@@ -158,6 +159,11 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
        <LazyDetails summary="Delivery results">{() => <>{run.units.map((unit) => <div key={unit.id}><p><strong>{unit.branch}</strong> · {unit.delivery.replaceAll("-", " ")}</p>{unit.pr && <a href={unit.pr} target="_blank" rel="noreferrer">Open GitHub PR ↗</a>}{unit.items.map((item) => <p key={item.requirementID}>{project.requirements.find((r) => r.id === item.requirementID)?.statement ?? "Earlier requirement"} · {statusLabel(item.status)}</p>)}</div>)}</>}</LazyDetails></section>}
     </>;
   return <ActionScope reason={assessmentReason || (resumable ? "Archive the current run to change its frozen settings. Saved sessions and delivery evidence are retained." : "Wait for the current implementation request to finish.")}><div className="implementation-tab">
+    {footerTarget && createPortal(<>
+      <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} title="Prepare a plan for all approved requirements. Review and approve it before coding." onClick={() => void start("plan")}>Prepare plan</ActionButton>
+      <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
+      <small>All approved requirements · Plan first, then approve and implement. Uses your AI plan; implementation can run commands and commit code.</small>
+    </>, footerTarget)}
     {controls}
     {starting && <ActivityFeedback label="Starting implementation task…" />}
     {active && assessmentRun?.status !== "running" && run?.status !== "running" && <ActivityFeedback label="Preparing implementation…" />}

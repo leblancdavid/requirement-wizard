@@ -28,7 +28,7 @@ import "./maintenance-controls.css";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { IssueDialog } from "./issue-dialog.js";
 import { attentionGroups, attentionSummary } from "./attention.js";
-import { queueActivities } from "./queue-activity.js";
+import { queueActivities, executionContinuation, latestExecutionTask } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
 import { ProjectProgress, openAssessmentTools } from "./project-progress.js";
 import { definitionDecisions } from "../core/definition-decisions.js";
@@ -100,6 +100,7 @@ function QuestionCleanup({ project, queuedIDs, disabled, replaceDisabled, retire
   </details></ActionScope>;
 }
 function App() {
+  const [implementationFooter, setImplementationFooter] = useState<HTMLDivElement | null>(null);
   const [projects, setProjects] = useState<Item[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [id, setID] = useState<string | null>(localStorage.getItem("reqwizit-project"));
@@ -352,8 +353,13 @@ function App() {
     if (saved?.context?.readinessQuestions && !unfinished) {
       await clarifyDefinition(saved.context.readinessQuestions.epicID, saved.id); return;
     }
-    if (project) await api(`projects/${project.id}/resume-discovery`, { revision: project.revision, questionTarget,
-      research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (project) {
+      const focusEpicID = lastJob?.context?.definitionAssessment?.epicID ?? lastJob?.context?.focusEpicID;
+      if (lastJob?.context?.refinementOnly) {
+        await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(focusEpicID ? { focusEpicID } : {}) });
+      } else await api(`projects/${project.id}/resume-discovery`, { revision: project.revision, questionTarget,
+        research: project.model.connectionID ? false : research, ...(focusEpicID ? { focusEpicID } : {}) });
+    }
   }
   async function continueExploration() {
     if (project && lastJob) await api(`projects/${project.id}/continue-exploration`, { revision: project.revision, jobID: lastJob.id });
@@ -606,8 +612,14 @@ function App() {
   for (const item of designAttention) designItems.add(item.input.type === "answer" ? `question:${item.input.questionID}` : `submission:${item.id}`);
   if (reviewPermission && reviewPermission.item.input.type !== "review") designItems.add(reviewPermission.item.input.type === "answer" ? `question:${reviewPermission.item.input.questionID}` : `submission:${reviewPermission.item.id}`);
   const specificationAttention = pendingReviewCount + sharedConflicts.length + (project?.organizationReviews.filter(item => item.status === "pending").length ?? 0);
+  const savedExecution = data ? executionContinuation(data.execution, lastJob) : undefined;
+  const refineRequirements = () => void act(async () => {
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+  }, "Refining requirements…");
 
   const processingControls = (diagnostics = false) => !creating && project && data ? <ProcessingQueue key={`${project.id}:${diagnostics}`} diagnostics={diagnostics} project={project} jobs={data.jobs}
+    executionSelected={!!latestExecutionTask(data.execution, lastJob)}
+    executionResume={savedExecution ? () => void implementationAction("execution-start", { operation: savedExecution }) : undefined}
     processSavedResponses={processSavedResponses} extendSavedResponse={extendSavedResponse}
     continueRefinement={(jobID) => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, continueRefinementJobID: jobID }); }, "Continuing saved refinement…")}
     clarificationJob={pausedQuestions} reusedClarification={reusedClarification} continueClarification={pausedQuestions?.context?.readinessQuestions ? () => void act(() => clarifyDefinition(pausedQuestions.context!.readinessQuestions!.epicID, pausedQuestions.id), "Continuing saved clarification…") : undefined}
@@ -742,7 +754,7 @@ function App() {
               continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} />}
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
             {tab !== "implementation" && data.workspace && !project.scans.length && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("review"); })} />}
-            {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} evaluation={evaluation!} executionIndex={executionIndex!} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
+            {tab === "implementation" && <ImplementationTab key={project.id} footerTarget={implementationFooter} project={project} state={data.execution} evaluation={evaluation!} executionIndex={executionIndex!} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Changes & outcomes</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {tab === "discover" && <>
               {definitionClarification?.projectID === project.id && (epicID === "all" || epicID === definitionClarification.task.epicID) && <section ref={clarificationNotice} tabIndex={-1} className="save-notice" role="status" aria-label="Definition clarification">
@@ -805,13 +817,15 @@ function App() {
       </div>
       </div>
       </div>
-      {!showSettings && !creating && project && summary && data && tab === "discover" && <footer className="design-footer" role="contentinfo" aria-label="Discovery controls">
+      {!showSettings && !creating && project && summary && data && (tab === "discover" || tab === "review") && <footer className="design-footer" role="contentinfo" aria-label={tab === "discover" ? "Discovery controls" : "Refinement controls"}>
         <div className="design-footer-inner gap-controls">
-          <label className="area-filter">Epic<select aria-label="Filter by feature" value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
-          <button className="primary" title={discoveryReason || `Find questions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan.`} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Discover"}</button>
-          <small>Uses your AI plan.</small>
+          <label className="area-filter">Epic<select aria-label={tab === "discover" ? "Filter by feature" : "Refinement scope"} value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
+          {tab === "discover" ? <button className="primary" title={discoveryReason || `Find questions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan.`} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>Discover</button>
+            : <button className="primary" title={discoveryReason || "Check wording, duplicates and conflicting choices in the selected epics. Proposes changes for your review; does not start coding."} disabled={busy || connectionChanged || needsInitialization} onClick={refineRequirements}>Refine</button>}
+          <small>{tab === "discover" ? "Find missing decisions. Uses your AI plan." : "Improve requirements for review. Uses your AI plan; no coding."}</small>
         </div>
       </footer>}
+      {!showSettings && !creating && project && summary && data && tab === "implementation" && <footer className="design-footer" role="contentinfo" aria-label="Planning and implementation controls"><div className="design-footer-inner gap-controls" ref={setImplementationFooter} /></footer>}
     </main>
   </div></ActionScope></LogProject.Provider>;
 }

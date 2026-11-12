@@ -23,6 +23,7 @@ import { upgradeExecutionPayload } from "./migrations.js";
 import { refinementCheckCurrentMatcher } from "../core/refinement-identity.js";
 import type { DecisionEvidenceProject } from "../core/decision-availability.js";
 import { isPortableRecords, portableRecords, type PortableSnapshotRecords } from "./portable-records.js";
+import type { SnapshotCacheProfile } from "./portable-snapshots.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -31,7 +32,7 @@ const portableProject = (project: Project) => ({ ...project, model: withoutAccou
 type Delta = Record<string, { value: string } | { prefix: number; suffix: number; items: string[] }>;
 export type Continuation = { formatVersion: 1; jobs: Job[]; submissions: Submission[]; snapshots: Record<string, Delta>; objects: Record<string, unknown> };
 export type ContinuationProfile = { selectionMs: number; snapshotReadMs: number; deltaMs: number;
-  serializedRecords: number; digestComputations: number; digestHits: number };
+  serializedRecords: number; digestComputations: number; digestHits: number; snapshotCache?: SnapshotCacheProfile };
 function needsOriginalRevision(job: Job) {
   if (job.status !== "completed" || job.retrievalWork) return true;
   if (job.context?.refinementPair || job.context?.gapExploration?.check) return false;

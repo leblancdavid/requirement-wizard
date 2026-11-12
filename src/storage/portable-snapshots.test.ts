@@ -6,11 +6,12 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import { ProjectStore } from "./store.js";
-import { portableSnapshot, portableSnapshotRecords } from "./portable-snapshots.js";
+import { portableSnapshot, portableSnapshotRecords, createPortableSnapshotReader, snapshotCacheProfile } from "./portable-snapshots.js";
 import { portableRecords, projectFromPortableRecords } from "./portable-records.js";
 import { projectSchema } from "../core/model.js";
 import { continuationState } from "./portable.js";
 import { renderWorkspace } from "./workspace.js";
+import { migrateDatabase } from "./migrations.js";
 
 test("portable snapshots reuse exact normalized evidence across reopen and recover corrupt/stale derived caches", () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
@@ -46,6 +47,12 @@ test("portable snapshots reuse exact normalized evidence across reopen and recov
     db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(largeText, p.id, p.revision);
     assert.equal(read().sources.length, 1000); const largeCalls = calls;
     assert.equal(read().sources.length, 1000); assert.equal(calls, largeCalls, "Realistic >8 MiB snapshots must benefit from warm reuse too");
+    const bounded = snapshotCacheProfile(), sharedLarge = createPortableSnapshotReader(db, p.id, normalize, db, bounded);
+    const firstLarge = sharedLarge(p.revision);
+    const readsBefore = bounded.objectReads, hitsBefore = bounded.objectHits;
+    assert.deepEqual(sharedLarge(p.revision), firstLarge, "Exceeding the estimated 16 MiB memo cannot drop or truncate records");
+    assert.ok(bounded.objectReads > readsBefore && bounded.objectHits > hitsBefore, "The bounded memo reuses retained strings and reloads the rest");
+    assert.equal(calls, largeCalls);
     const writer = new ProjectStore(path);
     try { writer.note(current.id, current.revision, "Append without invalidating earlier immutable cache entries"); } finally { writer.close(); }
     assert.equal(read().sources.length, 1000); assert.equal(calls, largeCalls);
@@ -81,7 +88,7 @@ test("generation-1 cache upgrades preserve originals and exact artifacts without
     assert.deepEqual(originalRows(), before);
     db.exec("DROP TRIGGER fail_cache_upgrade");
     const upgraded = read();
-    assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 2);
+    assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 3);
     assert.deepEqual(projectFromPortableRecords(upgraded), JSON.parse(olderText));
     const ordinary = continuationState(current, [job], [], () => normalized);
     for (let reopen = 0; reopen < 2; reopen++) {
@@ -118,4 +125,69 @@ test("encoded historical records preserve optional/scalar/array distinctions and
     records.fields.find(([key]) => key === "sources")![1] = [];
     assert.equal(projectFromPortableRecords(portableRecords(historical)).sources.length, 1);
   } finally { store.close(); }
+});
+
+test("68 to 69 upgrade shares authenticated exact records, preserves old computations and retries interrupted writes", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "portable-shared-records-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  const seed = store.create("Shared old evidence", "Exact original evidence. ".repeat(400), { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(seed.id, seed.revision).job;
+  const current = store.note(seed.id, seed.revision, "Independent later evidence");
+  store.close();
+  let db = new Database(path);
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+  const source = (revision: number) => (db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=?").get(seed.id, revision) as { payload: string }).payload;
+  const normalize = (revision: number) => projectSchema.parse(JSON.parse(source(revision)));
+  const old = portableRecords(normalize(seed.revision)), oldText = JSON.stringify(old);
+  try {
+    // A real older normalized representation, not a newly generated manifest.
+    db.prepare("INSERT OR REPLACE INTO portable_snapshot_cache VALUES (?, ?, 2, ?, ?, ?)")
+      .run(seed.id, seed.revision, hash(source(seed.revision)), hash(oldText), deflateSync(oldText));
+    db.exec("DROP TRIGGER portable_record_cache_revision_update; DROP TRIGGER portable_record_cache_revision_delete; DROP TABLE portable_record_cache; DELETE FROM migration_history WHERE version=69; PRAGMA user_version=68");
+    const originals = db.prepare("SELECT * FROM revisions ORDER BY revision").all();
+    const jobs = db.prepare("SELECT * FROM jobs").all();
+    db.exec("CREATE TRIGGER fail_69 BEFORE INSERT ON migration_history WHEN NEW.version=69 BEGIN SELECT RAISE(ABORT, 'Interrupted schema upgrade'); END");
+    assert.throws(() => migrateDatabase(db), /Interrupted schema upgrade/);
+    assert.equal(db.pragma("user_version", { simple: true }), 68);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='portable_record_cache'").get(), undefined, "Failed startup rolls back its table and triggers");
+    assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
+    db.exec("DROP TRIGGER fail_69");
+    migrateDatabase(db); migrateDatabase(db);
+    assert.equal(db.pragma("user_version", { simple: true }), 69);
+    assert.equal((db.prepare("SELECT generation FROM portable_snapshot_cache").get() as { generation: number }).generation, 2, "Startup does not rewrite old paid work or computation");
+    const profile = snapshotCacheProfile();
+    let calls = 0;
+    const reader = createPortableSnapshotReader(db, seed.id, revision => { calls++; return normalize(revision); }, db, profile);
+    db.exec("CREATE TRIGGER fail_manifest BEFORE UPDATE ON portable_snapshot_cache BEGIN SELECT RAISE(ABORT, 'Interrupted shared manifest'); END");
+    assert.throws(() => reader(seed.revision), /Interrupted shared manifest/);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM portable_record_cache").get() as { n: number }).n, 0, "Object writes roll back with their manifest");
+    db.exec("DROP TRIGGER fail_manifest");
+    assert.deepEqual(reader(seed.revision), old);
+    assert.equal(calls, 0, "Generation-2 upgrades and their retries need no normalization");
+    const later = reader(current.revision);
+    assert.ok(profile.objectHits === 0, "Cold writes are not reported as authenticated read hits");
+    const shared = snapshotCacheProfile(), warm = createPortableSnapshotReader(db, seed.id, () => assert.fail("Warm evidence must not normalize"), db, shared);
+    assert.deepEqual(warm(seed.revision), old);
+    assert.deepEqual(warm(current.revision), later);
+    assert.ok(shared.objectReads > 0 && shared.objectHits > 0, "Exact strings are authenticated once and shared across historical snapshots");
+    assert.equal(shared.hits, 2);
+    const ordinary = continuationState(current, [job], [], normalize);
+    const optimized = continuationState(current, [job], [], normalize, warm);
+    assert.deepEqual(renderWorkspace(current, undefined, optimized), renderWorkspace(current, undefined, ordinary));
+    for (let reopen = 0; reopen < 2; reopen++) {
+      db.close(); db = new Database(path); migrateDatabase(db);
+      assert.deepEqual(portableSnapshotRecords(db, seed.id, seed.revision, () => assert.fail("Reopen must preserve normalized work")), old);
+      assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
+      assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), jobs);
+    }
+    const first = (db.prepare("SELECT digest FROM portable_record_cache LIMIT 1").get() as { digest: string }).digest;
+    db.prepare("UPDATE portable_record_cache SET payload=? WHERE digest=?").run(deflateSync("corrupt exact bytes"), first);
+    assert.deepEqual(portableSnapshotRecords(db, seed.id, seed.revision, () => { calls++; return normalize(seed.revision); }), old);
+    assert.equal(calls, 2, "Cold later snapshot and corrupt object each normalize once");
+    db.prepare("DELETE FROM portable_record_cache").run();
+    assert.deepEqual(portableSnapshotRecords(db, seed.id, seed.revision, () => { calls++; return normalize(seed.revision); }), old);
+    assert.equal(calls, 3, "Missing objects rebuild from originals, never silently omit evidence");
+    assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), originals);
+  } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
 });

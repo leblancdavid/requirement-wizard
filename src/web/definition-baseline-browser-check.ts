@@ -75,7 +75,7 @@ try {
   await expect(queue).toContainText(notice);
   await expect(queue).toContainText("1 changed record");
   await closeTechnicalViews(page);
-  await page.locator(".queue-header").getByRole("button", { name: "Cancel current work", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
   await expect.poll(() => store.jobs(p.id).at(-1)?.status).toBe("cancelled");
   const paused = store.jobs(p.id).at(-1)!;
   const savedCollections = collections;
