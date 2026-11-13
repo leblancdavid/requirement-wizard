@@ -9,14 +9,17 @@ export const emptyEpicDraft = (): Analysis => analysisSchema.parse({ summary: "T
   questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],
   scopeAssessment: { confidence: "low", explanation: "Global scope unchanged." } });
 
-type StageInput = Pick<EpicStages, "phase" | "nextBatch" | "batches" | "candidates">;
+type StageInput = Pick<EpicStages, "phase" | "nextBatch" | "batches" | "candidates" | "verification" | "proposalPolicy">;
 function stageData(base: ContextPack, work: StageInput) {
+  const batches = work.phase === "discover" ? work.batches : work.verification?.groups.length ?? work.batches;
   return { ...(base.data as object), stagedGuardrailReview: {
-    format: 1, phase: work.phase, batch: Math.min(work.nextBatch + 1, work.batches), batches: work.batches,
+    format: 1, phase: work.phase, batch: Math.min(work.nextBatch + 1, batches), batches,
     draft: work.candidates,
     ...(["staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(base.manifest.epicReview?.contextPolicy ?? "") ? { draftCharacterLimit: epicDraftLimit(base), capacity: "All accumulated drafts, including JSON structure, must fit 8,000 characters. Return fewer concise proposals if needed; never truncate evidence or existing drafts to make room." } : {}),
     instruction: work.phase === "discover"
-      ? "Review the exact target against ONLY this exact decision batch. Return ordinary analysis with new consequential draft gaps, avoiding the displayed drafts. At most five questions and ten requirements TOTAL across drafts and additions. Drafts are AI proposals, not evidence or decisions; do not cite them or infer omitted preferences. Other shared decisions are checked separately. No retirement, updates, research, search or loads: reviewBlocked for indispensable missing facts. Nothing publishes until every discovery and validation batch finishes."
+      ? work.proposalPolicy
+        ? "Review ONLY this exact batch for open choices across workflows, failures, data, permissions, dependencies and acceptance. Prefer several genuinely independent questions, not variants of the first gap, when supported. Compare premises AND options against existing questions/drafts; foundational choices precede dependent follow-ups. Never fill a quota, reopen settled answers or invent omitted preferences. At most five questions and ten requirements TOTAL across drafts/additions. Drafts are proposals, not evidence. No edits, retirements, research, search, loads or approval; return reviewBlocked for indispensable missing comparisons. All discovery and current-evidence validation batches must finish before publication."
+        : "Review the exact target against ONLY this exact decision batch. Return ordinary analysis with new consequential draft gaps, avoiding the displayed drafts. At most five questions and ten requirements TOTAL across drafts and additions. Drafts are AI proposals, not evidence or decisions; do not cite them or infer omitted preferences. Other shared decisions are checked separately. No retirement, updates, research, search or loads: reviewBlocked for indispensable missing facts. Nothing publishes until every discovery and validation batch finishes."
       : "CHECK ONLY: return ONLY {guardrailVerdict:{keepQuestions:[zero-based draft indexes],keepRequirements:[zero-based draft indexes]}} or reviewBlocked. Keep a proposal only if this batch does not already answer it, duplicate it or contradict its premises. Remove unsupported/answered/conflicting proposals; do not rewrite, add or renumber before selecting. Earlier drafts are AI proposals, never authoritative evidence. Their original citations were validated when generated; unseen citations do not mean their contents are in this batch. Check compatibility with the exact target and this batch only; indispensable missing information must block, not be guessed. No search, loads, analysis or changes. All batches must check the surviving exact proposals before publication.",
   } };
 }

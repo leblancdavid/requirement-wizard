@@ -1,5 +1,89 @@
 # Data migrations and upgrade compatibility
 
+## Question yield, frozen discovery checks and segmented continuation (2026-11-13)
+
+The new export supplied after revision 3679 records 18 runs, 220 adapter attempts
+and about 35 minutes elapsed; about 89% is inside adapter requests. Four individual
+answer runs used 16–20 requests and 101–164 seconds each. Several packages spent
+20 requests for one surviving question. Exact-prefix reuse saved three reads in one
+package, not across most subsequent changed-input passes. The current publication
+failure is now an explicit **64 MiB per-artifact bound**, not evidence of another
+unexplained abort. Earlier render-abort qualification remains separate.
+
+**SQLite 76 → 77; conditional portable state 48/49.** Migration 77 is a reader
+capability boundary only: no existing jobs, receipts, prompt policies, drafts,
+attempts, grant consent or completed outputs are rewritten at startup. Future
+proposal/verification policies reject transactionally without advancing the
+version or overwriting saved work. Explicit processing may repack only wholly
+unstarted dense discovery verification: no check receipt or charged check attempt
+may exist. A started layout stays original, including cancelled attempts.
+
+`epic-verification.ts` independently reconstructs the entire original exact-record
+inventory, shared guidance and linked question/answer units. It packs this same
+evidence against the frozen draft under the unchanged 96,000-character bound,
+adopting only a smaller schedule. All original reads are retained. Every current
+proposal is still checked against every mandatory record; there are **no semantic
+unaffected skips**. Replay proves the frozen draft from the original read receipts
+and deterministically reconstructs the saved groups before resume/publication or
+portable adoption. Linked-evidence recovery keeps its original schedule rather than
+mixing recovery layouts with this packing policy. Progress/diagnostics distinguish
+the original read count from the packed check count and never credit unrequested
+checks after an empty outcome.
+
+Fresh dense jobs use `independent-frontier-v1` guidance to look for several genuinely
+independent decisions across behavioral dimensions in an already-paid read, instead
+of variants of the first gap. This is not a quota or a quality guarantee. Old paid
+jobs retain their original instructions. The new text fits the existing reserved
+full-draft envelope; no evidence or proposal is silently truncated. Portable 49
+protects the saved policy and/or frozen verification plan; unchanged old formats
+remain readable. Prompt-policy differences do not relabel old collection receipts.
+
+An explicit **Find more before processing answers** action is available after a
+smaller unchanged question batch reaches its work-window boundary, with fewer than
+five questions and no saved responses or other decisions waiting. It authorizes
+one additional collection window, retaining cumulative spending and stage attempt
+ceilings. It processes no answers, approvals or assessments. Save/reload does not
+activate it. It is offered under All epics, not a narrower feature selector. No new
+workflow data shape or startup opt-in is required; existing window/grant fields are
+used only after this explicit action.
+
+`continuation-parts.ts` preserves byte-identical small continuation files. Larger
+ones publish a format-2 index plus content-addressed JSON parts, normally bounded
+to 8 MiB each (a single record can use the existing 64 MiB bound). The exact jobs,
+submissions, revision deltas and evidence objects are retained, not archived away
+or summarized. Each part has a hash, field, count and exact array/record keys;
+import checks ordering, duplicate/missing/unreferenced parts, counts, hashes and
+future formats before ordinary semantic validation/adoption. It reconstructs
+records directly rather than joining another giant JSON string. Portable state 48
+requires the new reader; state 49 remains 49 when also segmented. SQLite workspace
+bindings keep their existing version-3 journal. Intended part hashes/removals are
+journaled before managed writes, external edits still conflict, and the manifest
+publishes last. A retry/reopen recognizes partial writes. Existing per-artifact
+64 MiB, total-project 256 MiB, file-count and manifest-size bounds remain enforced;
+an indivisible record or total project beyond those bounds still fails without
+replacing managed files or losing SQLite work.
+
+Initial qualification: exact continuation above 64 MiB staged and reconstructed
+without dropping objects; segmented clone input retained original jobs/revision
+evidence and rejected tampering, missing parts, duplicate indexes and downgrade.
+The frozen-check fixture used three paid reads plus two checks instead of three,
+with cancellation spend, repeated reopen, migration rollback/retry, clone adoption
+and final publication exercised. These are deterministic fixtures, not measured
+live speed or question-quality gains on the supplied project. A 48 MiB-heap process
+also staged and incrementally hashed 76,578,720 bytes across ten parts from 7,200
+curated retained replies. Unknown, oversized or explicitly null proposal policies reject
+without advancing the SQLite version; a repaired checkpoint reopens unchanged.
+The complete `npm run test:browser` chain, including postchecks, passed. The updated
+question-collection check covers explicit extra collection, five save-only responses
+during a held refresh and retained cancellation spend. Type checking, UI build,
+desktop TypeScript emission and an emitted publication-child smoke passed.
+The final full `npm test` passed 2,122 tests (979 pretest, 834 main, 309 posttest).
+After the final bounded/null-policy startup hardening, all 110 planning,
+linked-evidence and workspace tests passed together; the 39 collection/diagnostic
+tests also passed. No faster model has been selected or probed yet. The original
+project still needs an actual publication/latency check after restarting the
+updated backend; fixtures do not qualify its exact save or live question yield.
+
 ## Authenticated incremental collection (2026-11-13)
 
 **Source → target: SQLite 75 → 76; conditional portable 47.** Migration 76 adds

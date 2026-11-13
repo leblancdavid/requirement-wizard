@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { PublicationObjects } from "./publication-objects.js";
-import { stageJSON, discardStaged, portableArtifactLimit, portableProjectLimit, type StagedArtifact } from "./staged-json.js";
+import { portableArtifactLimit, portableProjectLimit } from "./staged-json.js";
+import { stageContinuation, discardContinuation, type StagedContinuation } from "./continuation-parts.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
@@ -698,7 +699,7 @@ export class ProjectStore {
     const generation = (this.db.prepare("SELECT publication_version AS version FROM workspaces WHERE project_id = ?").get(id) as { version: number }).version;
     const publicationStarted = performance.now();
     let publicationMetrics: Workspace["publicationMetrics"];
-    let stagedContinuation: StagedArtifact | undefined;
+    let stagedContinuation: StagedContinuation | undefined;
     try {
       if ((binding.formatVersion ?? 1) > 3) throw new Error("Workspace conflict: unsupported future workspace format. Upgrade the app; files were not overwritten.");
       checkWorkspace(binding);
@@ -726,14 +727,18 @@ export class ProjectStore {
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       phase("render");
-      stagedContinuation = stageJSON(directory, continuation);
-      metrics.continuationBytes = stagedContinuation.bytes;
+      stagedContinuation = stageContinuation(directory, continuation);
+      const parts = Object.entries(stagedContinuation.parts ?? {});
+      const continuationBytes = stagedContinuation.bytes + parts.reduce((sum, [, part]) => sum + part.bytes, 0);
+      metrics.continuationBytes = continuationBytes;
       const files = renderWorkspace(project, this.execution(id), continuation, stagedContinuation);
-      const names = [...Object.keys(files), "continuation.json"];
-      const hashes = { ...Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])), "continuation.json": stagedContinuation.hash };
+      const names = [...Object.keys(files), "continuation.json", ...parts.map(([name]) => name)];
+      const hashes = { ...Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])), "continuation.json": stagedContinuation.hash,
+        ...Object.fromEntries(parts.map(([name, part]) => [name, part.hash])) };
       const sizes = Object.values(files).map(content => Buffer.byteLength(content, "utf8"));
-      metrics.artifactBytes = sizes.reduce((sum, bytes) => sum + bytes, stagedContinuation.bytes);
-      if (sizes.some(bytes => bytes > portableArtifactLimit) || metrics.artifactBytes > portableProjectLimit)
+      metrics.artifactBytes = sizes.reduce((sum, bytes) => sum + bytes, continuationBytes);
+      if (sizes.some(bytes => bytes > portableArtifactLimit) || metrics.artifactBytes > portableProjectLimit
+        || names.length > 20000 || Buffer.byteLength(files["manifest.json"]!, "utf8") > 4 * 1024 * 1024)
         throw new Error("Portable project exceeds supported import size bounds. SQLite work is retained; no managed files were replaced.");
       metrics.renderMs = performance.now() - started; started = performance.now();
       // Worker computation can overlap newer decisions or same-revision job
@@ -772,7 +777,7 @@ export class ProjectStore {
     } finally {
       // Temporary cleanup must never strand the publication lease or turn a
       // committed manifest into a failed save. Unreferenced temps are not authority.
-      try { discardStaged(stagedContinuation); } catch { /* A locked temp may remain after an OS/process failure. */ }
+      try { discardContinuation(stagedContinuation); } catch { /* A locked temp may remain after an OS/process failure. */ }
       this.db.prepare("UPDATE workspaces SET owner = NULL, lease_until = NULL WHERE project_id = ? AND owner = ?").run(id, owner);
       if (binding.status === "saved" && this.workspace(id)?.status === "pending") {
         // Another process may have committed a newer revision during publication.
@@ -1804,6 +1809,8 @@ export class ProjectStore {
        json_extract(payload, '$.submissionWork.verification.format') AS savedVerificationFormat,
        json_array_length(payload, '$.submissionWork.verification.batches') AS savedVerificationBatches,
        json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline.reads') AS reusedCollectionBatches,
+       json_array_length(payload, '$.retrievalWork.epicStages.verification.groups') AS epicVerificationBatches,
+       json_extract(payload, '$.retrievalWork.epicStages.emptyCompletion') = 'no-surviving-proposals' AS epicEmptyCompletion,
        json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
        COALESCE(json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests'), json_extract(payload, '$.answerGroupWork.pageRecovery.additionalRequests')) AS groupRecoveryRequests,
         json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
@@ -2079,6 +2086,11 @@ export class ProjectStore {
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Retrieval worker is no longer live.");
       if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       const work = retrievalWorkSchema.parse(input);
+      const originalStages = job.retrievalWork?.epicStages;
+      if (originalStages && (originalStages.proposalPolicy !== work.epicStages?.proposalPolicy
+        || (originalStages.verification || originalStages.phase === "validate" && job.retrievalWork!.attempts > 0 || originalStages.receipts.some(receipt => receipt.phase === "validate"))
+          && JSON.stringify(originalStages.verification ?? null) !== JSON.stringify(work.epicStages?.verification ?? null)))
+        throw new Error("Discovery verification cannot replace paid checks, frozen drafts or the original proposal policy.");
       if (job.retrievalWork && (job.retrievalWork.research !== work.research
         || JSON.stringify(job.retrievalWork.epicStages?.collectionBaseline ?? null) !== JSON.stringify(work.epicStages?.collectionBaseline ?? null)
         || job.retrievalWork.epicStages?.planKey !== work.epicStages?.planKey

@@ -13,8 +13,8 @@ import { canonicalJSON } from "./assessment-identity.js";
 const hash = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
 export type EpicCollectionSource = (jobID: string) => { project: Project; job: Job };
 const scope = (r: EpicReview) => [r.packageID, r.epicID, r.epicIDs, r.kind, r.recordIDs, r.contextPolicy];
-function readKey(base: ContextPack, draft: Analysis, batch: number, batches: number) {
-  const context = epicStageContext(base, { phase: "discover", nextBatch: batch, batches, candidates: draft });
+function readKey(base: ContextPack, draft: Analysis, batch: number, batches: number, proposalPolicy?: EpicStages["proposalPolicy"]) {
+  const context = epicStageContext(base, { phase: "discover", nextBatch: batch, batches, candidates: draft, proposalPolicy });
   const { revision: _revision, ...data } = expandedEvidence(context.data);
   // No evidence, shared guidance, draft, stage order or model-visible inventory
   // is omitted. Only the bookkeeping revision is representation, not evidence.
@@ -25,13 +25,13 @@ function readKey(base: ContextPack, draft: Analysis, batch: number, batches: num
 /** Reuse only a contiguous, independently authenticated paid read prefix. Any
  * changed detailed evidence/guidance/draft stops reuse. This is NOT a semantic
  * independence inference; all later reads and every current proposal check remain. */
-export function planEpicCollectionBaseline(current: Project, review: EpicReview, contexts: ContextPack[], source: ReturnType<EpicCollectionSource>) {
+export function planEpicCollectionBaseline(current: Project, review: EpicReview, contexts: ContextPack[], source: ReturnType<EpicCollectionSource>, proposalPolicy?: EpicStages["proposalPolicy"]) {
   const { project: previous, job } = source, old = job.context?.epicReview, work = job.retrievalWork?.epicStages;
   if (!old || !work || old.contextPolicy !== "staged-dense-records-v5" || review.contextPolicy !== old.contextPolicy
     || job.status !== "completed" || !job.result || previous.revision !== job.expectedRevision || previous.revision >= current.revision
     || previous.id !== current.id || job.projectID !== current.id || job.model.providerID !== current.model.providerID
     || job.model.modelID !== current.model.modelID || work.collectionBaseline || work.linkedEvidence?.length || work.citationCorrections?.length
-    || job.retrievalWork?.research || hash(scope(old)) !== hash(scope(review)) || work.batches !== contexts.length
+    || job.retrievalWork?.research || hash(scope(old)) !== hash(scope(review)) || work.batches !== contexts.length || work.proposalPolicy !== proposalPolicy
     || hash(previous.scans.at(-1) ?? null) !== hash(current.scans.at(-1) ?? null)) return;
   let oldContexts: ContextPack[];
   try {
@@ -42,7 +42,7 @@ export function planEpicCollectionBaseline(current: Project, review: EpicReview,
   for (let batch = 0; batch < contexts.length - 1; batch++) {
     const receipt = work.receipts[batch];
     if (!receipt || receipt.phase !== "discover" || receipt.batch !== batch
-      || readKey(oldContexts[batch]!, draft, batch, work.batches) !== readKey(contexts[batch]!, draft, batch, contexts.length)) break;
+      || readKey(oldContexts[batch]!, draft, batch, work.batches, work.proposalPolicy) !== readKey(contexts[batch]!, draft, batch, contexts.length, proposalPolicy)) break;
     draft = mergeEpicDraft(current, contexts[batch]!, draft, receipt.response as Analysis, batch); reads++;
   }
   if (!reads) return;
@@ -55,7 +55,7 @@ export function replayEpicCollectionBaseline(project: Project, review: EpicRevie
   if (!work.collectionBaseline) return emptyEpicDraft();
   if (!readSource) throw new Error("Incremental collection requires its original paid job and revision; no read was credited.");
   const source = readSource(work.collectionBaseline.sourceJobID);
-  const prepared = planEpicCollectionBaseline(project, review, contexts, source);
+  const prepared = planEpicCollectionBaseline(project, review, contexts, source, work.proposalPolicy);
   // A later current change may shorten the compatible prefix; never silently
   // shorten a saved plan, lose drafts, or manufacture a replacement allowance.
   if (!prepared || prepared.baseline.reads < work.collectionBaseline.reads) throw new Error("Incremental collection evidence or paid source changed.");

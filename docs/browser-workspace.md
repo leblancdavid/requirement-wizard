@@ -1,5 +1,20 @@
 # Browser workspace, epics, and estimated completeness
 
+After a useful smaller question batch stops at its work-window boundary, Design
+offers **Find more before processing answers** under All epics. It explicitly
+authorizes one more collection window, retaining questions and charged attempts;
+it does not integrate answers or start assessments. Saving any response removes
+the offer; submit saved responses separately. New dense discovery guidance seeks
+independent behavioral decisions rather than related variants, without filling a
+quota. Unstarted verification can pack against the actual frozen draft; every
+mandatory record remains checked. Large portable continuation data can publish
+as hash-checked parts under the same total-size and external-edit protections.
+See [upgrade rules and measured limits](migrations.md#question-yield-frozen-discovery-checks-and-segmented-continuation-2026-11-13).
+
+Faster models are a separate, explicitly selected experiment after these request
+reductions. See [bounded model comparison](model-latency-evaluation.md); no default
+model, provider or started paid task is silently switched.
+
 Dense discovery can reuse an independently authenticated unchanged paid read
 prefix on fresh work. Progress includes these retained reads, while diagnostics
 separately report reused collection batches and actual new attempts. Changed/later

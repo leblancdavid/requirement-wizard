@@ -7,6 +7,7 @@ import { retrievalEvidenceBasis, epicStagesSchema, validateGapFinal, GapCitation
 import { emptyEpicDraft, epicStageContext, epicDraftLimit } from "./epic-stage-context.js";
 import { linkedEvidenceStageBase } from "./epic-linked-evidence.js";
 import { replayEpicCollectionBaseline, type EpicCollectionSource } from "./epic-collection-baseline.js";
+import { epicCheckBatches, epicTotalStages, epicVerificationContexts } from "./epic-verification.js";
 export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
 
 const key = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -51,10 +52,10 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
 export function completeEmptyEpicStages(work: EpicStages): boolean {
   const completed = work.receipts.length + (work.collectionBaseline?.reads ?? 0);
   if (work.completionPolicy !== "empty-proposals-v1" || work.phase !== "validate"
-    || completed < work.batches || completed >= work.batches * 2
+    || completed < work.batches || completed >= epicTotalStages(work)
     || work.candidates.questions.length || work.candidates.requirements.length) return false;
   work.emptyCompletion = "no-surviving-proposals";
-  work.phase = "complete"; work.nextBatch = work.batches;
+  work.phase = "complete"; work.nextBatch = epicCheckBatches(work);
   return true;
 }
 
@@ -89,9 +90,18 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
   if (!isStagedPolicy(review.contextPolicy) || work.planKey !== epicBatchKey(contexts) || work.batches !== contexts.length) throw new Error("Staged exact evidence changed; retain dated checkpoints, do not replay them as current.");
   let draft = replayEpicCollectionBaseline(project, review, work, contexts, readSource);
   const reused = work.collectionBaseline?.reads ?? 0;
+  const checks = epicVerificationContexts(project, contexts, work);
+  let frozenChecked = false;
+  const validateFrozen = () => {
+    if (work.verification && !frozenChecked) {
+      if (key(draft) !== key(work.verification.draft)) throw new Error("Discovery verification draft differs from its completed original read history.");
+      frozenChecked = true;
+    }
+  };
   if (counts) Object.assign(counts, { draftedQuestions: draft.questions.length, draftedRequirements: draft.requirements.length, removedQuestions: 0, removedRequirements: 0 });
   for (const [index, receipt] of work.receipts.entries()) {
-    const base = linkedEvidenceStageBase(project, work, contexts[receipt.batch]!, index, draft);
+    if (receipt.phase === "validate") validateFrozen();
+    const base = linkedEvidenceStageBase(project, work, (receipt.phase === "discover" ? contexts : checks)[receipt.batch]!, index, draft);
     validateCitationCorrections(project, work, base, index, draft);
     if (receipt.evidenceKey !== retrievalEvidenceBasis(base).key) throw new Error("Staged receipt evidence does not match its exact batch.");
     const before = draft;
@@ -104,14 +114,15 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
       counts.removedQuestions += Math.max(0, before.questions.length - draft.questions.length);
       counts.removedRequirements += Math.max(0, before.requirements.length - draft.requirements.length);
     }
-    if (work.completionPolicy && index + reused + 1 >= work.batches && index + reused + 1 < work.batches * 2
+    if (work.completionPolicy && index + reused + 1 >= work.batches && index + reused + 1 < epicTotalStages(work)
       && !draft.questions.length && !draft.requirements.length
       && (index !== work.receipts.length - 1 || !work.emptyCompletion || work.phase !== "complete"))
       throw new Error("Empty staged completion must stop at its exact empty receipt boundary.");
   }
+  if (work.phase !== "discover") validateFrozen();
   if (key(draft) !== key(work.candidates)) throw new Error("Staged draft differs from its saved exact response history.");
   if (work.phase !== "complete") {
-    const base = linkedEvidenceStageBase(project, work, contexts[work.nextBatch]!, work.receipts.length, draft);
+    const base = linkedEvidenceStageBase(project, work, (work.phase === "discover" ? contexts : checks)[work.nextBatch]!, work.receipts.length, draft);
     validateCitationCorrections(project, work, base, work.receipts.length, draft);
   }
   return draft;
@@ -153,7 +164,7 @@ export function epicCitationCorrectionContext(project: Project, context: Context
 /** Publication authority is the explicit union of completed exact batches, never a single-stage claim. */
 export function epicStagePublicationContext(contexts: ContextPack[], work: EpicStages): ContextPack {
   epicStagesSchema.parse(work);
-  if (work.phase !== "complete" || work.batches !== contexts.length || !work.emptyCompletion && work.receipts.length + (work.collectionBaseline?.reads ?? 0) !== contexts.length * 2) throw new Error("Partial staged review cannot publish proposals.");
+  if (work.phase !== "complete" || work.batches !== contexts.length || !work.emptyCompletion && work.receipts.length + (work.collectionBaseline?.reads ?? 0) !== epicTotalStages(work)) throw new Error("Partial staged review cannot publish proposals.");
   const context = epicStageContext(contexts.at(-1)!, work);
   context.manifest.includedIDs = [...new Set([...contexts.flatMap((c) => c.manifest.includedIDs),
     ...(work.linkedEvidence?.flatMap(s => s.addedIDs) ?? [])])];

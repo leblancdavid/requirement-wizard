@@ -97,6 +97,16 @@ export function workflowDecisions(project: Project, submissions: Submission[]): 
       .map((r): WorkflowDecision => ({ kind: "organization", id: r.id, title: r.reason })),
   ];
 }
+/** Explicit extra collection never authorizes processing saved input or resolving
+ * product choices. Existing per-stage failed-attempt ceilings remain unchanged. */
+export function canCollectMoreQuestions(project: Project, submissions: Submission[], state: WorkflowState) {
+  if (!state.enabled || state.questionBatch?.state !== "finished" || state.questionBatch.reason !== "budget"
+    || state.questionBatch.inputKey !== workflowReviewInputKey(project)) return false;
+  const decisions = workflowDecisions(project, submissions);
+  const resolved = resolvedReviewAttempts(project, submissions);
+  return decisions.length > 0 && decisions.length < questionBatchLimits.target && decisions.every(d => d.kind === "question")
+    && !submissions.some(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+}
 export function workflowRequirements(project: Project) {
   return project.requirements.filter((r) => r.status !== "rejected" && project.epics.some((e) => e.id === r.epicID && !e.archived));
 }

@@ -27,10 +27,10 @@ import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-revi
 import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-publication.js";
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
-import { epicStagesSchema, epicCollectionBaselineSchema } from "../core/gap-retrieval.js";
+import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 76;
+export const databaseSchemaVersion = 77;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -413,6 +413,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 76, name: "authenticated-epic-collection-prefix", apply() {
   // Additive paid-collection provenance reader boundary. No saved jobs are
   // adopted/repacked at startup; explicit fresh work alone may reference a prefix.
+} }, { version: 77, name: "frozen-epic-verification-and-independent-frontiers", apply() {
+  // Reader capability only. No historical prompt policy, paid check layout,
+  // attempts or completed outputs are rewritten at startup.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -445,6 +448,20 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages.proposalPolicy') AS BLOB)) <= 256
+      THEN json_extract(payload, '$.retrievalWork.epicStages.proposalPolicy') END AS policy,
+      json_type(payload, '$.retrievalWork.epicStages.proposalPolicy') AS hasPolicy,
+      CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages.verification') AS BLOB)) <= 4194304
+      THEN json_extract(payload, '$.retrievalWork.epicStages.verification') END AS verification,
+      json_type(payload, '$.retrievalWork.epicStages.verification') AS hasVerification FROM jobs
+      WHERE json_type(payload, '$.retrievalWork.epicStages.proposalPolicy') IS NOT NULL
+        OR json_type(payload, '$.retrievalWork.epicStages.verification') IS NOT NULL`).iterate() as Iterable<{ policy: unknown; hasPolicy: string | null; verification: string | null; hasVerification: string | null }>) {
+      if (row.hasPolicy) z.literal("independent-frontier-v1").parse(row.policy);
+      if (row.hasVerification) {
+        if (!row.verification) throw new Error("Unsupported frozen discovery verification. Saved work was not overwritten.");
+        epicVerificationSchema.parse(JSON.parse(row.verification));
+      }
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline') AS BLOB)) <= 4096
       THEN json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline') END AS baseline FROM jobs
       WHERE json_type(payload, '$.retrievalWork.epicStages.collectionBaseline') IS NOT NULL`).iterate() as Iterable<{ baseline: string | null }>) {

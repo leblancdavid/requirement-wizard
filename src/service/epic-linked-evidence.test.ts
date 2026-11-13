@@ -210,7 +210,7 @@ test("staged citation correction preserves the rejected reply and charges the sa
   } finally { f.cleanup(); }
 });
 
-test("citation-correction cancellation and portable 45 continuation keep charged rejection history without repeating it", async () => {
+test("citation-correction cancellation retains portable 45 compatibility and portable 49 continuation without repeating rejection history", async () => {
   const f = fixture();
   try {
     const controller = new AbortController();
@@ -221,8 +221,16 @@ test("citation-correction cancellation and portable 45 continuation keep charged
     assert.equal(stopped.retrievalWork!.epicStages!.receipts.length, 0);
     assert.equal(stopped.retrievalWork!.epicStages!.citationCorrections!.length, 1);
     const files = renderWorkspace(f.project, emptyExecution(), continuationState(f.project, f.store.jobs(f.project.id), [], revision => f.store.get(f.project.id, revision)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 45);
-    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 44 }) }, f.project.model), /format 45/);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 49);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 48 }) }, f.project.model), /format 49/);
+    // Curated older wire shape: the pre-frontier reader has no proposal policy.
+    // Keep the exact rejected response, correction hashes and charged attempt.
+    const historical = JSON.parse(files["continuation.json"]!);
+    for (const job of historical.jobs) if (job.retrievalWork?.epicStages) delete job.retrievalWork.epicStages.proposalPolicy;
+    const legacy = { ...files, "continuation.json": JSON.stringify(historical),
+      "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 45 }) };
+    assert.equal(decodePortable(legacy, f.project.model).continuation.jobs.find(j => j.id === stopped.id)!.retrievalWork!.attempts, 1);
+    assert.throws(() => decodePortable({ ...legacy, "state.json": JSON.stringify({ ...JSON.parse(legacy["state.json"]!), formatVersion: 44 }) }, f.project.model), /format 45/);
     assert.deepEqual(decodePortable(files, f.project.model).continuation.jobs.find(j => j.id === stopped.id)!.retrievalWork, stopped.retrievalWork);
     const folder = join(f.directory, "citation-original"), copied = join(f.directory, "citation-clone"); mkdirSync(folder);
     f.store.connectWorkspace(f.project.id, f.project.revision, folder); cpSync(folder, copied, { recursive: true });

@@ -822,6 +822,9 @@ function App() {
           <label className="area-filter">Epic<select aria-label={tab === "discover" ? "Filter by feature" : "Refinement scope"} value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
           {tab === "discover" ? <ActionButton className="primary" reason={discoveryReason} tooltip={`Find missing decisions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan.`} tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>Discover</ActionButton>
             : <ActionButton className="primary" reason={discoveryReason} tooltip="Improve requirements for review in the selected epics: check wording, duplicates and conflicting choices. Uses your AI plan; no coding." tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={refineRequirements}>Refine</ActionButton>}
+          {tab === "discover" && epicID === "all" && data.workflow?.canCollectMore && <ActionButton className="secondary" disabled={busy || connectionChanged || needsInitialization}
+            tooltip="Find more independent questions across project areas in one additional work window, using your AI plan. Existing questions remain; no answers or assessments are processed."
+            onClick={() => configureWorkflow("collect-more")}>Find more before processing answers</ActionButton>}
         </div>
       </footer>}
       {!showSettings && !creating && project && summary && data && tab === "implementation" && <footer className="design-footer" role="contentinfo" aria-label="Planning and implementation controls"><div className="design-footer-inner gap-controls" ref={setImplementationFooter} /></footer>}

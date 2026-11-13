@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, workflowRequirements, workflowAreas,
-   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
+   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, canCollectMoreQuestions, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
@@ -97,7 +97,8 @@ export class ProjectWorkflow {
       ...(pageRecovery ? { pageRecovery } : {}),
       ...(verificationRecovery ? { verificationRecovery } : {}),
       ...(ruleRepair ? { ruleRepair } : {}),
-      ...(packingContinuation ? { packingContinuation: true } : {}),
+       ...(packingContinuation ? { packingContinuation: true } : {}),
+       ...(!active && canCollectMoreQuestions(project, submissions, state) ? { canCollectMore: true } : {}),
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
        current: state.current && { kind: state.current.kind, target: state.current.target },
@@ -120,10 +121,28 @@ export class ProjectWorkflow {
         ...(state.stopReason === "scheduler-yield" && state.phase === "working" && !state.paused ? { continuingWindow: true } : {}),
         lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable", ruleConsent?: AnswerGroupRuleRepairConsent) {
+  configure(id: string, revision: number, version: number, action: "collect-more" | "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable", ruleConsent?: AnswerGroupRuleRepairConsent) {
     let state = this.store.workflow(id);
     if ((action === "allow-shared-rule-repair") !== !!ruleConsent) throw new OperationConflictError("Rule-repair permission requires its exact preview and separate consent action.");
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
+    if (action === "collect-more") {
+      if (this.closing || this.active(id) || this.store.discoveryActive(id)) throw new OperationConflictError("Wait for active work before collecting more questions.");
+      this.store.assertNoExecution(id);
+      const project = this.project(id);
+      if (project.revision !== revision) throw new OperationConflictError("Project changed. Refresh before collecting more questions.");
+      if (!canCollectMoreQuestions(project, this.store.submissions(id), state)) throw new OperationConflictError("More collection requires an unchanged smaller batch with no saved responses or other decisions waiting.");
+      new DiscoveryService(this.store, this.adapter).assertCanDiscover(id);
+      const batch = state.questionBatch!;
+      state.questionBatch = { ...batch, format: 2, state: "collecting", reason: undefined,
+        remainingMs: questionBatchLimits.durationMs, window: { number: batch.format === 2 ? batch.window.number + 1 : 2, packages: 0, requests: 0 } };
+      delete state.questionBatch.activeSince;
+      state.enabled = true; state.paused = false; state.phase = "working";
+      state.questionBatchPolicy = { format: 2 }; state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
+      state.message = "Finding more independent questions in one additional work window. Existing questions and charged attempts are retained; no answers, assessments or approvals are processed.";
+      state.grant = { id: randomUUID(), used: 0, continuous: { format: 1 }, remainingMs: workflowLimits.durationMs, submissionIDs: [] };
+      delete state.reviewCheckpoint; delete state.waitKey; delete state.stopReason; delete state.owner; delete state.leaseUntil;
+      state.settingsVersion++; this.store.saveWorkflow(id, state); this.armed.add(id); this.tick(id); return this.view(id);
+    }
     if (action === "recover-shared-sources" || action === "recover-shared-pages" || action === "prepare-shared-verification" || action === "allow-shared-rule-repair") {
       if (this.closing || this.active(id)) throw new OperationConflictError("Pause active work before authorizing shared-answer recovery.");
       const view = this.view(id), candidate = action === "allow-shared-rule-repair" ? view.ruleRepair : action === "prepare-shared-verification" ? view.verificationRecovery : action === "recover-shared-pages" ? view.pageRecovery : view.sourceRecovery;

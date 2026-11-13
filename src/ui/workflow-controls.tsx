@@ -10,7 +10,7 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
   paused: "Paused—progress saved", "ready-to-plan": "Specification checks passed", "ready-to-implement": "Ready to implement",
 };
-export type WorkflowAction = "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable";
+export type WorkflowAction = "collect-more" | "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable";
 export type WorkflowConfigure = (action: WorkflowAction, ruleConsent?: AnswerGroupRuleRepairConsent) => void;
 function RuleRepairPermission({ preview, disabled, configure }: { preview: NonNullable<WorkflowView["ruleRepair"]>; disabled: boolean; configure: WorkflowConfigure }) {
   const [checked, setChecked] = useState(false);

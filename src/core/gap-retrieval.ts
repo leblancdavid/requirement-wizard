@@ -25,6 +25,8 @@ export type RetrievalAllowance = z.infer<typeof retrievalAllowanceSchema>;
 export const epicCollectionBaselineSchema = z.object({ format: z.literal(1), policy: z.literal("exact-read-prefix-v1"), sourceJobID: z.string().min(1),
   sourceRevision: z.number().int().positive(), reads: z.number().int().min(1).max(15),
   sourcePlanKey: z.string().regex(/^[a-f0-9]{64}$/), prefixKey: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const epicVerificationSchema = z.object({ format: z.literal(1), policy: z.literal("frozen-epic-verification-v1"), draft: analysisSchema,
+  groups: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(16) }).strict();
 export const epicStagesSchema = z.object({
   format: z.literal(1), planKey: z.string().regex(/^[a-f0-9]{64}$/), batches: z.number().int().min(1).max(16),
   contextPolicy: z.enum(["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"]).optional(),
@@ -33,6 +35,8 @@ export const epicStagesSchema = z.object({
   completionPolicy: z.literal("empty-proposals-v1").optional(),
   emptyCompletion: z.literal("no-surviving-proposals").optional(),
   collectionBaseline: epicCollectionBaselineSchema.optional(),
+  proposalPolicy: z.literal("independent-frontier-v1").optional(),
+  verification: epicVerificationSchema.optional(),
   citationCorrections: z.array(z.object({ fromReceipt: z.number().int().min(0).max(15), attempt: z.number().int().min(1).max(3),
     evidenceKey: z.string().regex(/^[a-f0-9]{64}$/), prefixKey: z.string().regex(/^[a-f0-9]{64}$/),
     draftKey: z.string().regex(/^[a-f0-9]{64}$/), response: analysisSchema,
@@ -50,13 +54,17 @@ export const epicStagesSchema = z.object({
 }).strict().superRefine((work, ctx) => {
   const empty = !!work.emptyCompletion;
   const reused = work.collectionBaseline?.reads ?? 0, completed = work.receipts.length + reused;
-  const done = empty ? completed : work.phase === "discover" ? work.nextBatch : work.phase === "validate" ? work.batches + work.nextBatch : work.batches * 2;
-  if (work.nextBatch >= work.batches && work.phase !== "complete" || work.phase === "complete" && work.nextBatch !== work.batches
+  const checks = work.verification?.groups.length ?? work.batches, total = work.batches + checks;
+  const activeBatches = work.phase === "discover" ? work.batches : checks;
+  const done = empty ? completed : work.phase === "discover" ? work.nextBatch : work.phase === "validate" ? work.batches + work.nextBatch : total;
+  if (work.nextBatch >= activeBatches && work.phase !== "complete" || work.phase === "complete" && work.nextBatch !== checks
+    || work.verification && (work.phase === "discover" || work.contextPolicy !== "staged-dense-records-v5" || checks >= work.batches
+      || !!work.linkedEvidence?.length || JSON.stringify(work.verification.draft).length > 8000)
     || reused >= work.batches || reused > 0 && work.contextPolicy !== "staged-dense-records-v5"
     || empty && (work.completionPolicy !== "empty-proposals-v1" || work.phase !== "complete" || completed < work.batches
-      || completed >= work.batches * 2 || work.candidates.questions.length > 0 || work.candidates.requirements.length > 0)
+      || completed >= total || work.candidates.questions.length > 0 || work.candidates.requirements.length > 0)
     || completed !== done || JSON.stringify(work.candidates).length > 12000
-    || work.receipts.some((r, i) => JSON.stringify(r.response).length > 12000 || r.batch !== (i + reused) % work.batches || r.phase !== (i + reused < work.batches ? "discover" : "validate")
+    || work.receipts.some((r, i) => JSON.stringify(r.response).length > 12000 || r.batch !== (i + reused < work.batches ? i + reused : i + reused - work.batches) || r.phase !== (i + reused < work.batches ? "discover" : "validate")
       || (r.phase === "validate") !== ("guardrailVerdict" in r.response))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid staged epic checkpoint sequence or draft bound." });
   }

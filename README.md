@@ -16,6 +16,15 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Fresh dense discovery now looks for independent decision frontiers and can pack
+wholly unstarted verification against the frozen draft, retaining every mandatory
+record and paid read. After a smaller batch, **Find more before processing answers**
+explicitly authorizes another collection window without processing answers or
+assessments. Large portable continuation files can use hash-checked JSON parts
+instead of failing solely at the single-file limit. SQLite 77 / conditional portable
+48–49 preserve old jobs and attempts. Live speed/question quality and faster models
+remain unqualified. See [upgrade rules and verification](docs/migrations.md#question-yield-frozen-discovery-checks-and-segmented-continuation-2026-11-13).
+
 New answer groups now compare estimated complete-evidence request costs with
 individual processing before any shared work starts. Clearly costlier shared plans
 stay individual; paid work retains its original path. SQLite 75 preserves additive

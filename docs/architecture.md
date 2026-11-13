@@ -1,5 +1,15 @@
 # Architecture outline
 
+`src/core/epic-verification.ts` packs the exact dense discovery evidence inventory
+against its reconstructed frozen draft only before any check attempt/receipt.
+Original paid reads remain unchanged; every mandatory body is still checked. New
+jobs retain an explicit independent-frontier proposal policy; older jobs keep their
+original guidance. SQLite 77 / conditional portable 49 protect these capabilities.
+`src/storage/continuation-parts.ts` emits content-addressed bounded JSON parts for
+large continuation graphs under portable 48+, retaining the existing manifest-last
+journal and size bounds. The reader validates/assembles records without concatenating
+another whole continuation string. See [compatibility and limits](migrations.md#question-yield-frozen-discovery-checks-and-segmented-continuation-2026-11-13).
+
 `src/core/epic-collection-baseline.ts` now supplies active exact-prefix collection
 reuse for fresh dense-v5 discovery. It independently authenticates a completed
 source and compares expanded model-visible read evidence, guidance and drafts.

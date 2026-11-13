@@ -29,7 +29,8 @@ export const epicReviewReportSchema = z.object({
   /** Counts cover the examined prefix only; later packages have not been prepared. */
   planningPartial: z.literal(true).optional(),
   stagedProgress: z.object({ phase: z.enum(["discover", "validate", "complete"]),
-    completed: z.number().int().min(0).max(32), batches: z.number().int().min(1).max(16),
+     completed: z.number().int().min(0).max(32), batches: z.number().int().min(1).max(16),
+     verificationBatches: z.number().int().min(1).max(16).optional(),
     totalCalls: z.number().int().min(0).max(96),
     emptyCompletion: z.literal("no-surviving-proposals").optional(),
   }).strict().optional(),

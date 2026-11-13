@@ -95,6 +95,42 @@ test("a cooperative boundary offers a useful smaller batch instead of spending a
   } finally { await workflow.close(); store.close(); }
 });
 
+test("explicit extra collection keeps charged attempts and original questions, and cannot process waiting input", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) { calls++; return questions(p, context.manifest.epicReview!.epicID); } });
+  try {
+    const p = fixture(store); arm(store, p, 13); await run(workflow, store, p);
+    const before = store.workflow(p.id), originals = structuredClone(store.get(p.id).questions), jobs = store.jobs(p.id);
+    assert.equal(before.questionBatch!.requests, 14); assert.equal(workflow.view(p.id).canCollectMore, true);
+    assert.throws(() => workflow.configure(p.id, p.revision, before.settingsVersion, "collect-more"), /Project changed/);
+    const current = store.get(p.id);
+    workflow.configure(p.id, current.revision, before.settingsVersion, "collect-more"); await workflow.wait(p.id);
+    const after = store.workflow(p.id);
+    assert.equal(store.get(p.id).questions.length, 5); assert.equal(after.questionBatch!.requests, 18);
+    assert.equal(after.questionBatch!.format === 2 && after.questionBatch!.window.number, 2);
+    assert.equal(calls, 5); assert.equal(!!workflow.view(p.id).canCollectMore, false);
+    for (const question of originals) assert.deepEqual(store.get(p.id).questions.find(q => q.id === question.id), question);
+    for (const job of jobs) assert.deepEqual(store.getJob(job.id), job);
+    assert.equal(store.get(p.id).assessments.length, 0);
+    assert.throws(() => workflow.configure(p.id, store.projectRevision(p.id), after.settingsVersion, "collect-more"), /smaller batch/);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("extra question collection refuses saved responses without spending or changing the prior grant", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) { calls++; return questions(p, context.manifest.epicReview!.epicID); } });
+  try {
+    const p = fixture(store); arm(store, p, 13); await run(workflow, store, p);
+    const state = store.workflow(p.id), question = store.get(p.id).questions[0]!;
+    store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID ?? null, answer: { kind: "answer", text: "Keep existing work" } } });
+    assert.equal(!!workflow.view(p.id).canCollectMore, false);
+    assert.throws(() => workflow.configure(p.id, store.projectRevision(p.id), state.settingsVersion, "collect-more"), /saved responses/);
+    assert.equal(calls, 1); assert.deepEqual(store.workflow(p.id), state);
+    assert.equal(store.submissions(p.id)[0]!.status, "queued");
+  } finally { await workflow.close(); store.close(); }
+});
+
 test("normal continuous discovery starts a new collection without requiring a saved policy or resetting the project", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {

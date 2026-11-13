@@ -26,6 +26,7 @@ import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserv
 import { runReadinessStages } from "./readiness-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext, epicCitationPrefixKey } from "../core/epic-stages.js";
 import { planEpicCollectionBaseline, type EpicCollectionSource } from "../core/epic-collection-baseline.js";
+import { planEpicVerification, epicVerificationContexts, epicCheckBatches, epicTotalStages } from "../core/epic-verification.js";
 import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -750,13 +751,14 @@ export class DiscoveryService {
           context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
             if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length + (work.epicStages.collectionBaseline?.reads ?? 0),
-            batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
+             batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
+             ...(work.epicStages.verification ? { verificationBatches: epicCheckBatches(work.epicStages) } : {}),
             ...(work.epicStages.emptyCompletion ? { emptyCompletion: work.epicStages.emptyCompletion } : {}) };
           if (measurement && work.epicStages) measurement.value.epicProposals = {
             ...proposalCounts,
             questions: work.epicStages.candidates.questions.length, requirements: work.epicStages.candidates.requirements.length,
             phase: work.epicStages.phase, emptyCompletion: !!work.epicStages.emptyCompletion,
-            checksNotRequested: work.epicStages.emptyCompletion ? work.epicStages.batches * 2 - work.epicStages.receipts.length - (work.epicStages.collectionBaseline?.reads ?? 0) : 0 };
+            checksNotRequested: work.epicStages.emptyCompletion ? epicTotalStages(work.epicStages) - work.epicStages.receipts.length - (work.epicStages.collectionBaseline?.reads ?? 0) : 0 };
           this.store.checkpointRetrieval(job.id, work, context.manifest, this.navigation.workflow?.continuous ? Date.now() + 360000 : undefined);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
@@ -777,6 +779,7 @@ export class DiscoveryService {
           const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
+            ...(!prior && review.contextPolicy === "staged-dense-records-v5" ? { proposalPolicy: "independent-frontier-v1" as const } : {}),
             completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           const readCollectionSource: EpicCollectionSource = sourceID => {
             const source = this.store.getJob(sourceID);
@@ -788,7 +791,7 @@ export class DiscoveryService {
               && source.expectedRevision < project.revision && source.context?.epicReview?.packageID === review.packageID
               && !source.retrievalWork?.epicStages?.collectionBaseline).slice(0, 4);
             for (const source of sources) {
-              const prepared = planEpicCollectionBaseline(project, review, batches, readCollectionSource(source.id));
+              const prepared = planEpicCollectionBaseline(project, review, batches, readCollectionSource(source.id), staged.proposalPolicy);
               if (!prepared) continue;
               staged.collectionBaseline = prepared.baseline; staged.nextBatch = prepared.baseline.reads; staged.candidates = prepared.draft;
               report(`Incremental collection reuses ${prepared.baseline.reads} exact unchanged paid read batches from their original job. Changed/later batches and every current proposal check remain required; no semantic independence or fresh retry allowance is inferred.`);
@@ -796,10 +799,21 @@ export class DiscoveryService {
             }
           }
           validateEpicStages(project, review, staged, batches, proposalCounts, readCollectionSource);
+          let checkBatches = epicVerificationContexts(project, batches, staged);
+          const prepareChecks = () => {
+            if (staged.phase !== "validate" || staged.nextBatch || work.attempts || staged.verification || staged.linkedEvidence?.length
+              || staged.receipts.some(receipt => receipt.phase === "validate") || !staged.candidates.questions.length && !staged.candidates.requirements.length) return;
+            const verification = planEpicVerification(project, batches, staged.candidates, staged.proposalPolicy);
+            if (!verification) return;
+            staged.verification = verification; checkBatches = epicVerificationContexts(project, batches, staged);
+            report(`Frozen-draft discovery verification uses ${checkBatches.length} exact-evidence batches instead of ${batches.length}. All mandatory records and original paid reads remain; no check attempts were replaced or refunded.`);
+          };
+          prepareChecks();
+          const activeBatch = () => (staged.phase === "discover" ? batches : checkBatches)[staged.nextBatch]!;
           // Carry the validated paid ledger before progress callbacks/cancellation
           // can leave a newer matching job without its original saved stages.
           context = staged.phase === "complete" ? epicStagePublicationContext(batches, staged)
-            : epicStageContext(linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates), staged);
+            : epicStageContext(linkedEvidenceStageBase(project, staged, activeBatch(), staged.receipts.length, staged.candidates), staged);
           checkpoint();
           if (epicPlan.task.recoverLinkedEvidence) {
             const support = planLinkedEvidenceRecovery(project, review, staged, work.attempts,
@@ -820,7 +834,7 @@ export class DiscoveryService {
           let callsThisRun = 0;
           while (staged.phase !== "complete") {
             controller.signal.throwIfAborted();
-            const stageBase = linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates);
+            const stageBase = linkedEvidenceStageBase(project, staged, activeBatch(), staged.receipts.length, staged.candidates);
             context = epicCitationCorrectionContext(project, epicStageContext(stageBase, staged), staged,
               staged.receipts.length === prior?.retrievalWork?.epicStages?.receipts.length
                 && !!prior?.diagnostic?.startsWith("Gap proposals require evidence in the current detailed working context"));
@@ -833,7 +847,7 @@ export class DiscoveryService {
               const reason = callsThisRun >= limits.requests ? "request-limit" : "time-limit";
               return completeMeasurement(this.store.pauseEpicReview(job.id, reason));
             }
-            report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.batches}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
+            report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.phase === "discover" ? staged.batches : epicCheckBatches(staged)}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
             work.attempts++; callsThisRun++; checkpoint();
             const raw = await requestModel(context);
             controller.signal.throwIfAborted();
@@ -864,10 +878,11 @@ export class DiscoveryService {
               response: phase === "discover" ? response as import("../core/model.js").Analysis : guardrailVerdictSchema.parse(response) });
             work.attempts = 0;
             staged.nextBatch++;
-            if (staged.nextBatch === staged.batches) {
+            if (staged.nextBatch === (phase === "discover" ? staged.batches : epicCheckBatches(staged))) {
               if (phase === "discover") { staged.phase = "validate"; staged.nextBatch = 0; }
               else staged.phase = "complete";
             }
+            prepareChecks();
             if (completeEmptyEpicStages(staged)) report("All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
             checkpoint();
           }

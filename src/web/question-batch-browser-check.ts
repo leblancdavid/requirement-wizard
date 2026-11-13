@@ -65,12 +65,22 @@ try {
    assert.equal(store.workflow(p.id).questionBatch!.requests, 5); assert.equal(store.workflow(p.id).questionBatch!.reason, "budget");
    assert.equal(topics.length, 5, "A useful smaller batch must not spend a new window just to reach the soft target");
    assert.equal(store.get(p.id).questions.length, 4); assert.match(store.workflow(p.id).message, /smaller batch/);
-  assert.deepEqual(store.getJob(interrupted.id), interrupted); assert.deepEqual(store.get(p.id).requirements, p.requirements);
-  assert.equal(store.get(p.id).assessments.length, 0); assert.equal(store.execution(p.id).run, undefined);
+   assert.deepEqual(store.getJob(interrupted.id), interrupted); assert.deepEqual(store.get(p.id).requirements, p.requirements);
+   assert.equal(store.get(p.id).assessments.length, 0); assert.equal(store.execution(p.id).run, undefined);
+   await closeTechnicalViews(page);
+   const more = page.getByRole("button", { name: "Find more before processing answers", exact: true });
+   await expect(more).toBeVisible();
+   await more.click();
+   await expect.poll(() => store.get(p.id).questions.length).toBe(5);
+   await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
+   assert.equal(store.workflow(p.id).questionBatch!.requests, 6, "The extra window retains the cancelled request and all earlier spend");
+   assert.equal(topics.length, 6); assert.deepEqual(store.getJob(interrupted.id), interrupted);
+   assert.equal(store.get(p.id).assessments.length, 0); await expect(more).toHaveCount(0);
+   await expect(page.getByRole("tab", { name: /^Design/ })).toContainText("5"); // Hydrate the extra question before intentionally holding subsequent refreshes.
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-question-batch-mobile.png", fullPage: true });
-  await closeTechnicalViews(page);
+   await closeTechnicalViews(page);
   const originalCalls = topics.length;
   // A slow/stale workspace read must not hold a response's durable save open.
   const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve; });
@@ -106,6 +116,6 @@ try {
   releaseRefresh(); await clearRoutes();
    await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
-    console.log("Question collection browser passed: useful smaller batch at the work-window boundary, owned Pause/reload/explicit resume, retained charged attempts, mobile, four durable save-only answers while workspace refresh is held, stale-reply protection and separate submission. Fixture only; no live inference.");
+    console.log("Question collection browser passed: useful smaller batch, explicit extra collection before processing, owned Pause/reload/resume, retained charged attempts, mobile, five durable save-only answers during a held refresh, stale-reply protection and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }
 finally { releaseRefresh(); await clearRoutes(); await browser.close(); await app.close(); store.close(); }

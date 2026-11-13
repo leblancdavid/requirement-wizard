@@ -526,7 +526,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, options.store.configureProcessingPolicy(id, expectedRevision, change)); return;
       }
       if (action === "workflow") {
-        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["play", "stop", "continue", "continue-continuous", "review-changes", "recover-shared-sources", "recover-shared-pages", "prepare-shared-verification", "allow-shared-rule-repair", "pause", "disable"]),
+        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["collect-more", "play", "stop", "continue", "continue-continuous", "review-changes", "recover-shared-sources", "recover-shared-pages", "prepare-shared-verification", "allow-shared-rule-repair", "pause", "disable"]),
           ruleConsent: z.object({ jobID: z.string().uuid(), requirementID: z.string().uuid(), previewKey: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
         }).strict().refine(v => (v.action === "allow-shared-rule-repair") === !!v.ruleConsent, "Exact rule-repair consent is required only for its separate action.").parse(raw);
         json(res, 200, workflow.configure(id, input.revision, input.version, input.action, input.ruleConsent)); return;

@@ -61,7 +61,7 @@ function supportingContext(project: Project, base: ContextPack, pending = false)
  * blocker is resolved. A new paid verdict must check the unchanged draft. */
 export function planLinkedEvidenceRecovery(project: Project, review: EpicReview, work: EpicStages, attempts: number,
   reason: string | undefined, contexts: ContextPack[]): Support | undefined {
-  if (!["staged-records-v4", "staged-dense-records-v5"].includes(review.contextPolicy ?? "") || work.phase === "complete"
+  if (!["staged-records-v4", "staged-dense-records-v5"].includes(review.contextPolicy ?? "") || work.phase === "complete" || work.verification
     || attempts < 1 || attempts >= 3 || !reason || work.linkedEvidence?.some(support => support.fromReceipt === work.receipts.length || support.kind === "pending-questions-v1")
     || work.citationCorrections?.some(correction => correction.fromReceipt === work.receipts.length)) return;
   // Narrow navigation hint, never a semantic verdict. Supply every pending record

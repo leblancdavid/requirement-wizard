@@ -8,8 +8,9 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { PublicationObjects } from "./publication-objects.js";
 import { writePrettyJSON, stageJSON, discardStaged } from "./staged-json.js";
-import { continuationState } from "./portable.js";
-import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder } from "./workspace.js";
+import { continuationState, decodePortable } from "./portable.js";
+import { stageContinuation, discardContinuation, decodeContinuationParts } from "./continuation-parts.js";
+import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder, readPortableWorkspace } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import { migrateDatabase } from "./migrations.js";
 import { StaleRevisionError, type Job, type Project } from "../core/model.js";
@@ -89,6 +90,86 @@ test("publication sharing preserves exact ordered JSON and copy-on-write portabl
     for (let index = 0; index < 100; index++) assert.deepEqual(bounded.share({ index, exact: `Record ${index}` }), { index, exact: `Record ${index}` });
     assert.ok(bounded.profile.peakCacheBytes <= 512);
   } finally { f.cleanup(); }
+});
+
+test("segmented continuation preserves paid originals and exact snapshots across clone import, rejects tampering and downgrades", () => {
+  const f = fixture();
+  try {
+    let p = generate(f.store, f.project);
+    const retained = f.store.beginJob(p.id, p.revision).job;
+    f.store.claimJob(retained.id, Date.now() + 60000);
+    f.store.checkpointRetrieval(retained.id, { format: 1, research: false, stages: [], attempts: 1 },
+      { revision: p.revision, focusEpicID: null, characters: 0, budget: 96000, includedIDs: [], omittedIDs: [], selectionReason: "Retained reserved attempt" });
+    f.store.failJob(retained.id, "interrupted", "Retain original checkpoint");
+    p = f.store.note(p.id, p.revision, "A newer human decision");
+    const state = continuationState(p, f.store.jobs(p.id), [], revision => f.store.get(p.id, revision));
+    const directory = join(f.path, workspaceFolder), staged = stageContinuation(directory, state, 1024, 128);
+    try {
+      assert.ok(staged.parts); const files = renderWorkspace(p, undefined, state, staged);
+      const expanded: Record<string, string> = { ...files, "continuation.json": readFileSync(staged.path, "utf8"),
+        ...Object.fromEntries(Object.entries(staged.parts).map(([name, part]) => [name, readFileSync(part.path, "utf8")])) };
+      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 48);
+      const restored = decodePortable(expanded, selection);
+      const ordinary = decodePortable(renderWorkspace(p, undefined, state), selection);
+      assert.deepEqual(restored.continuation, ordinary.continuation);
+      assert.deepEqual([...restored.snapshots()], [...decodePortable(renderWorkspace(p, undefined, state), selection).snapshots()]);
+      const [name] = Object.keys(staged.parts);
+      assert.throws(() => decodePortable({ ...expanded, [name!]: "{}" }, selection), /hash mismatch/);
+      const missing = { ...expanded }; delete missing[name!]; assert.throws(() => decodePortable(missing, selection), /part is missing/);
+      assert.throws(() => decodePortable({ ...expanded, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 47 }) }, selection), /format 48/);
+      const index = JSON.parse(expanded["continuation.json"]!); index.parts.push(index.parts[0]);
+      assert.throws(() => decodePortable({ ...expanded, "continuation.json": JSON.stringify(index) }, selection), /Duplicate/);
+      f.store.connectWorkspace(p.id, p.revision, f.path);
+      const binding = f.store.workspace(p.id)!;
+      binding.pendingHashes = Object.fromEntries(Object.entries(JSON.parse(files["manifest.json"]!).hashes).map(([path, digest]) => [path, [digest as string]]));
+      binding.pendingHashes["manifest.json"] = [hash(files["manifest.json"]!)];
+      publishWorkspace(directory, files, [], staged);
+      checkWorkspace(binding, Object.keys(expanded));
+      const opened = readPortableWorkspace(f.path);
+      assert.deepEqual(decodePortable(opened.files, selection).continuation, ordinary.continuation);
+      writeFileSync(join(directory, name!), "External edit"); assert.throws(() => checkWorkspace(binding), /Workspace conflict/);
+      assert.equal(readFileSync(join(directory, name!), "utf8"), "External edit");
+      writeFileSync(join(directory, name!), expanded[name!]!);
+      // Persist the exact pre-write journal as if the worker stopped after files
+      // but before acknowledging its manifest. Reopen/retry may return to the
+      // byte-identical small representation without losing checkpoint evidence.
+      binding.status = "pending";
+      const db = new Database(f.database);
+      db.prepare("UPDATE workspaces SET payload=?, dirty=1 WHERE project_id=?").run(JSON.stringify(binding), p.id); db.close();
+      const recovered = new ProjectStore(f.database);
+      try {
+        recovered.syncWorkspace(p.id); assert.equal(recovered.workspace(p.id)!.status, "saved");
+        assert.equal(recovered.getJob(retained.id).retrievalWork!.attempts, 1);
+        assert.deepEqual(decodePortable(readPortableWorkspace(f.path).files, selection).continuation, ordinary.continuation);
+        for (const path of Object.keys(staged.parts)) assert.equal(existsSync(join(directory, path)), false, "Recovered small publication removes only journaled obsolete parts");
+        recovered.syncWorkspace(p.id); assert.equal(recovered.workspace(p.id)!.status, "saved");
+      } finally { recovered.close(); }
+    } finally { discardContinuation(staged); }
+  } finally { f.cleanup(); }
+});
+
+test("continuation above the 64 MiB single-file limit stages bounded parts without dropping evidence", { timeout: 60000 }, () => {
+  const directory = mkdtempSync(join(parent, "large-parts-"));
+  try {
+    const state = { formatVersion: 1 as const, jobs: [], submissions: [], snapshots: {}, objects: {} as Record<string, unknown> };
+    for (let i = 0; i < 66; i++) { const value = `${i}:` + "é".repeat(524288); state.objects[hash(JSON.stringify(value))] = value; }
+    const staged = stageContinuation(directory, state);
+    try {
+      assert.ok(staged.parts); assert.ok(Object.values(staged.parts).reduce((sum, part) => sum + part.bytes, 0) > 64 * 1024 * 1024);
+      const files = Object.fromEntries(Object.entries(staged.parts).map(([name, part]) => {
+        assert.ok(part.bytes <= 8 * 1024 * 1024); return [name, readFileSync(part.path, "utf8")];
+      }));
+      assert.deepEqual(decodeContinuationParts(files, JSON.parse(readFileSync(staged.path, "utf8"))), state);
+    } finally { discardContinuation(staged); }
+    assert.deepEqual(readdirSync(directory), []);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("segmented continuation larger than its heap stages and hashes every bounded part", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=48", "--import", "tsx", "scripts/check-continuation-parts-memory.ts"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim()); assert.ok(report.bytes > 64 * 1024 * 1024); assert.equal(report.jobs, 7200);
 });
 
 test("diagnostic-heavy discovery history larger than a capped heap still plans and publishes", { timeout: 60000 }, () => {
