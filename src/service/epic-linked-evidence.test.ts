@@ -20,13 +20,13 @@ import { projectLogs, jobHistoryLog } from "../ui/log-records.js";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const empty = () => analysisSchema.parse({ summary: "Synthetic read", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
-function fixture(hugeQuestion = false, pendingCount = 0) {
+function fixture(hugeQuestion = false, pendingCount = 0, noteCount = 12) {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "linked-epic-")), path = join(directory, "state.sqlite");
   let store = new ProjectStore(path);
   let project = store.create("Linked review", "Keep exact human choices", { providerID: "openai", modelID: "fixture" });
   project = store.organize(project.id, project.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Safe upgrades", dependencies: [] }]);
-  const notes = Array.from({ length: hugeQuestion ? 11 : 12 }, (_, index) => ({ id: `m-note-${String(index).padStart(2, "0")}`, kind: "note" as const, epicID: "project",
+  const notes = Array.from({ length: hugeQuestion ? 11 : noteCount }, (_, index) => ({ id: `m-note-${String(index).padStart(2, "0")}`, kind: "note" as const, epicID: "project",
     text: Array.from({ length: 150 }, (_, part) => hash(`Exact original ${index}-${part}`)).join("") }));
   const question = { id: "a-original-question", epicID: "orders", text: hugeQuestion ? "Q".repeat(12000) : "Should the app explain upgrade changes before applying them?",
     whyItMatters: hugeQuestion ? "W".repeat(12000) : "Understand effects before applying an upgrade", status: "answered" as const, sourceID: "z-original-answer",
@@ -101,6 +101,90 @@ test("new dense schedules co-locate exact question/options/answer units without 
 
 const badCitation = () => ({ ...empty(), questions: [{ text: "An unsupported synthetic question?", whyItMatters: "Exercise citation rejection",
   evidenceIDs: ["unseen-record"], options: [{ label: "A", consequence: "A result" }, { label: "B", consequence: "B result" }] }] });
+
+test("citation correction after a paid prefix survives storage normalization and final publication", async () => {
+  const f = fixture(); let calls = 0;
+  try {
+    const result = await new DiscoveryService(f.store, { async analyze() {
+      return ++calls === 2 ? badCitation() : empty();
+    } }).analyze(f.project.id, f.project.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.ok(result.result, result.diagnostic);
+    const work = result.retrievalWork!.epicStages!;
+    assert.equal(work.citationCorrections![0]!.fromReceipt, 1);
+    assert.equal(work.receipts[1]!.attempts, 2);
+    assert.deepEqual(validateEpicStages(f.project, result.context!.epicReview!, work), work.candidates);
+    assert.equal(calls, work.batches + 1);
+  } finally { f.cleanup(); }
+});
+
+test("legacy mixed-order citation hashes retain fully checked failed work across reopen and clone with zero repeated requests", async () => {
+  const f = fixture(false, 0, 30);
+  const finish = f.store.finishJob.bind(f.store);
+  let calls = 0, closed = false;
+  try {
+    f.store.finishJob = () => { throw new Error("Synthetic publication failure after all paid checks"); };
+    const failed = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+      calls++;
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      if (stage.phase === "validate") return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+      if (stage.batch === 3 && !(context.data as { citationCorrection?: unknown }).citationCorrection) return badCitation();
+      return stage.batch === 1 ? { ...badCitation(), questions: badCitation().questions.map(q => ({ ...q, evidenceIDs: [f.project.requirements[0]!.id] })) } : empty();
+    } }).analyze(f.project.id, f.project.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(failed.status, "failed"); assert.match(failed.diagnostic!, /Synthetic publication failure/);
+    const work = failed.retrievalWork!.epicStages!, correction = work.citationCorrections![0]!;
+    assert.equal(work.phase, "complete"); assert.equal(correction.fromReceipt, 2);
+    assert.equal(calls, work.batches * 2 + 1); assert.equal(work.receipts[2]!.attempts, 2);
+    const legacy = structuredClone(failed);
+    for (let split = 0; split <= correction.fromReceipt; split++) {
+      const prefix = work.receipts.slice(0, correction.fromReceipt).map((r, index) => index < split
+        ? { phase: r.phase, batch: r.batch, evidenceKey: r.evidenceKey, attempts: r.attempts, response: r.response }
+        : { phase: r.phase, batch: r.batch, attempts: r.attempts, evidenceKey: r.evidenceKey, response: r.response });
+      legacy.retrievalWork!.epicStages!.citationCorrections![0]!.prefixKey = hash(prefix);
+      assert.deepEqual(validateEpicStages(f.project, failed.context!.epicReview!, legacy.retrievalWork!.epicStages!), work.candidates);
+    }
+    // Preserve a real legacy stored-prefix/dispatch-suffix hash without rewriting it.
+    const prefix = work.receipts.slice(0, correction.fromReceipt).map((r, index) => index === 0
+      ? { phase: r.phase, batch: r.batch, evidenceKey: r.evidenceKey, attempts: r.attempts, response: r.response }
+      : { phase: r.phase, batch: r.batch, attempts: r.attempts, evidenceKey: r.evidenceKey, response: r.response });
+    legacy.retrievalWork!.epicStages!.citationCorrections![0]!.prefixKey = hash(prefix);
+    legacy.diagnostic = "Citation correction differs from its original evidence, paid prefix or frozen draft.";
+    // Match the historical failure boundary: stages are complete, but final was
+    // never recorded because schema-normalized replay rejected the old hash.
+    delete legacy.retrievalWork!.final;
+    const altered = structuredClone(legacy.retrievalWork!.epicStages!);
+    altered.receipts[0]!.attempts = 2;
+    assert.throws(() => validateEpicStages(f.project, failed.context!.epicReview!, altered), /Citation correction differs/);
+    const db = new Database(f.path);
+    try { db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(legacy), legacy.id); } finally { db.close(); }
+    f.store.finishJob = finish;
+    f.store.close(); closed = true;
+    const reopened = new ProjectStore(f.path);
+    try {
+      assert.deepEqual(reopened.getJob(legacy.id), legacy);
+      const folder = join(f.directory, "legacy-citation"); mkdirSync(folder);
+      reopened.connectWorkspace(f.project.id, f.project.revision, folder);
+      const copied = join(f.directory, "legacy-citation-clone"); cpSync(folder, copied, { recursive: true });
+      const clone = new ProjectStore(":memory:");
+      try {
+        clone.openWorkspace(copied, f.project.model);
+        const recovered = await new DiscoveryService(clone, { async analyze() { assert.fail("Checked legacy work must recover without inference"); } })
+          .analyze(f.project.id, f.project.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+        assert.ok(recovered.result, recovered.diagnostic);
+        assert.equal(recovered.retrievalWork!.epicStages!.citationCorrections![0]!.prefixKey, hash(prefix));
+        assert.equal(recovered.retrievalWork!.epicStages!.receipts[2]!.attempts, 2);
+        assert.equal(clone.get(f.project.id).questions.filter(q => q.status === "pending").length, 1);
+      } finally { clone.close(); }
+      const recovered = await new DiscoveryService(reopened, { async analyze() { assert.fail("Reopen cannot repeat the paid stages"); } })
+        .analyze(f.project.id, f.project.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+      assert.ok(recovered.result, recovered.diagnostic);
+      assert.deepEqual(reopened.getJob(legacy.id), legacy);
+    } finally { reopened.close(); }
+  } finally {
+    // The original handle was closed before checking repeated startup.
+    if (!closed) f.store.close();
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});
 
 test("staged citation correction preserves the rejected reply and charges the same step before any publication", async () => {
   const f = fixture(); let calls = 0;

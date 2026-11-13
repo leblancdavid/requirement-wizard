@@ -29,7 +29,7 @@ export function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     pending: "Waiting to start", queued: "Waiting", running: "Working", processing: "Reviewing",
     saved: "Saved · awaiting review", completed: "Finished", failed: "Couldn’t finish",
-    interrupted: "Interrupted", cancelled: "Stopped", stale: "Information changed",
+    interrupted: "Interrupted", checkpoint: "Progress saved", cancelled: "Stopped", stale: "Information changed",
     blocked: "Needs attention", "needs-attention": "Needs attention", superseded: "Replaced",
     deferred: "Decide later", delegated: "AI may choose within your limits",
     "awaiting-merge": "Waiting to be added to the main project", verifying: "Checking the changes",

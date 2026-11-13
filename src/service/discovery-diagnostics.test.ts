@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "./discovery.js";
-import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
+import { discoveryMetricsSchema, discoveryDiagnosticReport, planningProgressSchema, type DiagnosticSource } from "../core/discovery-diagnostics.js";
 import { continuationState } from "../storage/portable.js";
 import { startApp } from "../web/server.js";
 import type { Analysis } from "../core/model.js";
@@ -20,6 +20,16 @@ import { answerGroupProgress, answerGroupPageCounts, type AnswerGroupProgressInp
 
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
+
+test("continuation diagnostics allow only known modes/reasons and preserve missing historical measurements", () => {
+  const progress = { format: 1, phase: "indexing", examinedPackages: 0, contextPreparations: 0, checkpoints: 0, revisionsLoaded: 0 };
+  assert.equal(planningProgressSchema.parse(progress).continuation, undefined);
+  for (const reason of ["pending-human-input", "changed-revision", "changed-model", "explicit-focus", "no-owned-checkpoint"])
+    assert.deepEqual(planningProgressSchema.parse({ ...progress, continuation: { mode: "catalog", reason } }).continuation, { mode: "catalog", reason });
+  assert.deepEqual(planningProgressSchema.parse({ ...progress, continuation: { mode: "direct", reason: "eligible" } }).continuation, { mode: "direct", reason: "eligible" });
+  assert.throws(() => planningProgressSchema.parse({ ...progress, continuation: { mode: "catalog", reason: "PRIVATE exception/input" } }));
+  assert.throws(() => planningProgressSchema.parse({ ...progress, continuation: { mode: "catalog", reason: "pending-human-input", text: "PRIVATE input" } }));
+});
 
 test("latest workspace publication diagnostics are numeric, separately scoped, redacted and absent when unavailable", () => {
   const row: DiagnosticSource = { id: "PRIVATE-job", revision: 1, status: "completed", packageID: null, policy: null,

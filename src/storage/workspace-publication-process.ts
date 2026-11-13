@@ -1,7 +1,8 @@
 import { ProjectStore } from "./store.js";
 
 if (!process.send || !process.argv[2] || !process.argv[3]) throw new Error("Workspace publication requires its owned process.");
-const store = new ProjectStore(process.argv[2], undefined, { publication: "manual", publicationOwner: process.argv[3] });
+const store = new ProjectStore(process.argv[2], undefined, { publication: "manual", publicationOwner: process.argv[3],
+  publicationProgress: progress => process.send?.({ projectID: progress.projectID, progress }) });
 let closed = false;
 const close = () => { if (!closed) { closed = true; store.close(); } };
 process.on("message", (input: { projectID?: string; close?: boolean }) => {

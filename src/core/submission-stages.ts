@@ -7,6 +7,7 @@ import { specificationUpdateTargets } from "./specification-permissions.js";
 import { submissionClarificationQuestions } from "./readiness-questions.js";
 import { assertSpecificationAuthorization, specificationAuthorizationSources } from "./specification.js";
 import { refinementEvidenceRecords } from "./refinement-context.js";
+import { canonicalJSON } from "./assessment-identity.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -29,6 +30,9 @@ export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]),
   reviewChanges: z.array(z.discriminatedUnion("type", [analysisSchema.shape.reviewChanges.unwrap().element.options[0],
     analysisSchema.shape.reviewChanges.unwrap().element.options[1]])).max(30).optional() });
 export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-submission-batches-v1"), submissionID: z.string().uuid(),
+  verification: z.object({ format: z.literal(1), policy: z.literal("frozen-draft-exact-packing-v1"),
+    fromReceipt: z.number().int().min(1).max(512), prefixKey: key, draftKey: key, planKey: key,
+    batches: z.array(z.array(z.string().min(1)).min(1)).min(1).max(32) }).strict().optional(),
   publicationSupport: z.object({ format: z.literal(1), contextKey: key, attempts: z.number().int().min(0).max(4),
     receipt: z.object({ contextKey: key, attempt: z.number().int().min(1).max(4), atRevision: z.number().int().positive(),
       jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
@@ -75,7 +79,7 @@ const repairRead = (w: SubmissionWork) => repairActive(w) && !w.receipts.slice(w
 export const submissionStep = (w: SubmissionWork) => repairActive(w)
   ? w.batches.length + w.receipts.slice(w.draftRepair!.fromReceipt).filter((r) => complete(r.response)).length
   : w.receipts.filter((r) => complete(r.response)).length;
-export const submissionTotalSteps = (w: SubmissionWork) => w.batches.length * 2 + Number(!!w.draftRepair);
+export const submissionTotalSteps = (w: SubmissionWork) => w.draftRepair ? w.batches.length * 2 + 1 : w.batches.length + (w.verification?.batches.length ?? w.batches.length);
 export const submissionProgress = (w: SubmissionWork) => w.publicationSupport ? { completed: submissionStep(w) + Number(!!w.publicationSupport.receipt?.verdict.valid), total: submissionTotalSteps(w) + 1,
   phase: w.publicationSupport.receipt?.verdict.valid ? "complete" as const : "check" as const } : ({ completed: submissionStep(w), total: submissionTotalSteps(w),
    phase: submissionStep(w) >= submissionTotalSteps(w) ? "complete" as const : repairRead(w) || submissionStep(w) < w.batches.length ? "read" as const : "check" as const });
@@ -147,11 +151,15 @@ export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork
   const step = submissionStep(w), phase = submissionProgress({ ...w, publicationSupport: undefined }).phase;
   if (step >= submissionTotalSteps(w) || phase === "complete") throw new Error("No unfinished saved-response stage.");
   const supplemental = w.receipts.slice(repairActive(w) ? w.draftRepair!.fromReceipt : 0).filter((r) => r.step === step).flatMap((r) => "submissionEvidence" in r.response ? r.response.submissionEvidence.recordIDs : []);
-  const batch = repairRead(w) ? w.draftRepair!.evidenceIDs : w.batches[repairActive(w) ? step - w.batches.length - 1 : step % w.batches.length]!;
+  const verification = phase === "check" && !repairActive(w) ? w.verification : undefined;
+  const batch = repairRead(w) ? w.draftRepair!.evidenceIDs : verification ? verification.batches[step - w.batches.length]!
+    : w.batches[repairActive(w) ? step - w.batches.length - 1 : step % w.batches.length]!;
   const selected = new Set([...m.pins, ...batch, ...supplemental]);
   const records = m.records.filter((r) => selected.has(r.record.id));
   const detail = Object.fromEntries(["sources", "questions", "requirements", "research"].map((field) => [field, records.filter((r) => r.field === field).map((r) => r.record)]));
   let data: unknown = { ...m.base, ...detail, draft, submissionStage: { phase, step, batches: w.batches.length,
+    ...(verification ? { verificationPlan: { key: verification.planKey, batch: step - w.batches.length + 1, batches: verification.batches.length,
+      instruction: "Frozen-draft verification uses a losslessly repacked exact evidence batch. Check against every detailed record here. All original mandatory evidence is assigned to verification batches; omitted evidence is not presumed checked. This check cannot add or rewrite proposals." } } : {}),
     availableEvidenceIDs: m.evidenceIDs,
     ...(repairRead(w) ? { draftRepair: { rejectedVerdict: w.receipts[w.draftRepair!.fromReceipt - 1]!.response,
       clarificationConclusion: w.draftRepair!.conclusion,
@@ -208,6 +216,47 @@ export function planSubmissionStages(m: SubmissionMaterials): SubmissionWork {
     if (context.manifest.characters + draftLimit > stageLimit) throw new Error("An exact saved-response batch plus target and draft reserve cannot fit. Original human input and saved work are retained; no model call started.");
   }
   return w;
+}
+
+const verificationHash = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
+const verificationPlanKey = (w: SubmissionWork, v: NonNullable<SubmissionWork["verification"]>) => verificationHash([v.policy, w.planKey, v.fromReceipt, v.prefixKey, v.draftKey, v.batches]);
+
+/** Repack only entirely unstarted verification, never paid reads/checks. The
+ * exact frozen draft needs no reserve for hypothetical future additions. Every
+ * mandatory record is still assigned to a check, and pins stay in every request. */
+export function packSubmissionVerification(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis): boolean {
+  if (w.verification || w.draftRepair || w.publicationSupport || w.attempts !== 0 || w.batches.length < 2
+    || submissionStep(w) !== w.batches.length || w.receipts.some(r => r.step >= w.batches.length)
+    || w.allowanceExtensions?.some(g => g.step >= w.batches.length)) return false;
+  const v: NonNullable<SubmissionWork["verification"]> = { format: 1, policy: "frozen-draft-exact-packing-v1", fromReceipt: w.receipts.length,
+    prefixKey: verificationHash(w.receipts), draftKey: verificationHash(draft), planKey: "0".repeat(64), batches: [] };
+  const ids = w.batches.flat().filter(id => !m.pins.has(id));
+  const fits = (batch: string[]) => {
+    try { return submissionStageContext(m, { ...w, verification: { ...v, batches: [batch] } }, draft).manifest.characters + 128 <= stageLimit; }
+    catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return false; }
+  };
+  if (!ids.length) return false;
+  for (let offset = 0; offset < ids.length;) {
+    let low = offset + 1, high = ids.length, end = offset;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      if (fits(ids.slice(offset, middle))) { end = middle; low = middle + 1; } else high = middle - 1;
+    }
+    if (end === offset) return false; // Original exact check layout remains available.
+    v.batches.push(ids.slice(offset, end)); offset = end;
+    if (v.batches.length >= w.batches.length) return false;
+  }
+  v.planKey = verificationPlanKey(w, v); w.verification = v;
+  return true;
+}
+
+function validateVerificationPlan(m: SubmissionMaterials, w: SubmissionWork) {
+  const v = w.verification; if (!v) return;
+  const expected = m.evidenceIDs.filter(id => !m.pins.has(id)), actual = v.batches.flat();
+  if (v.fromReceipt > w.receipts.length || v.planKey !== verificationPlanKey(w, v)
+    || v.batches.length >= w.batches.length || actual.length !== expected.length || new Set(actual).size !== expected.length
+    || actual.some(id => !expected.includes(id)) || w.receipts.slice(0, v.fromReceipt).some(r => r.step >= w.batches.length))
+    throw new Error("Frozen-draft verification plan changed or omits exact evidence. Paid work was retained.");
 }
 function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw: unknown, requireTargetSupport = false) {
   if ((JSON.stringify(raw)?.length ?? 0) > draftLimit) throw new Error("Saved-response output exceeds its bounded reserve; no output was truncated or applied.");
@@ -266,15 +315,22 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
 export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork) {
   submissionWorkSchema.parse(w);
   const grants = w.allowanceExtensions ?? [];
-  if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= w.batches.length * 2))
+  if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= (w.draftRepair ? w.batches.length * 2 : submissionTotalSteps(w))))
     throw new Error("Invalid saved-response additional request grant.");
   if (w.materialKey !== m.materialKey || w.submissionID !== m.submissionID || JSON.stringify(w.task) !== JSON.stringify(m.task)
     || w.planKey !== hash([w.policy, w.materialKey, w.batches])) throw new Error("Saved response evidence or stage plan changed; completed calls were retained, not repeated.");
+  validateVerificationPlan(m, w);
   const expected = m.evidenceIDs.filter((id) => !m.pins.has(id)), actual = w.batches.flat().filter((id) => !m.pins.has(id));
   if (actual.length !== expected.length || new Set(actual).size !== expected.length || actual.some((id) => !expected.includes(id))
     || w.batches.flat().some((id) => !m.evidenceIDs.includes(id))) throw new Error("Saved-response batches must cover every mandatory record exactly once.");
   const prefix = { ...w, receipts: [] as SubmissionWork["receipts"], attempts: 0 };
   let draft = empty(), blocked: string | undefined, priorAttempt = 0;
+  const verifyBoundary = () => {
+    const v = w.verification; if (!v) return;
+    if (submissionStep(prefix) !== w.batches.length || blocked || priorAttempt !== 0
+      || v.prefixKey !== verificationHash(prefix.receipts) || v.draftKey !== verificationHash(draft))
+      throw new Error("Frozen-draft verification does not match its completed read prefix and exact draft.");
+  };
   const enterRepair = () => {
     const repair = w.draftRepair!, last = prefix.receipts.at(-1);
     const original = { ...prefix, draftRepair: undefined };
@@ -288,6 +344,7 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
   };
   if (w.draftRepair && w.draftRepair.fromReceipt > w.receipts.length) throw new Error("Corrective review has no retained source boundary.");
   for (const [index, r] of w.receipts.entries()) {
+    if (index === w.verification?.fromReceipt) verifyBoundary();
     if (index === w.draftRepair?.fromReceipt) enterRepair();
     if (blocked || r.step !== submissionStep(prefix) || r.attempt > submissionRequestLimit(prefix, r.step) || r.attempt <= priorAttempt || r.contextKey !== hash(submissionStageContext(m, prefix, draft).data)) throw new Error("Invalid saved-response transition; no completed call repeated.");
     const next = accept(m, prefix, draft, r.response, !!r.permissionPolicy); draft = next.draft; blocked = next.blocked;
@@ -308,6 +365,7 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
     }
     priorAttempt = complete(r.response) ? 0 : r.attempt; prefix.receipts.push(r);
   }
+  if (w.receipts.length === w.verification?.fromReceipt) verifyBoundary();
   if (w.receipts.length === w.draftRepair?.fromReceipt) enterRepair();
   if (w.attempts < priorAttempt || w.attempts > submissionRequestLimit(w) || submissionStep(w) > submissionTotalSteps(w)) throw new Error("Invalid saved-response attempt accounting.");
   if (w.permissionRecovery && w.permissionRecovery.receiptIndex >= w.receipts.length) throw new Error("Saved permission recovery is missing its original receipt.");

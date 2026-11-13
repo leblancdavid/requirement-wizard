@@ -6,6 +6,7 @@ import { ContextBudgetError } from "../core/context.js";
 import { planningProgressSchema, type PlanningProgress } from "../core/discovery-diagnostics.js";
 import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
+import { epicResumeReason } from "../core/epic-continuation.js";
 
 /** Bump on any scheduling/context/freshness change that could alter skip receipts.
  * Exclude only bookkeeping never read by the workflow planner/context builder.
@@ -39,11 +40,14 @@ export class PlanningTimeoutError extends Error {
  */
 export async function prepareEpicReview(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[],
   options: { signal: AbortSignal; readRevision: (revision: number) => Project; onProgress: (value: PlanningProgress) => void;
-    timeoutMs?: number; loadReceipts?: (inputKey: string) => Map<string, EpicPlanningCheckpoint>;
+    timeoutMs?: number; resumeJob?: Job; loadReceipts?: (inputKey: string) => Map<string, EpicPlanningCheckpoint>;
     saveReceipt?: (inputKey: string, key: string, value: EpicPlanningCheckpoint) => void;
     loadContexts?: (inputKey: string) => Map<string, EpicContextCheckpoint>;
     saveContext?: (inputKey: string, key: string, value: EpicContextCheckpoint) => void } ): Promise<EpicPlan> {
   options.signal.throwIfAborted();
+  const reason = epicResumeReason(project, options.resumeJob, submissions, focusEpicID);
+  const resumeJob = reason === "eligible" ? options.resumeJob : undefined;
+  const continuation = { mode: resumeJob ? "direct" as const : "catalog" as const, reason };
   const inputKey = epicPlanningInputKey(project, jobs, focusEpicID, submissions);
   const contextInputKey = epicPlanningContextInputKey(project);
   // Lazy adoption of the previous exact-input cache only when its original full
@@ -53,9 +57,10 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   const v3Key = digestJSONArray(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
   const v4Key = digestJSONArray(["resolved-prefix-v4", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
   const v5Key = digestJSONArray(["resolved-prefix-v5", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
-  const resolved = options.loadReceipts?.(inputKey) ?? new Map<string, EpicPlanningCheckpoint>();
-  const contexts = options.loadContexts?.(contextInputKey) ?? new Map<string, EpicContextCheckpoint>();
+  const resolved = !resumeJob && options.loadReceipts?.(inputKey) || new Map<string, EpicPlanningCheckpoint>();
+  const contexts = !resumeJob && options.loadContexts?.(contextInputKey) || new Map<string, EpicContextCheckpoint>();
   for (const generation of [v5Key, v4Key, v3Key, previousKey, legacyKey]) {
+    if (resumeJob) break;
     if (resolved.size) break;
     for (const [key, value] of options.loadReceipts?.(generation) ?? []) {
       if (value.tasks.some(task => task.state !== "reviewed")) continue;
@@ -64,6 +69,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     }
   }
   for (const generation of [inputKey, v5Key, v4Key, v3Key, previousKey, legacyKey]) {
+    if (resumeJob) break;
     if (contexts.size) break;
     for (const [key, value] of options.loadContexts?.(generation) ?? []) {
       options.signal.throwIfAborted();
@@ -71,13 +77,14 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     }
   }
   options.signal.throwIfAborted();
-  const data = { project, jobs: planningJobs(jobs), focusEpicID, submissions, resolved, contexts };
+  const data = { project, jobs: resumeJob ? [] : planningJobs(jobs), focusEpicID, submissions, resolved, contexts,
+    resumeJob: resumeJob ? planningJobs([resumeJob])[0] : undefined, continuation };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use
   // emitted JS directly and never depend on the dev-only TypeScript loader.
   const worker = source ? new Worker(`require("tsx/esm/api").tsImport(${JSON.stringify(new URL("./epic-planning-worker.ts", import.meta.url).href)}, require("node:url").pathToFileURL(__filename).href).catch(error => { throw error; });`,
     { eval: true, workerData: data }) : new Worker(new URL("./epic-planning-worker.js", import.meta.url), { workerData: data });
-  let latest: PlanningProgress = { format: 1, phase: "indexing", examinedPackages: 0, contextPreparations: 0, checkpoints: 0, revisionsLoaded: 0 };
+  let latest: PlanningProgress = { format: 1, phase: "indexing", examinedPackages: 0, contextPreparations: 0, checkpoints: 0, revisionsLoaded: 0, continuation };
   let timer: ReturnType<typeof setTimeout> | undefined, pulse: ReturnType<typeof setInterval> | undefined;
   let abort: (() => void) | undefined;
   try {

@@ -13,6 +13,7 @@ export { requirementFingerprint } from "../core/implementation.js";
 export const workspaceFolder = ".reqwizit";
 export const legacyWorkspaceFolder = ".requirement-wizard";
 const legacyArtifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"];
+export type PublicationProgress = { projectID: string; revision: number; phase: "history" | "continuation" | "render" | "files"; heapUsedBytes: number };
 export type Workspace = {
   bindingID?: string;
   path: string; status: "saved" | "pending" | "conflict" | "unavailable";
@@ -25,7 +26,8 @@ export type Workspace = {
   /** Local diagnostic durations; nested phases are not additive wall time. */
   publicationMetrics?: { format: 1; revision: number; elapsedMs?: number; historyMs?: number;
     continuationMs?: number; renderMs?: number; filesMs?: number; selectedJobs?: number; snapshots?: number;
-    continuationProfile?: ContinuationProfile };
+    continuationProfile?: ContinuationProfile;
+    historyObjects?: { reusedNodes: number; createdNodes: number; peakCacheBytes: number } };
 };
 export function hash(content: string) { return createHash("sha256").update(content).digest("hex"); }
 export function canonicalDirectory(path: string, create = false) {

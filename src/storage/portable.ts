@@ -49,9 +49,10 @@ function portableJob(job: Job, linked: boolean, definitionKey: (epicID: string) 
   delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
   copy.leaseUntil = null;
   if (["pending", "running"].includes(copy.status)) copy.status = "interrupted";
-  if (copy.scan) copy.scan.workspaceKey = "portable";
-  if (copy.scanWork) copy.scanWork.bindingID = "portable";
-  for (const stage of copy.retrievalWork?.stages ?? []) delete stage.sessionID;
+  if (copy.scan) copy.scan = { ...copy.scan, workspaceKey: "portable" };
+  if (copy.scanWork) copy.scanWork = { ...copy.scanWork, bindingID: "portable" };
+  if (copy.retrievalWork) copy.retrievalWork = { ...copy.retrievalWork,
+    stages: copy.retrievalWork.stages.map(({ sessionID: _sessionID, ...stage }) => stage) };
   if (copy.status === "completed" && copy.context?.definitionAssessment && linked
     && copy.context.definitionAssessment.inputKey !== definitionKey(copy.context.definitionAssessment.epicID)) {
     copy.portableReceipt = 1;
@@ -436,7 +437,8 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections) ? 45
+  const sharedFormat = continuation?.jobs.some(j => j.submissionWork?.verification) ? 46
+    : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections) ? 45
     : continuation?.jobs.some(j => j.context?.epicReview?.recordGrouping === "pending-question-units-v2"
     || j.retrievalWork?.epicStages?.linkedEvidence?.some(s => s.kind === "pending-questions-v1")) ? 44
     : continuation?.jobs.some(j => j.context?.epicReview?.recordGrouping || j.retrievalWork?.epicStages?.linkedEvidence) ? 43
@@ -563,8 +565,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(45), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–45 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(46), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–46 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -603,6 +605,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 46 && continuation.jobs.some(j => j.submissionWork?.verification))
+    throw new Error("Frozen-draft verification packing requires portable state format 46. Saved work was not overwritten.");
   if (state.formatVersion < 45 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections))
     throw new Error("Saved citation corrections require portable state format 45. Saved work was not overwritten.");
   if (state.formatVersion < 44 && continuation.jobs.some(j => j.context?.epicReview?.recordGrouping === "pending-question-units-v2"

@@ -281,6 +281,7 @@ export class ProjectWorkflow {
       this.store.saveWorkflow(id, state);
     };
     const navigation = { owner, continuous, play: !!initial.playPolicy,
+      resumeEpicJobID: () => { const current = owned().current; return current?.kind === "discover" && !current.completed ? current.jobIDs.at(-1) : undefined; },
       shouldPause: () => owned().paused,
       beforeJob: () => {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
@@ -379,6 +380,9 @@ export class ProjectWorkflow {
           stop("paused", "Inputs changed at a work-window boundary. Saved steps and spent attempts are retained; continue explicitly for the new input.", true); return false;
         }
         if (state.questionBatchPolicy?.format !== 2 || batch.format !== 2) return finish("budget", "Bounded question collection stopped. Saved work is retained; continue explicitly for more work.");
+        const snapshot = this.project(id);
+        const ready = snapshot.questions.filter(q => q.status === "pending" && snapshot.epics.some(e => e.id === q.epicID && !e.archived)).length;
+        if (ready > 0) return finish("budget", `${ready} useful questions are ready. Offering this smaller batch at the work-window boundary instead of waiting for five. Answer them when ready; unfinished package steps and charged attempts remain saved.`);
         batch.window = { number: batch.window.number + 1, packages: 0, requests: 0 };
         batch.remainingMs = questionBatchLimits.durationMs;
         // Yield/release the worker, not the user's existing continuous consent.

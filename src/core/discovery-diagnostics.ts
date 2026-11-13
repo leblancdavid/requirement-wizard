@@ -5,6 +5,7 @@ import { definitionCellExecutionStageLimit } from "./definition-continuation.js"
 import { definitionRequestLimit } from "./definition-budget.js";
 import { answerIntegrationSchema } from "./answer-integration-diagnostics.js";
 import { workflowStopSchema } from "./workflow-stop.js";
+import { epicResumeReasons } from "./epic-continuation-reason.js";
 import { answerGroupProgress, answerGroupPageCounts, answerGroupLimits, answerGroupPageStepLimit } from "./answer-group.js";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -50,6 +51,7 @@ export const planningProgressSchema = z.object({ format: z.literal(1), phase: z.
   blockerSummary: planningBlockersSchema.optional(), closureRenderAttempts: count.optional(), reusedClosures: count.optional(),
   completedEquivalenceChecks: count.optional(), equivalentCompletedPackages: count.optional(),
   memory: z.object({ heapUsedBytes: count, heapPeakBytes: count, heapLimitBytes: count }).strict().optional(),
+  continuation: z.object({ mode: z.enum(["direct", "catalog"]), reason: z.enum(epicResumeReasons) }).strict().optional(),
 }).strict();
 export type PlanningProgress = z.infer<typeof planningProgressSchema>;
 export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.enum(["recording", "finished"]),
@@ -116,6 +118,7 @@ const workspacePublicationSchema = z.object({ format: z.literal(1), revision: co
   status: z.enum(["saved", "pending", "conflict", "unavailable"]).optional(),
   elapsedMs: duration.optional(), historyMs: duration.optional(), continuationMs: duration.optional(),
   renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional(),
+  historyObjects: z.object({ reusedNodes: count, createdNodes: count, peakCacheBytes: count }).strict().optional(),
   continuationProfile: z.object({ selectionMs: duration, snapshotReadMs: duration, deltaMs: duration,
     serializedRecords: count, digestComputations: count, digestHits: count,
     snapshotCache: z.object({ sourceReadMs: duration, sourceHashMs: duration, cacheReadMs: duration, inflateMs: duration,

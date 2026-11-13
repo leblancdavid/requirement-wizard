@@ -1,5 +1,28 @@
 # Architecture outline
 
+Frozen-draft saved-response verification retains original read plans and adds a
+separately authenticated exact-evidence packing plan only before any check attempt.
+SQLite 73 is a reader boundary; conditional portable 46 carries the new metadata.
+Repairs still recheck every original batch. Publication-private structural sharing
+uses ordered JSON signatures, a bounded cache and copy-on-write sanitization; it
+does not change artifact bytes or delete history. Child phase IPC improves abnormal
+exit diagnostics without claiming the reported real-project abort is fixed. See
+[preservation and qualification](migrations.md#frozen-draft-verification-and-publication-sharing-2026-11-12).
+
+`src/core/epic-continuation.ts` prepares a single exact, coordinator-owned
+scheduler-paused package through the existing planning worker. It bypasses catalog
+history/cache loading only for same-revision/model zero-attempt budget checkpoints;
+normal stage replay and expected-revision checks remain mandatory. Other input or
+failure classes use full planning. Reports remain explicitly partial. Historical
+policy probing preserves original selection priority while rendering each
+representation once; pending-inventory boolean proof memoization is bounded and
+exact-input-bound. See [compatibility and limits](migrations.md#exact-paused-package-continuation-and-useful-question-windows-2026-11-12).
+
+Question collection offers an existing useful batch at a cooperative boundary
+instead of waiting for five. Read-only logs label ordinary saved budget checkpoints
+as **Progress saved**, retaining original durable job states and paid attempts.
+Neither change establishes semantic incremental discovery across changed decisions.
+
 File-backed browser stores publish through the owned
 `src/storage/workspace-publication-process.ts` child process (256 MiB old-space cap), leaving SQLite decisions durable
 without waiting for portable history/rendering. SQLite 72 introduces a dirty

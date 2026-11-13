@@ -6,6 +6,7 @@ import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
+import { packSubmissionVerification } from "../core/submission-stages.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -52,6 +53,8 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   const current = () => bookkeeping("revisionChecks", () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); });
   for (;;) {
     current();
+    if (!blocked && local("preparation", () => packSubmissionVerification(m, w, draft)))
+      progress(`The draft is frozen. Repacked all exact mandatory verification evidence into ${w.verification!.batches.length} checks instead of ${w.batches.length}; paid reads and spent attempts are unchanged. Every surviving action still requires every check.`);
     const done = submissionStep(w) === submissionTotalSteps(w);
     const supportContext = done ? local("context", () => prepareSubmissionPublicationSupport(m, w, draft)) : undefined;
     if (supportContext) {

@@ -1,5 +1,193 @@
 # Data migrations and upgrade compatibility
 
+## Frozen-draft verification and publication sharing (2026-11-12)
+
+**Source → target: SQLite 72 → 73; conditional portable 45 → 46.** Migration
+73 is an additive reader-capability boundary, not a payload rewrite. Startup
+validates bounded verification metadata transactionally; unsupported future plans
+roll back the upgrade without replacing saved work. Repeated reopen preserves
+original IDs, paid receipts, drafts, attempts and history. No startup model calls.
+
+Once all original reads finish, entirely unstarted saved-response checks may use
+`frozen-draft-exact-packing-v1`: measure the actual frozen draft instead of reserving
+space for hypothetical additions. The original material/plan keys and read layout
+remain unchanged. A separate authenticated plan binds canonical read-prefix and
+draft hashes to the exact verification batches. Every non-pinned mandatory record
+appears exactly once; pins remain in every request. Adopt only when fewer checks
+fit. Existing check receipts, spent check attempts, check allowance extensions,
+repairs and support reviews prohibit adoption. Later explicit grants apply only to
+the unfinished packed step; they cannot trigger another repack. Rejections remain
+blocking. Corrective drafts retain the existing full original-batch recheck scheme.
+Cancellation and malformed replies retain charged attempts. A valid late reply
+after a concurrent edit stays as paid evidence against its original snapshot in a
+stale job; it cannot verify changed evidence or publish into the newer revision.
+
+Only artifacts carrying this metadata require portable 46; earlier projects keep
+their existing conditional format. Downgraded markers are rejected. Clone/adoption
+replays the same paid read prefix and runs only remaining checks. Qualification:
+fresh synthetic fixture reduced three checks to two; a retained legacy schedule
+reduced remaining requests from 13 to nine. Rollback, repeated reopen and portable
+adoption tests passed. These are deterministic measurements, not live latency claims.
+
+Publication now structurally shares exact ordered decoded JSON in a private bounded
+8 MiB/8,192-entry cache. Copy-on-write portable sanitization preserves source objects,
+artifact bytes, durable SQLite archives and existing portable formats. Phase IPC
+reports history/continuation/render/files with revision and heap sample; an abnormal
+child exit reports its last sample, not a claimed root cause. A synthetic ~96 MB
+repeated-paid-history archive published under a 64 MiB heap; disabling sharing in
+the isolated control reproduced fatal allocation failure. **The user's actual
+256 MiB portable-save abort remains unreplicated and is not qualified as fixed.**
+
+Exact owned continuation also recognizes evidence-backed resolved historical failed
+submissions using the same resolution rules as normal coordination. Original failed
+records remain unchanged; genuinely pending input still requires catalog planning.
+Allowlisted `planningProgress.continuation` diagnostics record direct/catalog mode
+and eligibility reason, never input text. An end-to-end historical-row regression
+passes with global archive access prohibited. No broader changed-evidence semantic
+incremental discovery or new completed-check authority is introduced.
+
+Latest full qualification: `npm test` passed all 2,096 tests (964 pretest, 828 main,
+304 posttest). The separately added continuation-diagnostics allowlist test also
+passed. Focused qualification: 103 submission/resilience tests passed, including
+valid paid replies retained against their original snapshots after concurrent edits;
+the 50-test submission/publication run also passed before that preservation review.
+Type checking, UI build, emitted JavaScript publication-child and direct-continuation
+worker smokes passed without inference. The browser command passed layout, model
+selection and assessment tools, then stopped at the previously observed Design
+badge expectation (`2` expected, `1` shown, `browser-check.ts:1126`). Standalone
+portable browser checks passed. Desktop staging remains unqualified while the
+running app holds its native SQLite binary; compilation alone is not packaging.
+
+## Exact paused-package continuation and useful question windows (2026-11-12)
+
+**Source → target: SQLite 72 → 72; portable formats unchanged (through conditional
+45); existing workflow and paid-stage formats unchanged.** No resets, original
+payload rewrites, new model allowances, eager adoption or paid-layout migrations.
+This is a first latency pass, not broader changed-evidence incremental discovery.
+
+### Direct owned continuation
+
+The coordinator can hint its most recent unfinished discovery job to the owned
+planning worker. Only an interrupted staged package with a saved request/time
+budget pause, zero unfinished attempts, identical project revision and exact model/
+connection qualifies. Explicit focus, foreign jobs, changed revisions/providers,
+failed/cancelled work, saved evidence blockers, or outstanding human submissions
+fall back to ordinary catalog planning. The hint is process-local dispatch input,
+not new persisted evidence or a completion/skip receipt. Reopen uses the existing
+durable workflow current-job IDs; no model calls start merely by migrating data.
+
+For an eligible hint the service does not decode the full job archive, and the
+worker does not load global scheduling/context-cache histories. It reconstructs
+only that exact package. The normal canonical-layout/receipt/evidence/draft replay,
+expected-revision checks, model selection, original attempts and remaining stage
+allowances still apply before dispatch/publication. Cancellation/deadlines retain
+their owned-worker boundary. Reports explicitly describe one package and a partial
+catalog, never a whole-project completeness result. Manual/terminal paths without
+an owned hint retain normal planning. Saved incompatible work is never erased.
+
+### Bounded policy/proof work
+
+Historical jobs sharing the same representation are probed together, retaining
+the earliest matching job under the original completed/newest-first priority.
+Only the current/winning bundles plus existing bounded caches are needed. This
+avoids repeatedly rebuilding alternating large policies after cache eviction.
+Equivalent pending-inventory proofs memoize bounded boolean digests bound to every
+support record, relevant full receipt prefix, batch count and exact current bundle.
+These are local computation reuse, not semantic independence or new model checks.
+No saved paid identity, context wire contract or completed-cache interpretation
+changes. The synthetic six-representation/72-job forced-eviction fixture prepares
+the same number of contexts as its six-job baseline, with identical next task,
+batch bytes and report. This is not a live speed guarantee.
+
+### Smaller useful batches and logs
+
+At an existing cooperative work-window boundary, if pending questions are already
+available, collection now offers them for answers instead of opening another window
+solely to chase the soft target of five. It records the existing `budget` finish
+reason and preserves total/window counters, original grants, partial packages and
+charged attempts. Without ready questions, normal bounded automatic continuation
+remains. Existing waiting/target/empty/settled/failure/cancellation gates remain;
+early delivery makes no completeness claim or implicit approval. Answering those
+questions can still make old partial work genuinely stale; it is retained as dated
+evidence rather than falsely reused. No new settings/schema version is needed for
+this earlier stop within existing consent; saved finished collections stay finished.
+
+Log projections now distinguish an explicit zero-attempt staged request/time pause
+as `checkpoint` (**Progress saved**), not an error interruption. Problems-only
+queries exclude these checkpoints. The original durable `interrupted` status,
+reason, counters, activity and model receipts remain unchanged. Request timeouts,
+cancellation, expired leases and failed work are not relabelled. This changes only
+read-only log/API/export presentation, not the portable job representation.
+
+Qualification so far: type checking and direct-continuation/policy-eviction tests
+pass. The wider focused run passed 160 tests and exposed one expected old
+five-question assertion; it is updated to verify the new four-question boundary
+with unchanged spent work. The corrected 17-test question-collection run and final
+two new continuation/forced-cache-eviction tests pass. UI build and desktop
+TypeScript emission pass, including an isolated emitted-JavaScript continuation
+smoke that forbids archive scans and repeated fixture stages. Desktop dependency
+staging remains blocked by Windows `EPERM` on the running app's SQLite binary;
+close it and rebuild before relaunching. The full browser command hit a route
+handler race in workspace-layout (`Route is already handled!`); standalone
+workspace-layout and portable browser reruns pass. The full unit-test command
+passed 2,086 tests (957 pretests, 825 main tests and 304 posttests). The final
+three-test continuation/eviction/reopen-and-portable-adoption run also passed,
+including the added older-checkpoint clone regression. A final 66-test planning/
+linked-evidence run passed after binding pending-proof memoization to the complete
+review identity as well as its exact batch key. No live calls or
+direct modification of the user's saved project. Broader model-call-reducing
+changed-evidence baselines and large-project portable-save failure remain
+outstanding; a prior read is not proof of semantic independence.
+
+## Citation-correction receipt-order compatibility (2026-11-12)
+
+**Source → target: SQLite 72 → 72; conditional portable 45 unchanged.** A late
+export showed staged jobs failing final replay after all paid steps completed:
+`Citation correction differs from its original evidence, paid prefix or frozen draft.`
+A deterministic second-batch rejection reproduces the failure. Dispatch inserted
+receipt fields as `phase,batch,attempts,evidenceKey,response`; schema reads use
+`phase,batch,evidenceKey,attempts,response`. The correction's old raw-JSON prefix
+hash changed after storage normalization even though no evidence changed. The
+original first-batch-only correction tests had an empty prefix and missed this.
+
+New correction prefix hashes use the explicit schema field order. Replay accepts
+that order and only the known historical layouts: a schema-ordered stored prefix
+followed by dispatch-ordered newly appended receipts, at any possible resume
+boundary. All field values, response contents, ordering of receipts, spent
+attempts, exact evidence hashes, frozen draft hashes and rejected-response checks
+remain required. This is representation compatibility, not permission to accept
+an arbitrary changed hash or reconstruct missing evidence. Original stored hashes,
+jobs, drafts and dated paid receipts are not rewritten. No SQL/schema upgrade or
+eager startup/model call is required; unsupported future envelopes still reject.
+
+Explicit Resume can locally replay a fully checked failed job and publish without
+repeating model calls. Partial work resumes only its unfinished steps with the
+original attempt allowance. The portable reader accepts the equivalent old prefix
+representation without raising its format or dropping rejected history. Tests
+cover the reproduced second-batch failure, every legacy prefix/suffix boundary,
+tampered spent attempts, actual SQLite reopen and portable clone adoption of a
+failed fully checked nonempty draft, zero-call recovery, unchanged original jobs,
+and unchanged charged correction attempts. All 159 focused epic-review, planning,
+linked-evidence and workspace tests pass, as do type checking, UI compilation and
+diff checking. The desktop TypeScript emit passed, but dependency staging failed
+with Windows `EPERM` on the in-use desktop `better-sqlite3` binary. Close the
+running desktop and rebuild before relaunching; unrelated app processes were not
+terminated. The full suite has not been rerun for this follow-up, and no live
+model requests or direct mutation of the user's saved project were performed.
+
+The same late export reports portable saving unavailable, with retained publication
+metrics at revision 3620 while discovery reached 3629. Those metrics do not locate
+the subsequent child failure. The new numeric child-exit/signal/heap-cap diagnostic
+improves future reports without retaining stderr, credentials or arbitrary error
+prose. The current export does not establish why that child stopped or qualify
+large-project portable saving. The planner's latest sampled heap peak was about
+169 MiB with a roughly 4 GiB limit; it is neither the publication process's heap nor
+proof that all memory hazards are resolved. Most latest failed-run time was in
+adapter attempts (117.2 of 132.4 seconds), plus 9.3 seconds planning and 6.0 seconds
+other local work. Paid request count remains a major latency cost; broad incremental
+discovery is still outstanding. Do not reset or rerun paid stages to repair a
+portable-save problem, and do not treat an unavailable folder as a current handoff.
+
 ## Discovery allocation mitigation and portable-save isolation (2026-11-12)
 
 **Source → target: SQLite 72 → 72; portable formats unchanged; disposable

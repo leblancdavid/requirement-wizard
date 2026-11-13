@@ -6,14 +6,40 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
+import { PublicationObjects } from "./publication-objects.js";
+import { continuationState } from "./portable.js";
 import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import { migrateDatabase } from "./migrations.js";
-import { StaleRevisionError, type Project } from "../core/model.js";
+import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 
 const parent = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "private-account" } as const;
+
+test("publication sharing preserves exact ordered JSON and copy-on-write portable sanitization", () => {
+  const f = fixture();
+  try {
+    const p = generate(f.store, f.project), original = f.store.jobs(p.id)[0]!;
+    const job: Job = { ...original, retrievalWork: { format: 1, research: false, attempts: 0, stages: [{ revision: original.expectedRevision,
+      contextKey: "0".repeat(64), includedIDs: [p.sources[0]!.id], request: { retrieveEvidence: { format: 1, reason: "Exact fixture evidence", recordIDs: [p.sources[0]!.id] } }, sessionID: "fixture-session" }] } };
+    const jobs = [job, { ...structuredClone(job), id: "second-private-job" }], before = structuredClone(jobs), pool = new PublicationObjects();
+    const shared = jobs.map(j => pool.share(j));
+    assert.equal(shared[0]!.retrievalWork, shared[1]!.retrievalWork);
+    const snapshot = (revision: number) => f.store.get(p.id, revision);
+    const ordinary = continuationState(p, jobs, [], snapshot), transferred = continuationState(p, shared, [], snapshot, snapshot, snapshot, undefined, { transferJobs: true });
+    assert.deepEqual(renderWorkspace(p, undefined, transferred), renderWorkspace(p, undefined, ordinary));
+    assert.deepEqual(jobs, before); assert.deepEqual(shared, before);
+    assert.equal(pool.share(structuredClone(job)).retrievalWork, shared[0]!.retrievalWork, "Sanitization cannot invalidate the sharing index");
+    const ordered = { a: [null, undefined, -0, "é😀"], b: {} }, reordered = { b: {}, a: [null, undefined, -0, "é😀"] };
+    assert.equal(JSON.stringify(pool.share(ordered)), JSON.stringify(ordered));
+    assert.equal(JSON.stringify(pool.share(reordered)), JSON.stringify(reordered));
+    assert.notEqual(pool.share(ordered), pool.share(reordered));
+    const bounded = new PublicationObjects(512, 2);
+    for (let index = 0; index < 100; index++) assert.deepEqual(bounded.share({ index, exact: `Record ${index}` }), { index, exact: `Record ${index}` });
+    assert.ok(bounded.profile.peakCacheBytes <= 512);
+  } finally { f.cleanup(); }
+});
 
 test("diagnostic-heavy discovery history larger than a capped heap still plans and publishes", { timeout: 60000 }, () => {
   const result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", "tsx", "scripts/check-discovery-memory.ts"],
@@ -21,6 +47,15 @@ test("diagnostic-heavy discovery history larger than a capped heap still plans a
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   const report = JSON.parse(result.stdout.trim()) as { archiveBytes: number; projectedJobs: number; portableSaved: boolean };
   assert.ok(report.archiveBytes > 64 * 1024 * 1024); assert.equal(report.projectedJobs, 401); assert.equal(report.portableSaved, true);
+});
+
+test("repeated paid reply graphs publish under a capped heap without discarding durable originals", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", "tsx", "scripts/check-discovery-memory.ts", "--paid-history"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim()) as { archiveBytes: number; projectedJobs: number; portableSaved: boolean; shared: { reusedNodes: number } };
+  assert.ok(report.archiveBytes > 64 * 1024 * 1024); assert.equal(report.projectedJobs, 3501);
+  assert.equal(report.portableSaved, true); assert.ok(report.shared.reusedNodes > 100000);
 });
 
 function fixture() {
@@ -71,6 +106,7 @@ test("heap-capped publication failure preserves SQLite work, stops automatic ret
     await store.flushWorkspacePublication();
     assert.equal(store.workspace(project.id)!.status, "unavailable");
     assert.match(store.workspace(project.id)!.diagnostic!, /isolated portable-save process stopped/);
+    assert.match(store.workspace(project.id)!.diagnostic!, /exit code .*signal .*heap cap 16 MiB; cause not established/);
     assert.deepEqual(store.get(project.id), changed);
     assert.deepEqual(store.jobs(project.id), originalJobs);
     const db = new Database(f.database);

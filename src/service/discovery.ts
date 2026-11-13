@@ -24,7 +24,7 @@ import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQu
 import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
-import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext } from "../core/epic-stages.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext, epicCitationPrefixKey } from "../core/epic-stages.js";
 import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -39,6 +39,7 @@ import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, s
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { discoveryMetricsSchema } from "../core/discovery-diagnostics.js";
 import { prepareEpicReview } from "./epic-planning.js";
+import { canResumePausedEpic } from "../core/epic-continuation.js";
 import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "../core/epic-run.js";
 import { definitionJointReviewLimits } from "../core/definition-joint-review.js";
 
@@ -79,7 +80,7 @@ function schemaDiagnostic(error: z.ZodError): string {
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
     private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number;
-      workflow?: { owner: string; continuous?: boolean; play?: boolean; shouldPause?: () => boolean; cooperativeWindow?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
+      workflow?: { owner: string; continuous?: boolean; play?: boolean; shouldPause?: () => boolean; cooperativeWindow?: boolean; resumeEpicJobID?: () => string | undefined; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
     if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
@@ -539,8 +540,13 @@ export class DiscoveryService {
       const generalExploration = !options.readinessQuestions && !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
-      const epicHistory = options.gapMode ? this.store.epicReviewPlanningHistory(projectID) : [];
-      const epicPlan = options.gapMode ? await prepareEpicReview(project, epicHistory, options.focusEpicID, this.store.submissions(projectID), {
+      const epicSubmissions = options.gapMode ? this.store.submissions(projectID) : [];
+      const resumeID = options.gapMode ? this.navigation.workflow?.resumeEpicJobID?.() : undefined;
+      const resumeCandidate = resumeID ? this.store.getJob(resumeID) : undefined;
+      const resumeJob = canResumePausedEpic(project, resumeCandidate, epicSubmissions, options.focusEpicID) ? resumeCandidate : undefined;
+      const epicHistory = options.gapMode ? resumeJob ? [resumeJob] : this.store.epicReviewPlanningHistory(projectID) : [];
+      const epicPlan = options.gapMode ? await prepareEpicReview(project, epicHistory, options.focusEpicID, epicSubmissions, {
+        resumeJob: resumeCandidate,
         signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
         loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
         saveReceipt: (inputKey, key, value) => this.store.saveEpicPlanningReceipt(projectID, project.revision, inputKey, key, value),
@@ -550,6 +556,9 @@ export class DiscoveryService {
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           measurement?.preparing(progress);
+          if (progress.phase === "indexing" && progress.checkpoints === 0 && progress.continuation)
+            options.onProgress?.(progress.continuation.mode === "direct" ? "Continuing the exact saved package directly; global history preparation is skipped."
+              : `Using catalog preparation; direct-checkpoint eligibility: ${progress.continuation.reason}. Saved paid stages and allowances are unchanged.`);
           const counts = progress.examinedStates;
           const blockers = progress.blockerSummary;
           options.onProgress?.(`Preparing workflow evidence…\n${progress.phase === "indexing" ? "Indexing saved checks" : progress.phase === "history" ? "Verifying historical evidence" : progress.phase === "ready" ? "Working package prepared" : "Preparing exact package context"} · ${progress.examinedPackages} packages examined${counts ? ` (${counts.reviewed} reviewed, ${counts.waiting} waiting, ${counts.blocked} blocked, ${counts.pending} eligible)` : ""} · ${progress.contextPreparations} context preparations · ${progress.reusedGroups ?? 0} saved local groups reused · ${progress.reusedContexts ?? 0} intermediate contexts reused · ${progress.reusedClosures ?? 0} exact-evidence renderings reused · ${Math.floor((measurement?.value.elapsedMs ?? 0) / 1000)}s elapsed. Local work only; no model request has started. Stop remains available.${blockers && counts?.blocked ? `\nExamined blockers: ${blockers.stagedTarget} target-size · ${blockers.stagedSeed} indivisible decision-size · ${blockers.stageLimit} batch-limit · ${blockers.contextLimit} context-limit · ${blockers.savedBlocker} saved evidence blockers · ${blockers.attemptLimit} attempt-limit · ${blockers.unknown} older causes unknown.` : ""}`);
@@ -823,7 +832,7 @@ export class DiscoveryService {
               if (!(error instanceof GapCitationError) || phase !== "discover" || (staged.citationCorrections?.length ?? 0) >= 8) throw error;
               const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
               (staged.citationCorrections ??= []).push({ fromReceipt: staged.receipts.length, attempt: work.attempts,
-                prefixKey: hash(staged.receipts), draftKey: hash(beforeDraft), evidenceKey: retrievalEvidenceBasis(stageBase).key,
+                prefixKey: epicCitationPrefixKey(staged.receipts), draftKey: hash(beforeDraft), evidenceKey: retrievalEvidenceBasis(stageBase).key,
                 response: response as import("../core/model.js").Analysis });
               checkpoint();
               report(`Citation validation rejected this response; the original draft and paid stages are unchanged. ${error.issues.join(" ")} Correction uses the same three-attempt stage allowance.`);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { reviewFingerprint, type Analysis, type Project } from "../core/model.js";
@@ -19,6 +19,8 @@ import { submissionQuestionTask, submissionQuestionBlock, submissionClarificatio
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import Database from "better-sqlite3";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence } from "../core/submission-stages.js";
+import { packSubmissionVerification } from "../core/submission-stages.js";
+import { databaseSchemaVersion } from "../storage/migrations.js";
 
 for (const outcome of ["valid", "rejected", "cancelled", "malformed", "exhausted", "publication-failure"] as const) test(`completed saved review checks omitted linked support without repeating paid work: ${outcome}`, async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
@@ -299,7 +301,8 @@ test("pre-upgrade 36k schedules reopen twice and resume with exact paid receipts
           if (!calls++) assert.equal(store.getJob(next.id).submissionWork!.attempts, 3);
           return adapter(f).analyze(p, options);
         } }, store.get(f.project.id), next, f.item, f.task, { research: false, signal: new AbortController().signal });
-        assert.equal(result.status, "completed"); assert.equal(calls, w.batches.length * 2 - 1);
+         assert.equal(result.status, "completed"); assert.equal(calls, submissionTotalSteps(result.submissionWork!) - 1);
+         assert.ok(result.submissionWork!.verification!.batches.length < w.batches.length);
         assert.deepEqual(result.submissionWork!.batches, w.batches);
         assert.equal(result.submissionWork!.planKey, w.planKey);
         assert.deepEqual(result.submissionWork!.receipts.slice(0, 1), w.receipts);
@@ -309,6 +312,136 @@ test("pre-upgrade 36k schedules reopen twice and resume with exact paid receipts
       } finally { store.close(); }
     }
   } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("frozen verification repacking saves checks while retaining every exact record, original reads and failure gates", async () => {
+  const f = fixture(":memory:", "answer", false, 16);
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    while (submissionStep(w) < w.batches.length) {
+      const context = submissionStageContext(m, w, draft);
+      w.attempts++; ({ draft } = acceptSubmissionStage(m, w, draft, await adapter(f).analyze(f.project, { context } as Parameters<ReturnType<typeof adapter>["analyze"]>[1]), job));
+    }
+    const paid = structuredClone(w), frozen = structuredClone(draft);
+    assert.equal(packSubmissionVerification(m, { ...structuredClone(w), attempts: 1 }, draft), false, "A spent check attempt cannot be renewed");
+    assert.equal(packSubmissionVerification(m, w, draft), true);
+    assert.ok(w.verification!.batches.length < paid.batches.length);
+    assert.deepEqual(w.receipts, paid.receipts); assert.deepEqual(w.batches, paid.batches); assert.equal(w.planKey, paid.planKey);
+    assert.deepEqual(replaySubmissionStages(m, w).draft, frozen);
+    for (const mode of ["omitted", "duplicate", "prefix", "draft", "plan"] as const) {
+      const corrupt = structuredClone(w);
+      if (mode === "omitted") corrupt.verification!.batches[0]!.pop();
+      if (mode === "duplicate") corrupt.verification!.batches[0]!.push(corrupt.verification!.batches[0]![0]!);
+      if (mode === "prefix") corrupt.verification!.prefixKey = "f".repeat(64);
+      if (mode === "draft") corrupt.verification!.draftKey = "f".repeat(64);
+      if (mode === "plan") corrupt.verification!.planKey = "f".repeat(64);
+      assert.throws(() => replaySubmissionStages(m, corrupt), /verification/);
+    }
+    const rejected = structuredClone(w); rejected.attempts = 1;
+    acceptSubmissionStage(m, rejected, frozen, { submissionCheck: { valid: false, reason: "Exact conflicting human evidence" } }, job);
+    assert.match(replaySubmissionStages(m, rejected).blocked!, /conflicting/);
+    assert.equal(packSubmissionVerification(m, rejected, frozen), false);
+    const checked = new Set<string>();
+    while (submissionStep(w) < submissionTotalSteps(w)) {
+      const context = submissionStageContext(m, w, draft);
+      assert.ok(context.manifest.characters <= 96000);
+      for (const id of context.manifest.includedIDs) checked.add(id);
+      w.attempts++; ({ draft } = acceptSubmissionStage(m, w, draft, { submissionCheck: { valid: true, reason: "All exact records in this verification batch are compatible" } }, job));
+    }
+    assert.deepEqual(checked, new Set(m.evidenceIDs)); assert.deepEqual(draft, frozen);
+    assert.deepEqual(replaySubmissionStages(m, w).draft, frozen);
+    console.log(JSON.stringify({ fixtureOnly: true, paidReads: paid.batches.length, originalChecks: paid.batches.length, packedChecks: w.verification!.batches.length }));
+  } finally { f.store.close(); }
+});
+
+for (const outcome of ["cancelled", "stale", "malformed"] as const) test(`packed verification retains paid reads and charged attempts after ${outcome}`, async () => {
+  const f = fixture(":memory:", "answer", false, 16);
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const first = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(first.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    while (submissionStep(w) < w.batches.length) {
+      w.attempts++; ({ draft } = acceptSubmissionStage(m, w, draft, submissionStep(w) === 0 ? f.output() : { submissionKeep: true }, first));
+    }
+    assert.equal(packSubmissionVerification(m, w, draft), true);
+    f.store.checkpointSubmission(first.id, w, submissionStageContext(m, w, draft).manifest);
+    f.store.failJob(first.id, "interrupted", "Packed checks not yet started");
+    const original = f.store.getJob(first.id), cancel = new AbortController();
+    const next = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(next.id, Date.now() + 60000);
+    await assert.rejects(runSubmissionStages(f.store, { async analyze() {
+      if (outcome === "cancelled") cancel.abort(new Error("Stop packed verification"));
+      if (outcome === "stale") f.store.note(f.project.id, f.project.revision, "New human constraint", "project");
+      return outcome === "malformed" ? { submissionKeep: true } : { submissionCheck: { valid: true, reason: "Late result" } };
+    } }, f.project, next, f.item, f.task, { signal: cancel.signal, research: false }));
+    const retained = f.store.getJob(next.id).submissionWork!;
+    assert.equal(retained.attempts, outcome === "stale" ? 0 : 1);
+    assert.deepEqual(retained.receipts.slice(0, w.receipts.length), w.receipts);
+    assert.equal(retained.receipts.length, w.receipts.length + Number(outcome === "stale"));
+    if (outcome === "stale") assert.equal(f.store.getJob(next.id).status, "stale", "Valid paid reply is retained against the original snapshot, never published into changed input");
+    assert.deepEqual(retained.verification, w.verification); assert.deepEqual(f.store.getJob(first.id), original);
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+    if (outcome !== "stale") {
+      assert.deepEqual(replaySubmissionStages(m, retained).draft, draft);
+      const exhausted = { ...structuredClone(retained), attempts: 4 };
+      assert.equal(submissionAllowance(exhausted).canExtend, true);
+      assert.equal(packSubmissionVerification(m, exhausted, draft), false);
+      exhausted.allowanceExtensions = [{ step: submissionStep(exhausted), atRevision: f.project.revision, jobID: next.id, additionalRequests: 4 }];
+      assert.deepEqual(replaySubmissionStages(m, exhausted).draft, draft);
+      assert.equal(submissionAllowance(exhausted).limit, 8);
+    } else assert.throws(() => replaySubmissionStages(submissionMaterials(f.store.get(f.project.id), f.item, f.task), retained), /evidence or stage plan changed/);
+  } finally { f.store.close(); }
+});
+
+test("72 to 73 preserves paid reads; verification packing survives rollback, reopen and portable-46 adoption without rereading", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "verification-upgrade-")), file = join(directory, "state.sqlite");
+  const f = fixture(file); let store = f.store;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = legacySubmissionPlan(m);
+    const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    while (submissionStep(w) < w.batches.length) {
+      w.attempts++; ({ draft } = acceptSubmissionStage(m, w, draft, submissionStep(w) === 0 ? f.output() : { submissionKeep: true }, job));
+    }
+    const oldReads = structuredClone(w.receipts);
+    assert.equal(packSubmissionVerification(m, w, draft), true);
+    store.checkpointSubmission(job.id, w, submissionStageContext(m, w, draft).manifest); store.failJob(job.id, "interrupted", "Saved before unstarted packed verification");
+    const original = store.getJob(job.id); store.close();
+    const db = new Database(file);
+    const payload = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id) as { payload: string }).payload;
+    const future = JSON.parse(payload); future.submissionWork.verification.format = 999;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id);
+    db.exec("DELETE FROM migration_history WHERE version>=73; PRAGMA user_version=72"); db.close();
+    assert.throws(() => new ProjectStore(file));
+    const repair = new Database(file);
+    assert.equal(repair.pragma("user_version", { simple: true }), 72);
+    assert.equal((repair.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE jobs SET payload=? WHERE id=?").run(payload, job.id); repair.close();
+    for (let reopen = 0; reopen < 2; reopen++) { const reopened = new ProjectStore(file); assert.deepEqual(reopened.getJob(job.id), original); reopened.close(); }
+    store = new ProjectStore(file);
+    const current = new Database(file); assert.equal(current.pragma("user_version", { simple: true }), databaseSchemaVersion); current.close();
+    const wire = renderWorkspace(f.project, undefined, continuationState(f.project, store.jobs(f.project.id), store.submissions(f.project.id), revision => store.get(f.project.id, revision)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 46);
+    assert.deepEqual(decodePortable(wire, f.project.model).continuation.jobs.find(j => j.id === job.id)!.submissionWork, w);
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 45 }) }, f.project.model), /format 46/);
+    const folder = join(directory, "original"), copied = join(directory, "clone"); mkdirSync(folder);
+    store.connectWorkspace(f.project.id, f.project.revision, folder); cpSync(folder, copied, { recursive: true });
+    const clone = new ProjectStore(":memory:"); let calls = 0;
+    try {
+      clone.openWorkspace(copied, f.project.model);
+      const next = clone.beginJob(f.project.id, f.project.revision).job; clone.claimJob(next.id, Date.now() + 60000);
+      const result = await runSubmissionStages(clone, { async analyze(p, options) {
+        calls++; assert.equal(options.context.manifest.submissionStage!.phase, "check", "No original read may repeat");
+        return adapter(f).analyze(p, options);
+      } }, clone.get(f.project.id), next, clone.submissions(f.project.id).find(s => s.id === f.item.id)!, f.task, { research: false, signal: new AbortController().signal });
+      assert.equal(result.status, "completed"); assert.equal(calls, w.verification!.batches.length);
+      assert.deepEqual(result.submissionWork!.receipts.slice(0, oldReads.length), oldReads);
+      assert.deepEqual(clone.getJob(job.id).submissionWork, w);
+    } finally { clone.close(); }
+    assert.deepEqual(store.getJob(job.id), original);
+  } finally { if ((store as unknown as { db: { open: boolean } }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("saved-input diagnostics measure local stages, retain exact output and export no private phase details", async () => {
@@ -668,10 +801,10 @@ function decodeWire(input: unknown) {
   };
   return decode(input);
 }
-function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation" = "review", splitSupport = false) {
+function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation" = "review", splitSupport = false, notes = 19) {
   const store = new ProjectStore(file);
   let p = store.create("Large saved review", "Save reports", { providerID: "openai", modelID: "fixture" });
-  if (splitSupport) for (let i = 0; i < 19; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
+  if (splitSupport) for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
   const setup = store.beginJob(p.id, p.revision).job; store.claimJob(setup.id, Date.now() + 60000);
   store.finishJob(setup.id, { ...empty(), requirements: [{ statement: "Save reports", rationale: "Human request", acceptance: ["A report is saved"], sourceIDs: [p.sources[0]!.id, ...(splitSupport ? [p.sources.at(-1)!.id] : [])], epicID: "inbox" }] });
   p = store.get(p.id);
@@ -684,7 +817,7 @@ function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation"
       evidenceIDs: [mode === "reconciliation" ? p.sources[0]!.id : p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the report without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] });
     p = store.get(p.id);
   }
-  if (!splitSupport) for (let i = 0; i < 19; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
+  if (!splitSupport) for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
   const r = p.requirements[0]!;
   const item = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: mode === "review" ? { type: "review", requirementID: r.id,
     requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "changes-requested", note: "  Save reports offline.\r\n", reviewedRevision: p.revision }

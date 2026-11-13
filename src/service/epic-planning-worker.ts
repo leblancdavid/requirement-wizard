@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { performance } from "node:perf_hooks";
 import { getHeapStatistics } from "node:v8";
+import { preparePausedEpic } from "../core/epic-continuation.js";
 import { planEpicReview, type EpicPlanningOptions } from "../core/epic-review.js";
 import type { Project, Job, Submission } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
@@ -11,7 +12,7 @@ import type { PlanningBlockers } from "../core/discovery-diagnostics.js";
 // Pure local computation only. No database, credentials, provider or runtime ownership.
 const port = parentPort!;
 const input = workerData as { project: Project; jobs: Job[]; focusEpicID?: string; submissions: Submission[];
-  resolved: Map<string, EpicPlanningCheckpoint>; contexts: Map<string, EpicContextCheckpoint> };
+  resolved: Map<string, EpicPlanningCheckpoint>; contexts: Map<string, EpicContextCheckpoint>; resumeJob?: Job; continuation?: PlanningProgress["continuation"] };
 const snapshots = new Map<number, Project>();
 // A large history must not retain one full project for every rejected proof.
 // Proof results survive lazy retries, so at most two source projects are needed.
@@ -41,12 +42,17 @@ const progress = (next: PlanningProgress["phase"]) => {
     checkpoints: ++checkpoints, revisionsLoaded: loadedRevisions.size, reusedGroups, resolvedGroups,
     reusedContexts, preparedContexts, examinedStates, activity, activityMs, reusedClosures, closureRenderAttempts, blockerSummary,
     completedEquivalenceChecks, equivalentCompletedPackages,
-    memory: { heapUsedBytes: memory.used_heap_size, heapPeakBytes, heapLimitBytes: memory.heap_size_limit } } });
+    memory: { heapUsedBytes: memory.used_heap_size, heapPeakBytes, heapLimitBytes: memory.heap_size_limit }, continuation: input.continuation } });
 };
 class MissingRevision extends Error { constructor(readonly revision: number, readonly scope?: "equivalence") { super("Historical revision required."); } }
 function run() {
   try {
     progress("indexing");
+    if (input.resumeJob) {
+      const result = preparePausedEpic(input.project, input.resumeJob, () => { contextPreparations++; progress("context"); });
+      examinedPackages = 1; examinedStates.pending = 1;
+      progress("ready"); port.postMessage({ type: "result", value: result }); return;
+    }
     const { tasks: _, ...result } = planEpicReview(input.project, input.jobs, input.focusEpicID, input.submissions, (revision) => {
       if (revision === input.project.revision) return input.project;
       const snapshot = snapshots.get(revision);

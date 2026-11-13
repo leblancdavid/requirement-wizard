@@ -57,6 +57,25 @@ export function completeEmptyEpicStages(work: EpicStages): boolean {
 }
 
 export type EpicProposalCounts = { draftedQuestions: number; draftedRequirements: number; removedQuestions: number; removedRequirements: number };
+
+// Receipt field order is representation, not evidence. Dispatch historically
+// appended attempts before evidenceKey; schema reads put evidenceKey first.
+// Use the schema order for new keys and authenticate old keys against only the
+// exact known storage-prefix/dispatch-suffix layouts (each resume normalizes the
+// entire previously stored prefix). Never replace a saved hash or paid receipt.
+const storedCitationReceipt = (r: EpicStages["receipts"][number]) => ({ phase: r.phase, batch: r.batch,
+  evidenceKey: r.evidenceKey, attempts: r.attempts, response: r.response });
+const dispatchedCitationReceipt = (r: EpicStages["receipts"][number]) => ({ phase: r.phase, batch: r.batch,
+  attempts: r.attempts, evidenceKey: r.evidenceKey, response: r.response });
+export const epicCitationPrefixKey = (receipts: EpicStages["receipts"]) => key(receipts.map(storedCitationReceipt));
+function citationPrefixMatches(receipts: EpicStages["receipts"], expected: string) {
+  if (epicCitationPrefixKey(receipts) === expected) return true;
+  for (let stored = 0; stored < receipts.length; stored++) {
+    if (key(receipts.map((r, index) => index < stored ? storedCitationReceipt(r) : dispatchedCitationReceipt(r))) === expected) return true;
+  }
+  return false;
+}
+
 /** Reconstruct all saved transitions independently before resuming or publishing. */
 export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review), counts?: EpicProposalCounts): Analysis {
   epicStagesSchema.parse(work);
@@ -97,7 +116,7 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
 
 function validateCitationCorrections(project: Project, work: EpicStages, base: ContextPack, index: number, draft: Analysis) {
   for (const correction of work.citationCorrections?.filter(c => c.fromReceipt === index) ?? []) {
-    if (correction.evidenceKey !== retrievalEvidenceBasis(base).key || correction.prefixKey !== key(work.receipts.slice(0, index)) || correction.draftKey !== key(draft))
+    if (correction.evidenceKey !== retrievalEvidenceBasis(base).key || !citationPrefixMatches(work.receipts.slice(0, index), correction.prefixKey) || correction.draftKey !== key(draft))
       throw new Error("Citation correction differs from its original evidence, paid prefix or frozen draft.");
     let rejected = false;
     try { validateGapFinal(project, base, correction.response); } catch (error) { if (!(error instanceof GapCitationError)) throw error; rejected = true; }

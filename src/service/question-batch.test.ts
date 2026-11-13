@@ -8,6 +8,7 @@ import { ProjectStore } from "../storage/store.js";
 import { ProjectWorkflow } from "./workflow.js";
 import { questionBatchLimits, workflowReviewInputKey, workflowSchema } from "../core/workflow.js";
 import type { Analysis, Project } from "../core/model.js";
+import { jobHistoryLog, projectLogs } from "../ui/log-records.js";
 
 const empty = (): Analysis => ({ summary: "Original workflow evidence", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 function fixture(store: ProjectStore, areas = 7) {
@@ -75,6 +76,25 @@ test("useful final-package questions above the soft target are kept, never trimm
   } finally { await workflow.close(); store.close(); }
 });
 
+test("a cooperative boundary offers a useful smaller batch instead of spending another work window to reach five", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {
+    calls++; return questions(p, context.manifest.epicReview!.epicID);
+  } });
+  try {
+    const p = fixture(store); arm(store, p, 13);
+    await run(workflow, store, p);
+    const state = store.workflow(p.id);
+    assert.equal(calls, 1); assert.equal(state.phase, "needs-decision"); assert.equal(state.questionBatch!.reason, "budget");
+    assert.equal(state.questionBatch!.requests, 14); assert.equal(state.questionBatch!.format, 2);
+    assert.equal(state.questionBatch!.format === 2 && state.questionBatch!.window.number, 1);
+    assert.equal(store.get(p.id).questions.length, 1); assert.equal(state.discovery, undefined);
+    assert.match(state.message, /smaller batch/);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, 1);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+  } finally { await workflow.close(); store.close(); }
+});
+
 test("normal continuous discovery starts a new collection without requiring a saved policy or resetting the project", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {
@@ -111,8 +131,8 @@ test("Pause and repeated restart retain collection counters and paid package wor
     workflow = new ProjectWorkflow(store, { async analyze(p, { context }) { topics.push(context.manifest.epicReview!.epicID); return questions(p, context.manifest.epicReview!.epicID); } });
     await run(workflow, store, p);
     assert.equal(topics.filter(t => t === topics[0]).length, 1); assert.equal(topics.filter(t => t === topics[1]).length, 2);
-    assert.equal(store.get(p.id).questions.length, 5); assert.equal(store.workflow(p.id).questionBatch!.requests, 6);
-    assert.equal(store.workflow(p.id).questionBatch!.packages, 6); assert.equal(store.workflow(p.id).questionBatch!.reason, "target");
+    assert.equal(store.get(p.id).questions.length, 4); assert.equal(store.workflow(p.id).questionBatch!.requests, 5);
+    assert.equal(store.workflow(p.id).questionBatch!.packages, 5); assert.equal(store.workflow(p.id).questionBatch!.reason, "budget");
     const retried = store.jobs(p.id).find(j => j.retrievalWork?.originJobID === paid.id)!;
     assert.equal(retried.status, "completed"); assert.equal(retried.retrievalWork!.attempts, 2);
     assert.deepEqual(store.getJob(paid.id), paid);
@@ -157,6 +177,11 @@ test("the aggregate request ceiling includes every staged read/check and never p
     assert.equal(first.status, "interrupted"); assert.equal(first.retrievalWork!.epicStages!.receipts.length, 3);
     assert.equal(job.status, "cancelled"); assert.deepEqual(job.retrievalWork!.epicStages!.receipts, first.retrievalWork!.epicStages!.receipts);
     assert.equal(store.discoveryDiagnostics(p.id, [first.id]).runs[0]!.workflow!.stopReason, "scheduler-yield");
+    assert.equal(store.logHistory(p.id, { jobID: first.id }).entries[0]!.status, "checkpoint");
+    assert.equal(store.logHistory(p.id, { jobID: first.id, problems: "true" }).entries.length, 0);
+    assert.match(jobHistoryLog(store.logHistory(p.id, { jobID: first.id }).entries[0]!).summary!, /not a failure/);
+    assert.equal(projectLogs([first], [])[0]!.status, "checkpoint");
+    assert.equal(store.getJob(first.id).status, "interrupted", "The original durable status is not rewritten for presentation");
     assert.equal(job.result, undefined); assert.equal(workflow.view(p.id).readiness.specificationChecked, false);
   } finally { await workflow.close(); store.close(); }
 });

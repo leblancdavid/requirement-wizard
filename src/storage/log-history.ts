@@ -31,7 +31,10 @@ export function logHistory(db: Database.Database, projectID: string, input: unkn
     WHEN json_array_length(j.payload, '$.context.submissionIDs') > 0 THEN 'Saved-response processing' ELSE 'Project review' END`;
   const where = ["j.project_id = ?"], args: (string | number)[] = [projectID];
   const epicBlock = epicBlockedReasonSQL("j.payload");
-  const status = `CASE WHEN (${epicBlock}) IS NOT NULL THEN 'blocked' ELSE json_extract(j.payload, '$.status') END`;
+  const status = `CASE WHEN (${epicBlock}) IS NOT NULL THEN 'blocked'
+    WHEN json_extract(j.payload, '$.status') = 'interrupted' AND json_extract(j.payload, '$.retrievalWork.attempts') = 0
+      AND json_extract(j.payload, '$.retrievalWork.stagedRun.paused') IN ('request-limit', 'time-limit') THEN 'checkpoint'
+    ELSE json_extract(j.payload, '$.status') END`;
   const blockReason = `COALESCE(json_extract(j.payload, '$.definitionBlock.reason'), (${epicBlock}))`;
   if (query.before) { where.push("j.rowid < ?"); args.push(query.before); }
   if (query.epicID) {

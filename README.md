@@ -16,6 +16,20 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Saved-response verification can now pack wholly unstarted checks using the actual
+frozen draft, retaining every mandatory record, paid read and spent attempt. Portable
+publication shares repeated decoded history to reduce memory; the reported real-project
+save abort is still unreplicated. SQLite 73 / conditional portable 46 preserve existing
+work. See [upgrade and qualification](docs/migrations.md#frozen-draft-verification-and-publication-sharing-2026-11-12).
+
+Gap discovery now directly continues unchanged coordinator-owned package checkpoints
+and avoids repeated preparation of equivalent historical policies. Useful question
+batches can be offered at work-window boundaries before reaching five; normal
+budget checkpoints display as **Progress saved**, not failures. Paid stages and
+limits remain intact. Broader changed-evidence incremental discovery and the latest
+large-project portable-save failure remain outstanding. See
+[compatibility and verification](docs/migrations.md#exact-paused-package-continuation-and-useful-question-windows-2026-11-12).
+
 Plain browser approvals no longer need to wait for portable history rendering:
 file-backed stores publish in an owned, heap-capped child process while SQLite decisions remain durable.
 New wording-review schedules pack measured encoded requests more densely, and staged

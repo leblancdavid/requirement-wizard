@@ -6,12 +6,12 @@ import { prepareEpicReview, PlanningTimeoutError, epicPlanningInputKey, epicPlan
 import { planEpicReview } from "../core/epic-review.js";
 import { DiscoveryService } from "./discovery.js";
 import { startApp } from "../web/server.js";
-import { analysisSchema, type Job, type Project } from "../core/model.js";
+import { analysisSchema, reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import type { PlanningProgress } from "../core/discovery-diagnostics.js";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import Database from "better-sqlite3";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { digestJSONArray } from "../core/json-digest.js";
 
 test("streamed scheduling digest preserves exact JSON array bytes, holes, nulls and Unicode", () => {
@@ -35,8 +35,136 @@ import { gapEvidence } from "../core/gap-backlog.js";
 import { completedRecordStagesEquivalent, recordStageEvidenceKey } from "../core/epic-stage-reuse.js";
 import { expandedEvidence } from "../core/gap-retrieval.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
+import { canResumePausedEpic } from "../core/epic-continuation.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("an exact scheduler checkpoint resumes its owned package without catalog/history/cache scans or repeated model stages", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  try {
+    const p = seed(store, 1, 10);
+    const adapter = { async analyze() { calls++; return empty(); } };
+    const paused = await new DiscoveryService(store, adapter, { stagedLimits: { requests: 1, durationMs: 300000 } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.equal(canResumePausedEpic(p, paused, []), true);
+    const progress: PlanningProgress[] = [];
+    const planned = await prepareEpicReview(p, [paused], undefined, [], { resumeJob: paused, signal: new AbortController().signal,
+      readRevision() { assert.fail("An exact continuation cannot need historical revisions"); },
+      loadReceipts() { assert.fail("Continuation cannot scan global scheduling receipts"); },
+      loadContexts() { assert.fail("Continuation cannot load global context archives"); },
+      onProgress(value) { progress.push(value); } });
+    assert.equal(planned.report.planningPartial, true); assert.equal(planned.report.total, 1);
+    assert.deepEqual(planned.task!.review, paused.context!.epicReview);
+    assert.equal(planned.task!.prior!.id, paused.id);
+    assert.equal(progress.at(-1)!.examinedPackages, 1);
+    assert.deepEqual(progress.at(-1)!.continuation, { mode: "direct", reason: "eligible" });
+    const archive = store.epicReviewPlanningHistory.bind(store);
+    store.epicReviewPlanningHistory = () => { assert.fail("Owned continuation must not decode the job archive"); };
+    const resumed = await new DiscoveryService(store, adapter, { workflow: { owner: "fixture", resumeEpicJobID: () => paused.id,
+      beforeJob: () => ({ requests: 32, durationMs: 900000 }), beforeRequest() {} } })
+      .analyze(p.id, p.revision, { gapMode: "epic", research: false });
+    store.epicReviewPlanningHistory = archive;
+    assert.ok(resumed.result, resumed.diagnostic);
+    assert.equal(calls, resumed.retrievalWork!.epicStages!.batches);
+    assert.deepEqual(store.getJob(paused.id), paused);
+    assert.equal(canResumePausedEpic({ ...p, revision: p.revision + 1 }, paused, []), false);
+    assert.equal(canResumePausedEpic({ ...p, model: { ...p.model, modelID: "changed" } }, paused, []), false);
+    assert.equal(canResumePausedEpic(p, { ...paused, status: "failed" }, []), false);
+    assert.equal(canResumePausedEpic(p, { ...paused, projectID: "foreign" }, []), false);
+    assert.equal(canResumePausedEpic(p, paused, [], "other-scope"), false);
+    assert.equal(canResumePausedEpic(p, { ...paused, retrievalWork: { ...paused.retrievalWork!, attempts: 3 } }, []), false);
+    assert.equal(canResumePausedEpic(p, paused, [{ id: "00000000-0000-4000-a000-000000000001", projectID: p.id,
+      input: { type: "note", text: "New unsent human constraint", epicID: "project" }, auto: false, research: false,
+      status: "saved", applied: false, submittedAt: new Date().toISOString() }]), false);
+  } finally { store.close(); }
+});
+
+test("repeated incompatible paid-policy history probes each representation once while preserving the identical next task", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 30), task = planEpicReview(p, [], "orders").task!;
+    const prototype = store.jobs(p.id)[0]!;
+    const policies = ["staged-dense-records-v5", "staged-records-v4", "staged-current-spec-v3", "staged-headroom-v2", "staged-guardrails-v1", "current-spec-v1"] as const;
+    const unique: Job[] = policies.map((policy, index) => ({ ...prototype, id: `policy-${index}`, status: "cancelled", result: undefined,
+      context: { ...task.context!.manifest, epicReview: { ...task.review, contextPolicy: policy, recordGrouping: undefined, inputKey: "0".repeat(64) } }, retrievalWork: undefined }));
+    const evictingCache = () => {
+      const cache: NonNullable<NonNullable<Parameters<typeof planEpicReview>[5]>["cache"]> = new Map();
+      cache.set = (key, value) => { cache.clear(); Map.prototype.set.call(cache, key, value); return cache; };
+      return cache;
+    };
+    let baseline = 0, repeated = 0;
+    const once = planEpicReview(p, unique, "orders", [], undefined, { cache: evictingCache(), onPrepare() { baseline++; } });
+    const many = planEpicReview(p, Array.from({ length: 12 }, (_, cycle) => unique.map(j => ({ ...j, id: `${j.id}-${cycle}` }))).flat(),
+      "orders", [], undefined, { cache: evictingCache(), onPrepare() { repeated++; } });
+    assert.deepEqual(many.task!.review, once.task!.review); assert.deepEqual(many.task!.batches, once.task!.batches);
+    assert.deepEqual(many.report, once.report); assert.equal(repeated, baseline);
+    console.log(JSON.stringify({ fixtureOnly: true, originalRepresentations: unique.length, repeatedJobs: unique.length * 12, preparations: repeated }));
+  } finally { store.close(); }
+});
+
+test("older same-revision budget checkpoints retain direct continuation eligibility after reopen and portable adoption", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "direct-continuation-")), database = join(directory, "state.sqlite");
+  let store = new ProjectStore(database);
+  try {
+    const p = seed(store, 1, 10);
+    const paused = await new DiscoveryService(store, { async analyze() { return empty(); } }, { stagedLimits: { requests: 1, durationMs: 300000 } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(paused.status, "interrupted");
+    store.close(); store = new ProjectStore(database);
+    assert.equal(canResumePausedEpic(store.get(p.id), store.getJob(paused.id), []), true);
+    assert.deepEqual(store.getJob(paused.id), paused);
+    const folder = join(directory, "source"), copied = join(directory, "clone"); mkdirSync(folder);
+    store.connectWorkspace(p.id, p.revision, folder); cpSync(folder, copied, { recursive: true });
+    const clone = new ProjectStore(":memory:"); let calls = 0;
+    try {
+      clone.openWorkspace(copied, p.model);
+      assert.equal(canResumePausedEpic(clone.get(p.id), clone.getJob(paused.id), []), true);
+      clone.epicReviewPlanningHistory = () => { assert.fail("Portable continuation cannot require the global archive"); };
+      const result = await new DiscoveryService(clone, { async analyze() { calls++; return empty(); } }, { workflow: {
+        owner: "fixture", resumeEpicJobID: () => paused.id, beforeJob: () => ({ requests: 32, durationMs: 900000 }), beforeRequest() {} } })
+        .analyze(p.id, p.revision, { gapMode: "epic", research: false });
+      assert.ok(result.result, result.diagnostic);
+      assert.equal(calls, paused.retrievalWork!.epicStages!.batches - 1);
+      assert.deepEqual(clone.getJob(paused.id).retrievalWork, paused.retrievalWork);
+    } finally { clone.close(); }
+    assert.deepEqual(store.getJob(paused.id), paused);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("resolved historical human-input failures no longer force archive planning on an owned resume", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  try {
+    let p = seed(store, 1, 10);
+    const target = p.requirements[0]!;
+    const old: Submission = { id: randomUUID(), projectID: p.id, submittedAt: "2026-11-12T12:00:00.000Z", auto: false, research: false,
+      status: "needs-attention", applied: false, conflict: true, diagnostic: "Historical failure is retained",
+      input: { type: "review", requirementID: target.id, requirementText: target.statement, fingerprint: reviewFingerprint(target), action: "accepted", note: "" } };
+    const completedID = randomUUID();
+    p = store.review(p.id, p.revision, target.id, "accepted", "");
+    const approval = p.sources.find(s => s.kind === "confirmation" && s.requirementID === target.id)!;
+    const completed: Submission = { ...structuredClone(old), id: completedID, submittedAt: "2026-11-12T12:01:00.000Z", status: "completed",
+      applied: true, conflict: false, appliedSourceID: approval.id, appliedRevision: p.revision };
+    // Curated historical rows: inserting after approval avoids current pending-input
+    // guards while retaining the real pre-approval fingerprint and source evidence.
+    const db = (store as unknown as { db: Database.Database }).db;
+    for (const item of [old, completed]) db.prepare("INSERT INTO submissions VALUES (?, ?, ?)").run(item.id, p.id, JSON.stringify(item));
+    assert.deepEqual(store.submissions(p.id), [old, completed]);
+    const adapter = { async analyze() { calls++; return empty(); } };
+    const paused = await new DiscoveryService(store, adapter, { stagedLimits: { requests: 1, durationMs: 300000 } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(paused.status, "interrupted", paused.diagnostic);
+    store.epicReviewPlanningHistory = () => { assert.fail("Resolved historical input must not force a global archive scan"); };
+    const done = await new DiscoveryService(store, adapter, { workflow: { owner: "fixture", resumeEpicJobID: () => paused.id,
+      beforeJob: () => ({ requests: 32, durationMs: 900000 }), beforeRequest() {} } })
+      .analyze(p.id, p.revision, { gapMode: "epic", research: false });
+    assert.ok(done.result, done.diagnostic);
+    assert.deepEqual(done.discoveryMetrics!.planningProgress!.continuation, { mode: "direct", reason: "eligible" });
+    assert.equal(calls, done.retrievalWork!.epicStages!.batches);
+    assert.deepEqual(store.submissions(p.id), [old, completed]); assert.deepEqual(store.getJob(paused.id), paused);
+  } finally { store.close(); }
+});
 
 test("planning projections and publication ownership transfer preserve paid evidence and exact artifact bytes", async () => {
   const store = new ProjectStore(":memory:");

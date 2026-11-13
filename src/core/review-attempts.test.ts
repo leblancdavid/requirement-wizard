@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
-import { projectSchema, reviewFingerprint, type Submission } from "./model.js";
+import { analysisSchema, projectSchema, reviewFingerprint, type Job, type Submission } from "./model.js";
+import { epicResumeReason } from "./epic-continuation.js";
 import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "./review-attempts.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryQueue } from "../service/queue.js";
@@ -36,6 +37,27 @@ function answerFixture() {
     input: { ...old.input, sourceID: "original-answer" } };
   return { project, old, later };
 }
+
+test("resolved historical review attempts cannot prevent an otherwise eligible direct checkpoint continuation", () => {
+  const { project, failed, completed } = fixture();
+  const zero = "0".repeat(64);
+  const job: Job = { id: "paused", projectID: project.id, expectedRevision: project.revision, model: project.model, leaseUntil: null, status: "interrupted",
+    context: { revision: project.revision, focusEpicID: "inbox", characters: 0, budget: 96000, includedIDs: [], omittedIDs: [],
+      epicReview: { format: 1, packageID: zero, inputKey: zero, epicID: "inbox", epicIDs: ["inbox"], kind: "workflow", recordIDs: ["story"],
+        contextPolicy: "staged-guardrails-v1", guardrailBatches: [["story"]] } },
+    retrievalWork: { format: 1, research: false, stages: [], attempts: 0,
+      stagedRun: { format: 1, requestLimit: 16, durationMs: 300000, paused: "request-limit" },
+      epicStages: { format: 1, planKey: zero, batches: 1, phase: "discover", nextBatch: 0, receipts: [],
+        candidates: analysisSchema.parse({ summary: "Saved", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] }) } } };
+  const before = structuredClone({ project, failed, completed, job });
+  assert.equal(epicResumeReason(project, job, [failed, completed]), "eligible");
+  assert.equal(epicResumeReason(project, job, [failed]), "pending-human-input");
+  assert.equal(epicResumeReason(project, job, [failed, { ...completed, appliedSourceID: "missing" }]), "pending-human-input");
+  assert.equal(epicResumeReason(project, job, [failed, { ...completed, status: "processing" }]), "pending-human-input");
+  assert.equal(epicResumeReason(project, undefined, [failed, completed]), "no-owned-checkpoint");
+  assert.equal(epicResumeReason({ ...project, revision: project.revision + 1 }, job, [failed, completed]), "changed-revision");
+  assert.deepEqual({ project, failed, completed, job }, before);
+});
 
 test("a later applied answer reconciles a superseded failed answer without changing original evidence or claiming review completion", () => {
   for (const status of ["saved", "processing", "needs-attention", "completed"] as const) {

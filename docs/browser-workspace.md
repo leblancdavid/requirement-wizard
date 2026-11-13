@@ -1,5 +1,33 @@
 # Browser workspace, epics, and estimated completeness
 
+## Gap discovery continuation and question windows (2026-11-12)
+
+Unchanged coordinator-owned staged work can continue directly from its saved
+package, without rescanning the complete job archive or global planning caches.
+Changed inputs/model, manual focus, outstanding human input and non-budget failures
+still use the normal planner and safety checks. Paid stages/attempts are retained;
+this is a local preparation optimization, not a shortcut around evidence review.
+Evidence-backed later decisions resolve historical failed submissions for this
+eligibility check without deleting them. Diagnostics report direct/catalog mode
+and an allowlisted fallback reason.
+
+After a saved-response draft freezes, wholly unstarted verification may need fewer
+requests because batches use its actual size. Every mandatory record still gets
+checked; paid reads and spent attempts are unchanged. Repairs retain full rechecks.
+Portable files carrying this plan require format 46 (SQLite reader version 73).
+Publication now shares repeated history privately and reports its last phase/heap
+sample on abnormal exit. The exact reported save abort is not yet reproduced; see
+[migration and qualification](migrations.md#frozen-draft-verification-and-publication-sharing-2026-11-12).
+
+If useful questions are ready at a normal work-window boundary, the app offers
+that smaller batch for answers rather than continuing solely to reach five. Empty
+windows can still continue normally, and a completed collection is not proof of
+completeness. Ordinary staged budget pauses appear as **Progress saved** checkpoints
+in Logs, separate from errors, cancellation and interrupted in-flight requests.
+Original saved worker states remain intact. Restart the backend to load these
+changes; no reset or fresh model allowance is required. Broader changed-evidence
+incremental discovery and the reported portable-save failure remain unresolved.
+
 ## Approval and wording-review responsiveness (2026-11-12)
 
 Plain approval without an added note still records a human decision locally without
@@ -12,6 +40,13 @@ than overwritten. Normal shutdown waits for owned publication to finish. If the
 save process stops, SQLite work remains intact and folder saving shows unavailable;
 retry folder sync rather than resetting the project or rerunning model stages.
 The precise cause of the reported fatal discovery allocation is not yet reproduced.
+
+Late citation-correction replay failures caused by receipt JSON field ordering now
+accept the equivalent original stored/dispatch layouts. Restart the backend and
+explicitly Resume: fully checked saved work can publish locally without repeating
+model calls, while partial work retains its spent attempts and unfinished steps.
+This repair does not establish that a separately unavailable portable save has
+recovered; confirm **Saved to project folder** before relying on that copy.
 
 New wording-review schedules pack exact encoded requests more densely; existing
 paid layouts/checks remain reusable. Staged discovery now distinguishes missing

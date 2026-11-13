@@ -432,8 +432,8 @@ function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () =
   return { review: epicReviewSchema.parse(review), contexts };
 }
 
-export function epicReviewBatches(project: Project, review: EpicReview): ContextPack[] {
-  if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") return recordStagedReview(project, review).contexts;
+export function epicReviewBatches(project: Project, review: EpicReview, onPrepare?: () => void): ContextPack[] {
+  if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") return recordStagedReview(project, review, onPrepare).contexts;
   return isStagedPolicy(review.contextPolicy)
     ? review.guardrailBatches!.map((ids) => epicReviewContext(project, review, [], true, ids)) : [epicReviewContext(project, review)];
 }
@@ -563,10 +563,26 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   };
   const equivalentCompleted = options.completedEquivalence ?? new Map<string, boolean>();
   const completedInventories = new WeakMap<ContextPack[], Set<string>>();
+  const pendingProofs = new Map<string, boolean>();
+  const pendingCompatible = (j: Job, candidate: Candidate) => {
+    const work = j.retrievalWork?.epicStages, supports = work?.linkedEvidence?.filter(s => s.kind === "pending-questions-v1");
+    if (!work || !supports?.length) return true;
+    // These are ALL values read by pendingEvidenceCompatible for this immutable
+    // project/bundle. Equivalent dated jobs need not render the same supporting
+    // inventory repeatedly. Hash full prefixes; a changed receipt cannot borrow
+    // a different job's successful proof. Retain only bounded boolean digests.
+    const prefix = Math.max(...supports.map(s => s.fromReceipt));
+    const proofKey = hash([candidate.review, candidate.batchKey, work.batches, supports, work.receipts.slice(0, prefix)]);
+    const cached = pendingProofs.get(proofKey); if (cached !== undefined) return cached;
+    const compatible = pendingEvidenceCompatible(project, work, candidate.batches);
+    pendingProofs.set(proofKey, compatible);
+    while (pendingProofs.size > 256) pendingProofs.delete(pendingProofs.keys().next().value!);
+    return compatible;
+  };
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID) return false;
-    if (!pendingEvidenceCompatible(project, j.retrievalWork?.epicStages, candidate.batches)) return false;
+    if (!pendingCompatible(j, candidate)) return false;
     if (j.context.epicReview.inputKey !== review.inputKey) {
       if (!readRevision || !candidate.batches || j.status !== "completed" || !j.result || !j.retrievalWork?.final
         || j.retrievalWork.epicStages?.phase !== "complete" || !recordStagePolicy(review.contextPolicy)
@@ -627,9 +643,26 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     let candidate: Candidate | undefined;
     // Reconstruct each saved policy before changing representation or grouping.
     // Preserve compatible legacy splits, completed calls and spent allowances.
-    for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length === records.length)) {
-      const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, j.context!.epicReview!.contextPolicy, j.context!.epicReview!.recordGrouping));
-      if (during("saved-policy", () => matches(j, saved))) { candidate = saved; break; }
+    // Many dated jobs share a handful of policies. Walking them one by one can
+    // cycle through more large bundles than the bounded candidate cache retains,
+    // re-rendering the same policy hundreds of times. Probe each representation
+    // once, but choose the earliest matching job in the ORIGINAL priority order.
+    // Keep only the current probe and winning bundle, not an unbounded graph pool.
+    const sameSize = history.filter(j => j.context!.epicReview!.recordIDs.length === records.length);
+    const policyGroups = new Map<string, { job: Job; index: number }[]>();
+    for (const [index, job] of sameSize.entries()) {
+      const saved = job.context!.epicReview!, key = JSON.stringify([saved.contextPolicy, saved.recordGrouping]);
+      const group = policyGroups.get(key) ?? []; group.push({ job, index }); policyGroups.set(key, group);
+    }
+    let winner = sameSize.length;
+    for (const group of policyGroups.values()) {
+      if (group[0]!.index >= winner) continue;
+      const first = group[0]!.job.context!.epicReview!;
+      const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, first.contextPolicy, first.recordGrouping));
+      for (const { job, index } of group) {
+        if (index >= winner) break;
+        if (during("saved-policy", () => matches(job, saved))) { candidate = saved; winner = index; break; }
+      }
     }
     const preserved = !!candidate;
     if (!candidate) {

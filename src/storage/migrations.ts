@@ -30,7 +30,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 72;
+export const databaseSchemaVersion = 73;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -401,6 +401,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     WHEN NEW.dirty = 1 BEGIN
       UPDATE workspaces SET publication_version = publication_version + 1 WHERE project_id = NEW.project_id;
     END;`);
+} }, { version: 73, name: "frozen-draft-verification-packing", apply() {
+  // Reader capability only. Preserve every old payload, layout and paid receipt;
+  // unstarted checks may opt in only during explicit owned processing.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -433,6 +436,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.verification') AS BLOB)) <= 4194304
+      THEN json_extract(payload, '$.submissionWork.verification') END AS verification FROM jobs
+      WHERE json_type(payload, '$.submissionWork.verification') IS NOT NULL`).iterate() as Iterable<{ verification: string | null }>) {
+      if (!row.verification) throw new Error("Unsupported saved-response verification plan. Saved work was not overwritten.");
+      submissionWorkSchema.shape.verification.unwrap().parse(JSON.parse(row.verification));
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.context.epicReview') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.context.epicReview') END AS review FROM jobs
       WHERE json_type(payload, '$.context.epicReview.recordGrouping') IS NOT NULL`).iterate() as Iterable<{ review: string | null }>) {
