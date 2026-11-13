@@ -1,5 +1,183 @@
 # Data migrations and upgrade compatibility
 
+## Authenticated incremental collection (2026-11-13)
+
+**Source → target: SQLite 75 → 76; conditional portable 47.** Migration 76 adds
+a reader boundary for `collectionBaseline` provenance. Startup rewrites no jobs,
+receipts, drafts, decisions or attempts and launches no models. Unsupported future
+baseline metadata rejects transactionally without advancing the version; repaired
+data can reopen/retry without repeating paid work. Existing portable formats remain
+unchanged unless a retained job actually references an incremental baseline.
+
+Fresh dense-v5 collection may reuse a contiguous unchanged read prefix from one of
+at most four prior completed, independently replayed sources with the same scope,
+model and scan. Expanded evidence, shared guidance, draft and stage inventory must
+match; only the bookkeeping revision is excluded. Reuse stops at the first changed
+batch and always leaves at least one new read. Every current proposal check remains
+required. Baselines cannot chain or originate from linked-evidence/citation-repair
+work. This is exact-prefix reuse, **not semantic unaffected-skip authority**.
+
+The checkpoint references the source job/revision, exact plan and receipt-prefix
+hash rather than copying or rewriting receipts. New receipts retain their own
+indexes; diagnostics distinguish reused reads from new attempts. Saved baselines
+are immutable. Resume/publication independently reconstruct the original evidence;
+portable 47 retains its source ancestry and validates it before adoption. Missing,
+changed or tampered sources reject without overwriting saved work. Cancelled and
+malformed attempts remain charged; exhausted stages gain no fresh allowance.
+
+Qualification: deterministic collection saved one of two reads and performed the
+remaining read plus both current validation calls. SQLite rollback/retry, repeated
+reopen, portable source retention/tamper rejection and cancellation/continuation
+passed. Negative cases retain exhausted malformed attempts and stale paid work;
+empty completion counts reused reads without crediting unrequested checks. The
+planning/linked-evidence regression run passed 73 tests before these last two
+fixtures, and the five incremental fixtures subsequently passed together. Type
+checking, emitted desktop TypeScript, emitted publication/planning-worker smokes
+and the 56,395,909-byte render under a 48 MiB heap also passed without inference.
+The final full `npm test` rerun passed 2,110 tests (972 pretest, 831 main,
+307 posttest); the subsequently added empty-completion fixture also passed in the
+five-fixture incremental run. Every browser runner passed, with the last
+question-batch expectation repaired and rerun separately as recorded below.
+This does not qualify live latency, the user's exact portable-save abort,
+desktop packaging or the broader semantic changed-evidence skip workflow.
+
+## New-answer cost routing and impact preflight (2026-11-13)
+
+**Source → target: SQLite 74 → 75; portable formats unchanged (through conditional
+46).** Migration 75 is a reader boundary for additive saved diagnostic estimates
+and the `estimated-cost` selection reason. It rewrites no project, submission, job,
+receipt, attempt, original routing decision or portable artifact. Cost metadata is
+not evidence and remains excluded from portable jobs. A failed capability migration
+rolls back and can retry; repeated startup preserves exact paid jobs and starts no
+models. Future estimate policies reject job reads without overwriting their payloads.
+
+Before an eligible same-feature group starts, `src/core/answer-integration-cost.ts`
+compares measured complete-support/full-draft-reserve read pages and a union-size
+verification proxy against current individual processing schedules. Direct fitting
+individual work counts as one planned request; overflow uses its original read/check
+schedule. No draft yet exists, so the estimate explicitly says
+`draft-lookups-and-repairs-unknown`; it is not a quota, guarantee, receipt, semantic
+independence proof or completed verification. Unknown fit retains normal grouping.
+Ties/near ties retain normal grouping; a shared forecast exceeding the individual
+forecast by more than the greater of one request or 10% selects individual work.
+Scope, exact originals, prerequisites, verification and consent are unchanged.
+
+The queue compares only new, eligible, already-saved concrete answers with no paid
+or started individual/shared job. Retained groups bypass estimation and keep their
+original members, plans, attempts, repairs and allowances. It never regroups scoped
+answers, crosses features, authorizes research or changes failure-retry behavior.
+Diagnostics record numeric estimates and their policy/uncertainty separately from
+actual attempts. A deterministic four-versus-two request forecast selected individual
+work end to end; both inputs completed without a shared job. Actual future repair
+or lookup costs can differ, and later individual outputs can change the next plan.
+
+`src/core/epic-change-impact.ts` is an **implemented read-only preflight/validation
+foundation, not an enabled incremental-discovery workflow**. It authenticates an
+original fully completed record-staged review through existing independent replay,
+preserves its dated output, binds exact before/after detailed record deltas and an
+unchanged-record digest inventory to the current revision/material. Changed scope,
+global interpretation/model/epics/scans, removed evidence, malformed/unreconstructable
+baselines and oversized requests reject conservatively without truncation. A response
+must cover every change, use distinct available references, cite only detailed delta
+records and explicitly request any omitted originals needed for comparison. Stale,
+altered, contradictory or invented-reference responses reject. Even an `unaffected`
+response returns only an `untrusted-impact-hypothesis`: no skip token, current finding,
+readiness result, mutation or paid receipt. It invokes no adapter, writes no new
+persisted format and does not change normal discovery scheduling. Owned bounded
+dispatch, durable attempts, requested-original acquisition, independent current
+verification, publication and portable ancestry are still required before any
+semantic changed-evidence skip can be enabled. Prior reads alone never establish
+independence.
+
+Qualification: `npm test` passed 2,108 tests during this pass (970 pretest, 831 main,
+307 posttest). The subsequently added/expanded impact-preflight tests passed,
+including exact delta coverage, omitted-original citation rejection, changed global
+scope, missing receipts, counterfeit outputs, removed evidence, oversized deltas and
+stale/same-revision altered material. Cost routing passed end-to-end four-versus-two
+selection, migration rollback/retry, repeated reopen, future-policy read rejection and
+portable diagnostic exclusion. Type checking, UI build, desktop TypeScript compilation
+and portable browser checks passed without live inference. The additional manual
+and guided processing checks now pass after updating retained-control navigation
+through Logs. The guided check preserves explicit save/reload/no-spend, submission,
+restart, mobile and retained-allowance assertions. The main browser suite and the
+first five browser postchecks passed. The final question-batch postcheck exposed
+an obsolete five-question/second-window expectation: useful smaller batches now
+stop at the first work-window boundary. Its revised check requires four retained
+questions, five charged requests (including cancellation), no second window and
+unchanged source jobs; its standalone rerun passed. Thus every browser runner
+passed, although the original chained command exited at that stale assertion.
+Live routing latency remains unqualified, as does the user's
+exact portable-save abort. No desktop
+packaging claim is made by TypeScript compilation.
+
+## Bounded portable rendering and exact policy misses (2026-11-13)
+
+**Source → target: SQLite 73 → 74; portable formats unchanged (through conditional
+46).** Migration 74 is a local CPU-cache reader capability only. No project, job,
+draft, model receipt, attempt, assessment or portable payload is rewritten. Existing
+context outcomes retain their meaning. The new `policy-miss` cache outcome is bound
+to the complete current planner project key, exact target scope/representation and
+ordered full saved-job digests. It records only an exhaustively failed historical
+representation probe, never a model result or permission to skip a mandatory check.
+Positive matches and probes stopped by an earlier winner are not cached as misses.
+Entries use the existing bounded small-failure pool. Changed evidence/history cannot
+borrow a miss; no semantic changed-evidence independence is inferred. Upgrade tests
+cover transactional failure/retry, repeated reopen, wire-context eviction and original
+paid-job preservation. A synthetic warm pass reduced preparations from 45 to 21
+with identical next task, batches and report. New-revision catalog costs remain to
+be measured; this optimization does not eliminate those passes.
+
+The November 13 user log narrows the still-unreplicated save abort to the last
+reported **render** phase at revision 3679, with a 202,850,304-byte heap sample before
+an exit 134 under the 256 MiB cap. Retained revision-3620 publication timings are not
+timings for that failed save. Publication now streams ordered pretty JSON for
+`continuation.json` into an exclusive same-directory temporary file, hashes each
+UTF-8 chunk, and flushes it before committing intended hashes. It does not retain
+the whole continuation string. Existing-file conflict/unchanged checks also hash in
+bounded chunks rather than decode whole files. Exact ordered artifact and manifest
+bytes, pending-hash journal, lease/generation checks, manifest-last installation and
+external-edit protection remain unchanged. Normal failures/superseded generations
+remove their own staged file; an abrupt process death can leave an unreferenced
+randomly named `.tmp` file, never a new published checkpoint. Startup does not treat
+that file as authority or repeat model calls. Existing journal recovery still applies
+to artifacts installed after the intended hashes were committed.
+
+Publication now checks the existing import bounds (64 MiB per artifact, 256 MiB
+aggregate) before replacing any managed file. Oversized exports fail visibly and
+retain SQLite work rather than producing an unreadable portable save. No import
+limit was increased. A synthetic ~53 MiB continuation renders and conflict-hashes
+under a 48 MiB heap; byte equality, Unicode/chunk boundaries, oversized/invalid
+staging cleanup, external edits, child failure, lease ownership and journal tests
+passed. **This is not yet proof that the user's exact save abort is fixed.**
+
+New compact shared-answer schedules measure the actual scoped-read encoder with
+complete original/support closures, every pinned answer and the full 24k draft
+growth reserve. Only a complete, smaller schedule is adopted, before any paid work.
+Original arrays/keys replay unchanged after startup or explicit continuation; old
+checks and repair invalidation rules are untouched. This uses the existing lossless
+packing contract, not a new paid protocol. A synthetic fixture needs five initial
+read batches instead of six. This does not promise fewer total calls when lookups,
+repairs or joint comparisons are needed. Cost-based shared-versus-individual routing
+and broader semantic incremental discovery remain outstanding.
+
+The diagnostics export now reads saved verification metadata when calculating
+individual response totals. The two November 13 packed examples were 16/16 complete,
+not 16/18; this is a read-only correction, not completion granted by migration.
+Older unmarked work keeps its original calculation; repairs retain their original
+full-batch totals, and unsupported verification formats reject export.
+
+Qualification: the full `npm test` command passed 2,102 tests (966 pretest, 831
+main, 305 posttest) during this pass. After the final historical-child grouping
+and temporary-cleanup guard, 125 focused planning/submission/workspace tests passed;
+the new byte-metadata and measured-packing tests also passed. The forced-eviction
+child-history regression preserves the identical task/report for six representations
+versus 72 repeated jobs. Type checking, UI build, desktop TypeScript compilation,
+an emitted streamed-publication child smoke, portable browser checks and diff checks
+passed without inference. Full browser qualification was not repeated; the previously
+observed Design badge failure remains separate. Desktop packaging and the exact user
+project's portable save remain unqualified. New numeric continuation/aggregate byte
+measurements are additive; missing old measurements remain unknown.
+
 ## Frozen-draft verification and publication sharing (2026-11-12)
 
 **Source → target: SQLite 72 → 73; conditional portable 45 → 46.** Migration

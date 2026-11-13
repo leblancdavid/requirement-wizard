@@ -27,10 +27,10 @@ import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-revi
 import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-publication.js";
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
-import { epicStagesSchema } from "../core/gap-retrieval.js";
+import { epicStagesSchema, epicCollectionBaselineSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 73;
+export const databaseSchemaVersion = 76;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -404,6 +404,15 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 73, name: "frozen-draft-verification-packing", apply() {
   // Reader capability only. Preserve every old payload, layout and paid receipt;
   // unstarted checks may opt in only during explicit owned processing.
+} }, { version: 74, name: "exact-historical-policy-miss-cache", apply() {
+  // Additive local CPU-cache reader boundary. No paid job, project or portable
+  // evidence is rewritten; older context outcomes keep their original meaning.
+} }, { version: 75, name: "new-answer-cost-routing-diagnostics", apply() {
+  // Reader boundary for additive cost estimates/reason in saved diagnostic
+  // metrics. No paid evidence, queues or original routing decisions are rewritten.
+} }, { version: 76, name: "authenticated-epic-collection-prefix", apply() {
+  // Additive paid-collection provenance reader boundary. No saved jobs are
+  // adopted/repacked at startup; explicit fresh work alone may reference a prefix.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -436,6 +445,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline') AS BLOB)) <= 4096
+      THEN json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline') END AS baseline FROM jobs
+      WHERE json_type(payload, '$.retrievalWork.epicStages.collectionBaseline') IS NOT NULL`).iterate() as Iterable<{ baseline: string | null }>) {
+      if (!row.baseline) throw new Error("Unsupported incremental collection provenance. Saved work was not overwritten.");
+      epicCollectionBaselineSchema.parse(JSON.parse(row.baseline));
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.verification') AS BLOB)) <= 4194304
       THEN json_extract(payload, '$.submissionWork.verification') END AS verification FROM jobs
       WHERE json_type(payload, '$.submissionWork.verification') IS NOT NULL`).iterate() as Iterable<{ verification: string | null }>) {

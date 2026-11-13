@@ -48,6 +48,7 @@ export const epicContextCheckpointSchema = z.discriminatedUnion("outcome", [
     kind: z.enum(["context", "target", "seed", "stage-limit"]), message: z.string(),
     manifest: manifestSchema.optional(),
   }).strict(),
+  z.object({ format: z.literal(1), outcome: z.literal("policy-miss") }).strict(),
 ]).refine((value) => value.outcome !== "planning-failure" || value.kind === "stage-limit" || !!value.manifest,
   "Missing planning failure manifest.");
 // ContextPack's manifest carries optional app-owned metadata preserved by the
@@ -56,7 +57,8 @@ export type EpicContextCheckpoint = { format: 1; outcome: "context"; context: Co
   | { format: 1; outcome: "staged"; review: z.infer<typeof epicReviewSchema>; contexts: ContextPack[] }
   | { format: 1; outcome: "budget"; manifest: ContextPack["manifest"]; message: string }
   | { format: 1; outcome: "planning-failure"; kind: "context" | "target" | "seed" | "stage-limit";
-      message: string; manifest?: ContextPack["manifest"] };
+      message: string; manifest?: ContextPack["manifest"] }
+  | { format: 1; outcome: "policy-miss" };
 
 /** Small failed probes must not be evicted by large successful wire contexts.
  * Otherwise restarting a long partition thrashes the same 128-entry cache. */

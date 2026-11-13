@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readFileSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import type { StagedArtifact } from "./staged-json.js";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Project } from "../core/model.js";
@@ -26,6 +27,7 @@ export type Workspace = {
   /** Local diagnostic durations; nested phases are not additive wall time. */
   publicationMetrics?: { format: 1; revision: number; elapsedMs?: number; historyMs?: number;
     continuationMs?: number; renderMs?: number; filesMs?: number; selectedJobs?: number; snapshots?: number;
+    continuationBytes?: number; artifactBytes?: number;
     continuationProfile?: ContinuationProfile;
     historyObjects?: { reusedNodes: number; createdNodes: number; peakCacheBytes: number } };
 };
@@ -63,6 +65,10 @@ export function migrateWorkspaceDirectory(path: string) {
   return managedDirectory(path);
 }
 export function readArtifact(directory: string, name: string): string | null {
+  const path = artifactPath(directory, name);
+  return path === null ? null : readFileSync(path, "utf8");
+}
+function artifactPath(directory: string, name: string): string | null {
   validateArtifactName(name);
   // Check every ancestor, including junctions, before reading or creating nested output.
   let parent = directory;
@@ -78,8 +84,15 @@ export function readArtifact(directory: string, name: string): string | null {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Workspace conflict: ${name} must be a regular file.`);
-    return readFileSync(path, "utf8");
+    return path;
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+export function artifactDigest(directory: string, name: string): string | null {
+  const path = artifactPath(directory, name); if (path === null) return null;
+  const fd = openSync(path, "r"), digest = createHash("sha256"), buffer = Buffer.allocUnsafe(65536);
+  try { for (;;) { const bytes = readSync(fd, buffer); if (!bytes) break; digest.update(buffer.subarray(0, bytes)); } }
+  finally { closeSync(fd); }
+  return digest.digest("hex");
 }
 export function validateArtifactName(name: string) {
   const segment = "(?:[a-z0-9_-]{1,80}|~[a-f0-9]{64})";
@@ -118,7 +131,7 @@ export function renderCombinedSpecification(project: Project) {
     summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }) };
 }
-export function renderWorkspace(project: Project, execution?: ExecutionState, continuation?: Continuation): Record<string, string> {
+export function renderWorkspace(project: Project, execution?: ExecutionState, continuation?: Continuation, stagedContinuation?: StagedArtifact): Record<string, string> {
   const score = coverage(project);
   const progress = project.requirements.map((requirement) => {
     const item = project.implementation.find((entry) => entry.requirementID === requirement.id);
@@ -180,9 +193,10 @@ export function renderWorkspace(project: Project, execution?: ExecutionState, co
          const requirement = project.requirements.find((entry) => entry.id === item.requirementID)!;
          return `### [${item.requirementID}](${featurePath(requirement.epicID)}.md) — ${item.status}${item.needsReview ? " · NEEDS REVIEW" : ""}\n\nRequirements review: ${item.reviewStatus}\n\nNotes: ${item.notes || "—"}\n\nVerification evidence: ${item.evidence || "—"}`;
        })].join("\n\n") + "\n";
-  Object.assign(files, portableFiles(project, execution ?? emptyExecution(), continuation));
+  Object.assign(files, portableFiles(project, execution ?? emptyExecution(), continuation, !!stagedContinuation));
   files["manifest.json"] = JSON.stringify({ formatVersion: 3, projectID: project.id, revision: project.revision,
-    hashes: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])) }, null, 2) + "\n";
+    hashes: { ...Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])),
+      ...(stagedContinuation ? { "continuation.json": stagedContinuation.hash } : {}) } }, null, 2) + "\n";
   return files;
 }
 
@@ -213,17 +227,16 @@ export function readPortableWorkspace(path: string) {
 export function checkWorkspace(workspace: Workspace, intendedNames: string[] = []) {
   const directory = managedDirectory(workspace.path);
   for (const name of new Set([...legacyArtifacts, ...Object.keys(workspace.hashes), ...Object.keys(workspace.pendingHashes), ...intendedNames])) {
-    const content = readArtifact(directory, name);
-    const digest = content === null ? null : hash(content);
+    const digest = artifactDigest(directory, name);
     const previous = workspace.hashes[name]; const pending = workspace.pendingHashes[name];
     if (digest === null ? !!previous && !workspace.pendingRemovals?.includes(name) : digest !== previous && !pending?.includes(digest)) throw new Error(`Workspace conflict: ${name} was changed outside the app. Preserve your edits and restore the generated file, or connect a different folder.`);
   }
   return directory;
 }
-export function publishWorkspace(directory: string, files: Record<string, string>, removals: string[] = []) {
+export function publishWorkspace(directory: string, files: Record<string, string>, removals: string[] = [], stagedContinuation?: StagedArtifact) {
   mkdirSync(directory, { recursive: true });
   const write = (name: string) => {
-    if (readArtifact(directory, name) === files[name]) return;
+    if (artifactDigest(directory, name) === hash(files[name]!)) return;
     const parent = dirname(join(directory, name));
     mkdirSync(parent, { recursive: true });
     const temporary = join(parent, `.reqwizit-${randomUUID()}.tmp`);
@@ -231,6 +244,8 @@ export function publishWorkspace(directory: string, files: Record<string, string
     finally { if (existsSync(temporary)) unlinkSync(temporary); }
   };
   for (const name of Object.keys(files).filter((name) => name !== "manifest.json")) write(name);
-  for (const name of removals) { if (readArtifact(directory, name) !== null) unlinkSync(join(directory, name)); }
+  if (stagedContinuation && artifactDigest(directory, "continuation.json") !== stagedContinuation.hash)
+    renameSync(stagedContinuation.path, join(directory, "continuation.json"));
+  for (const name of removals) { if (artifactDigest(directory, name) !== null) unlinkSync(join(directory, name)); }
   write("manifest.json");
 }

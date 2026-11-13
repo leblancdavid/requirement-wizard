@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { validateEpicStages } from "../core/epic-stages.js";
 import { z } from "zod";
 import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, projectFields, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
@@ -202,7 +203,8 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   // Deduplicate candidates before cloning/sanitizing their large paid ledgers.
   const kept = new Map([...selected.values()].map((job) => [job.id, portableJob(job, linked.has(job.id), currentDefinitionKey, options.transferJobs)]));
   for (const job of kept.values()) {
-    for (const id of [job.retrievalWork?.originJobID, job.retrievalWork?.continuation?.sourceJobID, job.retrievalWork?.reuse?.sourceJobID]) {
+    for (const id of [job.retrievalWork?.originJobID, job.retrievalWork?.continuation?.sourceJobID, job.retrievalWork?.reuse?.sourceJobID,
+      job.retrievalWork?.epicStages?.collectionBaseline?.sourceJobID]) {
       const source = id && all.get(id);
       if (source && !kept.has(source.id)) {
         // Preserve required ancestors even when they are not current standalone
@@ -425,7 +427,7 @@ function requiresProvenanceState(project: Project, continuation?: Pick<Continuat
   }
   return false;
 }
-export function portableFiles(project: Project, execution: ExecutionState, continuation?: Continuation) {
+export function portableFiles(project: Project, execution: ExecutionState, continuation?: Continuation, stagedContinuation = false) {
   const { model: _model, sources: _sources, questions: _questions, requirements: _requirements, research: _research, scans: _scans, epics: _epics,
     ...state } = project;
   // New change-review exports, including retained v1 work, preserve the exact
@@ -437,7 +439,8 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => j.submissionWork?.verification) ? 46
+  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.collectionBaseline) ? 47
+    : continuation?.jobs.some(j => j.submissionWork?.verification) ? 46
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections) ? 45
     : continuation?.jobs.some(j => j.context?.epicReview?.recordGrouping === "pending-question-units-v2"
     || j.retrievalWork?.epicStages?.linkedEvidence?.some(s => s.kind === "pending-questions-v1")) ? 44
@@ -450,7 +453,7 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState || !!sharedFormat && sharedFormat >= 41;
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
   return { "state.json": json({ formatVersion: sharedFormat ?? (rulePermissionState ? 20 : tightReadState ? 19 : efficientState ? 18 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)) ? 17 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)) ? 16 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)) ? 15 : continuation?.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)) ? 14 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)) ? 13 : continuation?.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)) ? 12 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages) ? 11 : continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1), project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
-    "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
+    ...(!stagedContinuation ? { "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) } : {}) };
 }
 
 const check = z.object({ command: z.string(), exitCode: z.number().int(), output: z.string(), at: z.string() }).strict();
@@ -565,8 +568,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(46), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–46 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(47), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–47 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -605,6 +608,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 47 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.collectionBaseline))
+    throw new Error("Incremental collection provenance requires portable state format 47. Saved work was not overwritten.");
   if (state.formatVersion < 46 && continuation.jobs.some(j => j.submissionWork?.verification))
     throw new Error("Frozen-draft verification packing requires portable state format 46. Saved work was not overwritten.");
   if (state.formatVersion < 45 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections))
@@ -755,7 +760,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   const object = (key: string) => { if (!Object.hasOwn(continuation.objects, key)) throw new Error("Portable revision evidence is missing a shared object."); return continuation.objects[key]; };
   for (const revision of Object.keys(continuation.snapshots)) if (!/^[1-9]\d*$/.test(revision) || !Number.isSafeInteger(Number(revision)) || Number(revision) >= project.revision)
     throw new Error("Portable historical evidence must precede the current revision.");
-  function* snapshots(): Generator<Project> { for (const [revision, delta] of Object.entries(continuation.snapshots)) {
+  const readSnapshot = (revision: string, delta: Delta): Project => {
     const value: Record<string, unknown> = { ...project };
     for (const [key, change] of Object.entries(delta)) {
       if (["__proto__", "constructor", "prototype", "id"].includes(key)) throw new Error("Invalid portable snapshot field.");
@@ -772,8 +777,15 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     // Older app versions could retain duplicate/dangling historical references;
     // preserve their exact payload for original-wire-hash verification rather
     // than "repairing" provenance or discarding compatible completed work.
-    yield decoded;
-  } }
+    return decoded;
+  };
+  function* snapshots(): Generator<Project> { for (const [revision, delta] of Object.entries(continuation.snapshots)) yield readSnapshot(revision, delta); }
+  const atRevision = (revision: number) => {
+    if (revision === project.revision) return project;
+    const delta = continuation.snapshots[String(revision)];
+    if (!delta) throw new Error("Incremental collection is missing an original revision.");
+    return readSnapshot(String(revision), delta);
+  };
   const revisions = new Set([project.revision, ...Object.keys(continuation.snapshots).map(Number)]);
   for (const job of continuation.jobs) {
     if (job.context?.definitionJointReview) throw new Error("Joint validation is local evidence and cannot be adopted as portable authority.");
@@ -782,6 +794,17 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     if (job.projectID !== project.id) throw new Error("Portable job belongs to another project.");
     if (job.expectedRevision > project.revision) throw new Error("Portable job references a future project revision.");
     if (needsOriginalRevision(job) && !revisions.has(job.expectedRevision)) throw new Error("Portable checkpoint is missing its original revision.");
+    if (job.retrievalWork?.epicStages?.collectionBaseline) {
+      if (!job.context?.epicReview) throw new Error("Incremental collection is missing its exact scope.");
+      // Validate historical paid work using its recorded model, not the account
+      // selection used to open the clone. This grants no new-model currentness.
+      const input = { ...atRevision(job.expectedRevision), model: job.model };
+      validateEpicStages(input, job.context.epicReview, job.retrievalWork.epicStages, undefined, undefined, sourceID => {
+        const source = continuation.jobs.find(j => j.id === sourceID);
+        if (!source || source.projectID !== project.id) throw new Error("Incremental collection is missing its original paid job.");
+        return { project: atRevision(source.expectedRevision), job: source };
+      });
+    }
     for (const area of job.definitionChangeGroupWork?.areas ?? []) {
       if (!revisions.has(area.originalRevision) || area.baseline && !revisions.has(area.baseline.revision))
         throw new Error("Portable shared checkpoint is missing an original assessment/baseline revision.");

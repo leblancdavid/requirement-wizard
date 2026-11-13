@@ -36,8 +36,239 @@ import { completedRecordStagesEquivalent, recordStageEvidenceKey } from "../core
 import { expandedEvidence } from "../core/gap-retrieval.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 import { canResumePausedEpic } from "../core/epic-continuation.js";
+import { prepareEpicChangeImpact, validateEpicImpactHypothesis } from "../core/epic-change-impact.js";
+import { planEpicCollectionBaseline } from "../core/epic-collection-baseline.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("incremental collection retains an authenticated unchanged prefix and independently checks proposals against every current batch", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = collectionFixture(store);
+    const source = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(source.status, "completed", source.diagnostic);
+    const current = store.note(p.id, store.projectRevision(p.id), "A new exception needs a deliberate product choice", "project");
+    const task = planEpicReview(current, [], "orders").task!;
+    const prepared = planEpicCollectionBaseline(current, task.review, task.batches!, { project: p, job: source });
+    assert.ok(prepared); assert.ok(prepared.baseline.reads > 0); assert.ok(prepared.baseline.reads < task.batches!.length);
+    const seen: string[] = [], note = current.sources.at(-1)!;
+    const done = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      seen.push(`${stage.phase}:${stage.batch}`);
+      if (stage.phase === "validate") return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+      assert.ok(context.manifest.includedIDs.includes(note.id));
+      return { ...empty(), questions: [{ epicID: "orders", text: "Which outcome should the new exception require?", whyItMatters: "The new exact note leaves the outcome open",
+        evidenceIDs: [note.id], options: [{ label: "Keep the order", consequence: "Preserve its state" }, { label: "Cancel the order", consequence: "End this order" }] }] };
+    } }).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(done.status, "completed", done.diagnostic);
+    assert.deepEqual(done.retrievalWork!.epicStages!.collectionBaseline, prepared.baseline);
+    assert.equal(seen.filter(s => s.startsWith("discover")).length, task.batches!.length - prepared.baseline.reads);
+    assert.equal(seen.filter(s => s.startsWith("validate")).length, task.batches!.length);
+    assert.deepEqual(store.getJob(source.id), source);
+    assert.equal(store.get(p.id).questions.length, 1);
+    const diagnostic = store.discoveryDiagnostics(p.id, [done.id]).runs[0]!;
+    assert.equal(diagnostic.savedWork.reusedCollectionBatches, prepared.baseline.reads);
+    assert.equal(diagnostic.savedWork.completedBatches, task.batches!.length * 2);
+    assert.throws(() => validateEpicStages(current, task.review, done.retrievalWork!.epicStages!, task.batches!), /original paid job/);
+    console.log(JSON.stringify({ fixtureOnly: true, currentBatches: task.batches!.length, reusedReads: prepared.baseline.reads, newRequests: seen.length }));
+  } finally { store.close(); }
+});
+
+function collectionFixture(store: ProjectStore) {
+  const p = seed(store, 1, 10);
+  // Curated fixture IDs before the first discovery call: future UUID notes sort
+  // after these originals, so the test never relies on random packing order.
+  const ids = new Map(p.sources.filter(s => s.kind === "note").map((s, i) => [s.id, `000-note-${i}`]));
+  p.sources = p.sources.map(s => ({ ...s, id: ids.get(s.id) ?? s.id }));
+  p.requirements = p.requirements.map(r => ({ ...r, sourceIDs: r.sourceIDs.map(id => ids.get(id) ?? id) }));
+  const db = (store as unknown as { db: Database.Database }).db;
+  db.transaction(() => {
+    db.prepare("UPDATE projects SET payload=? WHERE id=?").run(JSON.stringify(p), p.id);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(JSON.stringify(p), p.id, p.revision);
+  })();
+  return store.get(p.id);
+}
+
+test("incremental collection rejects changed baselines and preserves exhausted malformed attempts", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = collectionFixture(store);
+    const source = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(original.id, original.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    const current = store.note(original.id, store.projectRevision(original.id), "A fresh recovery decision remains open", "project");
+    const task = planEpicReview(current, [], "orders").task!;
+    const plan = (project: Project, job = source) => planEpicCollectionBaseline(project, task.review, task.batches!, { project: original, job });
+    assert.ok(plan(current));
+    const changed = structuredClone(current); changed.model.modelID = "different-model";
+    assert.equal(plan(changed), undefined);
+    for (const edit of [
+      (job: Job) => { job.status = "failed"; },
+      (job: Job) => { job.retrievalWork!.epicStages!.receipts[0]!.evidenceKey = "0".repeat(64); },
+      (job: Job) => { job.retrievalWork!.epicStages!.receipts.shift(); },
+    ]) {
+      const altered = structuredClone(source); edit(altered); assert.equal(plan(current, altered), undefined);
+    }
+    let calls = 0;
+    const failed = await new DiscoveryService(store, { async analyze() {
+      calls++; return { ...empty(), questions: [{ epicID: "orders", text: "Invalid evidence?", whyItMatters: "Malformed citation", evidenceIDs: ["invented"],
+        options: [{ label: "Yes", consequence: "Yes" }, { label: "No", consequence: "No" }] }] };
+    } }).analyze(original.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(failed.status, "failed", failed.diagnostic); assert.equal(calls, 3);
+    assert.equal(failed.retrievalWork!.attempts, 3); assert.ok(failed.retrievalWork!.epicStages!.collectionBaseline);
+    assert.equal(failed.retrievalWork!.epicStages!.receipts.length, 0); assert.equal(store.get(original.id).questions.length, 0);
+    let retryCalls = 0;
+    const retried = await new DiscoveryService(store, { async analyze() { retryCalls++; throw new Error("Exhausted attempts must not dispatch"); } })
+      .analyze(original.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(retryCalls, 0); assert.ok(retried.epicReviewReport!.blocked > 0);
+    assert.equal(store.get(original.id).questions.length, 0);
+    assert.deepEqual(store.getJob(source.id), source); assert.deepEqual(store.getJob(failed.id), failed);
+  } finally { store.close(); }
+});
+
+test("incremental collection retains stale paid attempts without publishing over newer human input", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = collectionFixture(store);
+    const source = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(original.id, original.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    const current = store.note(original.id, store.projectRevision(original.id), "A changed recovery rule", "project");
+    let calls = 0;
+    const stale = await new DiscoveryService(store, { async analyze() {
+      calls++; store.note(original.id, store.projectRevision(original.id), "Human input arrived during the request", "project");
+      return empty();
+    } }).analyze(original.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(calls, 1); assert.equal(stale.status, "stale", stale.diagnostic);
+    assert.equal(stale.retrievalWork!.attempts + stale.retrievalWork!.epicStages!.receipts.reduce((sum, receipt) => sum + receipt.attempts, 0), 1);
+    assert.ok(stale.retrievalWork!.epicStages!.collectionBaseline);
+    assert.equal(store.get(original.id).sources.at(-1)!.text, "Human input arrived during the request");
+    assert.equal(store.get(original.id).questions.length, 0); assert.deepEqual(store.getJob(source.id), source);
+  } finally { store.close(); }
+});
+
+test("incremental empty completion counts reused reads but does not credit unrequested checks", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = collectionFixture(store);
+    const source = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(original.id, original.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    const current = store.note(original.id, store.projectRevision(original.id), "A new explicit note", "project");
+    let reads = 0;
+    const done = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      assert.equal((context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase, "discover"); reads++; return empty();
+    } }).analyze(original.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(done.status, "completed", done.diagnostic);
+    const work = done.retrievalWork!.epicStages!;
+    assert.equal(work.emptyCompletion, "no-surviving-proposals"); assert.equal(reads + work.collectionBaseline!.reads, work.batches);
+    assert.equal(done.epicReviewReport!.stagedProgress!.completed, work.batches);
+    assert.equal(store.get(original.id).questions.length, 0); assert.deepEqual(store.getJob(source.id), source);
+  } finally { store.close(); }
+});
+
+test("75 to 76 incremental collection survives future-format rollback, reopen and portable-47 cancellation without rereading paid prefixes", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "collection-upgrade-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const p = collectionFixture(store);
+    const source = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    const current = store.note(p.id, store.projectRevision(p.id), "New recovery behavior requires a deliberate choice", "project"), note = current.sources.at(-1)!;
+    const paused = await new DiscoveryService(store, { async analyze() {
+      return { ...empty(), questions: [{ epicID: "orders", text: "Should this recovery keep the order or cancel it?", whyItMatters: "Choose the newly required recovery outcome",
+        evidenceIDs: [note.id], options: [{ label: "Keep", consequence: "Keep this order" }, { label: "Cancel", consequence: "Cancel this order" }] }] };
+    } }, { stagedLimits: { requests: 1, durationMs: 300000 } }).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.ok(paused.retrievalWork!.epicStages!.collectionBaseline);
+    assert.equal(paused.retrievalWork!.epicStages!.phase, "validate"); assert.equal(store.get(p.id).questions.length, 0);
+    store.close();
+    const db = new Database(file), row = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload;
+    const future = JSON.parse(row); future.retrievalWork.epicStages.collectionBaseline.format = 999;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
+    db.exec("DELETE FROM migration_history WHERE version>=76; PRAGMA user_version=75"); db.close();
+    assert.throws(() => new ProjectStore(file));
+    const repair = new Database(file); assert.equal(repair.pragma("user_version", { simple: true }), 75);
+    assert.equal((repair.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE jobs SET payload=? WHERE id=?").run(row, paused.id); repair.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(paused.id), paused); assert.deepEqual(store.getJob(source.id), source); store.close(); }
+    store = new ProjectStore(file);
+    const wire = renderWorkspace(current, undefined, continuationState(current, store.jobs(p.id), [], revision => store.get(p.id, revision)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 47);
+    assert.ok(decodePortable(wire, p.model).continuation.jobs.some(j => j.id === source.id));
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 46 }) }, p.model), /format 47/);
+    const missing = JSON.parse(wire["continuation.json"]!); missing.jobs = missing.jobs.filter((j: Job) => j.id !== source.id);
+    assert.throws(() => decodePortable({ ...wire, "continuation.json": JSON.stringify(missing) }, p.model), /original paid job/);
+    const altered = JSON.parse(wire["continuation.json"]!);
+    altered.jobs.find((j: Job) => j.id === paused.id).retrievalWork.epicStages.collectionBaseline.prefixKey = "0".repeat(64);
+    assert.throws(() => decodePortable({ ...wire, "continuation.json": JSON.stringify(altered) }, p.model), /provenance changed/);
+    const originalFolder = join(directory, "original"), cloneFolder = join(directory, "clone"); mkdirSync(originalFolder);
+    store.connectWorkspace(p.id, current.revision, originalFolder); cpSync(originalFolder, cloneFolder, { recursive: true });
+    const clone = new ProjectStore(":memory:");
+    try {
+      clone.openWorkspace(cloneFolder, p.model); const stop = new AbortController(); let cancelledCalls = 0;
+      const cancelled = await new DiscoveryService(clone, { async analyze(_project, { context }) {
+        cancelledCalls++; assert.equal((context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase, "validate");
+        stop.abort(); return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+      } }).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false, signal: stop.signal });
+      assert.equal(cancelled.status, "cancelled", cancelled.diagnostic); assert.equal(cancelledCalls, 1);
+      assert.equal(cancelled.retrievalWork!.attempts, 1); assert.deepEqual(cancelled.retrievalWork!.epicStages!.receipts, paused.retrievalWork!.epicStages!.receipts);
+      let checks = 0;
+      const done = await new DiscoveryService(clone, { async analyze(_project, { context }) {
+        assert.equal((context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase, "validate");
+        if (!checks++) assert.equal(clone.jobs(p.id).at(-1)!.retrievalWork!.attempts, 2, "Cancellation remains charged on the same unfinished check");
+        return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+      } }).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+      assert.equal(done.status, "completed", done.diagnostic); assert.equal(checks, done.retrievalWork!.epicStages!.batches);
+      assert.equal(clone.get(p.id).questions.length, 1); assert.deepEqual(clone.getJob(source.id).retrievalWork, source.retrievalWork);
+      assert.deepEqual(clone.getJob(paused.id).retrievalWork, paused.retrievalWork);
+    } finally { clone.close(); }
+    assert.deepEqual(store.getJob(paused.id), paused); assert.deepEqual(store.getJob(source.id), source);
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("incremental impact preflight authenticates old paid reviews and exact deltas without supplying skip authority", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 10);
+    const job = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.equal(job.context!.epicReview!.contextPolicy, "staged-dense-records-v5");
+    const previous = store.get(p.id, job.expectedRevision), current = store.note(p.id, store.projectRevision(p.id), "A new exact rule requiring explicit impact review", "project");
+    const review = planEpicReview(current, [], "orders").task!.review;
+    const original = structuredClone({ previous, current, job });
+    const preflight = prepareEpicChangeImpact(previous, current, job, review);
+    assert.equal(preflight.eligible, true, !preflight.eligible ? preflight.reason : undefined);
+    if (!preflight.eligible) return;
+    assert.ok(preflight.request.delta.some(r => r.after.text === "A new exact rule requiring explicit impact review"));
+    assert.ok(preflight.request.unchanged.length); assert.ok(JSON.stringify(preflight.request).length <= 96000);
+    assert.deepEqual(preflight.request.baseline.output, job.result);
+    const response = { format: 1, policy: "epic-change-impact-preflight-v1", materialKey: preflight.request.materialKey,
+      disposition: "uncertain", comparedDeltaIDs: preflight.request.delta.map(r => r.id), affectedRecordIDs: [],
+      requiredOriginalIDs: [preflight.request.unchanged[0]!.id], evidenceIDs: [preflight.request.delta[0]!.id], reason: "Need exact originals to compare interactions" };
+    assert.equal(validateEpicImpactHypothesis(preflight, current, response).kind, "untrusted-impact-hypothesis");
+    const hypothetical = validateEpicImpactHypothesis(preflight, current, { ...response, disposition: "unaffected", requiredOriginalIDs: [] });
+    assert.equal("authorized" in hypothetical, false); assert.equal("skip" in hypothetical, false);
+    assert.throws(() => validateEpicImpactHypothesis(preflight, { ...current, revision: current.revision + 1 }, response), /stale revision/);
+    assert.throws(() => validateEpicImpactHypothesis(preflight, { ...current, goals: ["Changed material at the same revision"] }, response), /stale revision/);
+    for (const bad of [{ ...response, comparedDeltaIDs: [] }, { ...response, evidenceIDs: [preflight.request.unchanged[0]!.id] },
+      { ...response, materialKey: "0".repeat(64) }, { ...response, disposition: "unaffected" }, { ...response, affectedRecordIDs: ["invented"] },
+      { ...response, requiredOriginalIDs: [preflight.request.delta[0]!.id] }, { ...response, approve: true }])
+      assert.throws(() => validateEpicImpactHypothesis(preflight, current, bad));
+    assert.equal(prepareEpicChangeImpact(previous, { ...current, goals: ["Changed scope"] }, job, review).eligible, false);
+    assert.equal(prepareEpicChangeImpact(previous, current, { ...job, result: { ...job.result!, summary: "Counterfeit paid output" } }, review).eligible, false);
+    assert.equal(prepareEpicChangeImpact(previous, current, { ...job, status: "interrupted" }, review).eligible, false);
+    assert.deepEqual(prepareEpicChangeImpact(previous, current, job, { ...review, recordIDs: [...review.recordIDs, "foreign-target"] }),
+      { eligible: false, reason: "changed-scope" });
+    const removed = { ...current, sources: current.sources.filter(s => s.id !== previous.sources[0]!.id) };
+    assert.equal(prepareEpicChangeImpact(previous, removed, job, review).eligible, false, "Removed originals cannot be presumed unaffected");
+    const oversized = structuredClone(current);
+    for (const source of oversized.sources.filter(s => s.kind === "note").slice(0, 6)) source.text = source.text.slice(0, -1) + "!";
+    assert.deepEqual(prepareEpicChangeImpact(previous, oversized, job, review), { eligible: false, reason: "context-limit" });
+    const missingReceipt = structuredClone(job); missingReceipt.retrievalWork!.epicStages!.receipts.pop();
+    assert.equal(prepareEpicChangeImpact(previous, current, missingReceipt, review).eligible, false);
+    assert.deepEqual({ previous, current, job }, original); assert.deepEqual(store.getJob(job.id), job);
+  } finally { store.close(); }
+});
 
 test("an exact scheduler checkpoint resumes its owned package without catalog/history/cache scans or repeated model stages", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
@@ -80,10 +311,11 @@ test("an exact scheduler checkpoint resumes its owned package without catalog/hi
   } finally { store.close(); }
 });
 
-test("repeated incompatible paid-policy history probes each representation once while preserving the identical next task", () => {
+for (const targets of [1, 2]) test(`repeated incompatible paid-policy history probes each representation once while preserving the identical next task: ${targets} targets`, () => {
   const store = new ProjectStore(":memory:");
   try {
-    const p = seed(store, 1, 30), task = planEpicReview(p, [], "orders").task!;
+    const p = seed(store, targets, 30), task = planEpicReview(p, [], "orders").task!;
+    if (targets > 1) assert.ok(task.review.recordIDs.length < p.requirements.length, "Exercise historical child-policy groups");
     const prototype = store.jobs(p.id)[0]!;
     const policies = ["staged-dense-records-v5", "staged-records-v4", "staged-current-spec-v3", "staged-headroom-v2", "staged-guardrails-v1", "current-spec-v1"] as const;
     const unique: Job[] = policies.map((policy, index) => ({ ...prototype, id: `policy-${index}`, status: "cancelled", result: undefined,
@@ -101,6 +333,44 @@ test("repeated incompatible paid-policy history probes each representation once 
     assert.deepEqual(many.report, once.report); assert.equal(repeated, baseline);
     console.log(JSON.stringify({ fixtureOnly: true, originalRepresentations: unique.length, repeatedJobs: unique.length * 12, preparations: repeated }));
   } finally { store.close(); }
+});
+
+test("73 to 74 retains paid work and exact policy misses across eviction/reopen, but not changed history or evidence", () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "policy-miss-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const p = seed(store, 1, 30), task = planEpicReview(p, [], "orders").task!, paid = store.jobs(p.id);
+    const policies = ["staged-dense-records-v5", "staged-records-v4", "staged-current-spec-v3", "staged-headroom-v2", "staged-guardrails-v1", "current-spec-v1"] as const;
+    const history: Job[] = policies.map((policy, index) => ({ ...paid[0]!, id: `old-${index}`, status: "cancelled", result: undefined,
+      context: { ...task.context!.manifest, epicReview: { ...task.review, contextPolicy: policy, recordGrouping: undefined, inputKey: "0".repeat(64) } }, retrievalWork: undefined }));
+    const inputKey = epicPlanningContextInputKey(p); let cold = 0, warm = 0;
+    const first = planEpicReview(p, history, "orders", [], undefined, { contexts: new Map(), onPrepare() { cold++; },
+      onContext(key, value) { store.saveEpicPlanningContext(p.id, p.revision, inputKey, key, value); } });
+    const misses = [...store.epicPlanningContexts(p.id, inputKey).values()].filter(v => v.outcome === "policy-miss");
+    assert.equal(misses.length, policies.length);
+    store.close();
+    let db = new Database(file);
+    db.exec("DELETE FROM epic_planning_contexts WHERE json_extract(payload, '$.outcome') != 'policy-miss'; DELETE FROM migration_history WHERE version>=74; PRAGMA user_version=73;");
+    db.exec("CREATE TRIGGER fail_policy_migration BEFORE INSERT ON migration_history WHEN NEW.version=74 BEGIN SELECT RAISE(ABORT, 'interrupted policy migration'); END;"); db.close();
+    assert.throws(() => new ProjectStore(file), /interrupted policy migration/);
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 73);
+    db.exec("DROP TRIGGER fail_policy_migration"); db.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.jobs(p.id), paid); store.close(); }
+    store = new ProjectStore(file);
+    const contexts = store.epicPlanningContexts(p.id, inputKey);
+    const resumed = planEpicReview(p, history, "orders", [], undefined, { contexts, onPrepare() { warm++; } });
+    assert.deepEqual(resumed.task!.review, first.task!.review); assert.deepEqual(resumed.task!.batches, first.task!.batches);
+    assert.deepEqual(resumed.report, first.report); assert.ok(warm < cold, `${warm} warm versus ${cold} cold preparations`);
+    let changedHistory = 0;
+    planEpicReview(p, history.map(j => ({ ...j, diagnostic: "Changed saved job envelope" })), "orders", [], undefined,
+      { contexts: new Map(contexts), onPrepare() { changedHistory++; } });
+    assert.ok(changedHistory > warm, "A different history cannot borrow a negative probe");
+    const changed = store.note(p.id, p.revision, "New exact human constraint", "project"); let reused = 0;
+    planEpicReview(changed, history, "orders", [], undefined, { contexts: new Map(contexts), onContext(_key, value, cached) { if (cached && value.outcome === "policy-miss") reused++; } });
+    assert.equal(reused, 0); assert.deepEqual(store.jobs(p.id), paid);
+    console.log(JSON.stringify({ fixtureOnly: true, coldPreparations: cold, warmPreparations: warm, retainedPolicyMisses: misses.length }));
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("older same-revision budget checkpoints retain direct continuation eligibility after reopen and portable adoption", async () => {

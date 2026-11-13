@@ -5,7 +5,8 @@ import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
 import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup } from "../core/answer-group.js";
-import { answerIntegrationReasons, type AnswerIntegrationDiagnostic } from "../core/answer-integration-diagnostics.js";
+import { answerIntegrationReasons, type AnswerIntegrationDiagnostic, type AnswerIntegrationCost } from "../core/answer-integration-diagnostics.js";
+import { estimateAnswerIntegrationCost } from "../core/answer-integration-cost.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -991,6 +992,7 @@ export class DiscoveryQueue {
         const batch: Submission[] = [];
         let sharedAnswers = false;
         let compatibleAnswers = 0, overflowAnswers: Set<string> | undefined;
+        const estimatedCosts = new Map<string, AnswerIntegrationCost>();
         let resolutionJobs: ReturnType<typeof this.service.store.specificationWorkflowJobs> | undefined;
         const coordinated = !!this.coordinator && !!this.service.store.workflow(id).inputBatchPolicy;
         const groupResearch = manual?.research ?? saved.some(s => s.research);
@@ -1015,7 +1017,12 @@ export class DiscoveryQueue {
           }
           const group = [...groups.values()].find(items => items.length >= 2) ?? [];
           if (group.length >= 2) {
-            try { planAnswerGroup(answerGroupMaterials(project, group), true); batch.push(...group); sharedAnswers = true; }
+            try {
+              const material = answerGroupMaterials(project, group), plan = planAnswerGroup(material, true);
+              const cost = estimateAnswerIntegrationCost(project, group, material, plan);
+              if (cost) for (const item of group) estimatedCosts.set(item.id, cost);
+              if (cost?.selected !== "individual") { batch.push(...group); sharedAnswers = true; }
+            }
             catch (error) {
               // Fit is measured before dispatch. Failed/started groups never use
               // this fallback and can never acquire fresh individual allowances.
@@ -1069,10 +1076,11 @@ export class DiscoveryQueue {
                 : item.answerScope ? "scoped-answer"
                   : item.input.type !== "answer" || item.input.answer.kind !== "answer" ? "other-input"
                     : resolutionTaskForAnswer(project, item.input.questionID, resolutionJobs ??= this.service.store.specificationWorkflowJobs(id, "resolution")) ? "resolution"
-                      : overflowAnswers?.has(item.id) ? "context-budget" : !eligibleGroupAnswer(project, item) ? "ineligible"
+                      : overflowAnswers?.has(item.id) ? "context-budget" : estimatedCosts.get(item.id)?.selected === "individual" ? "estimated-cost" : !eligibleGroupAnswer(project, item) ? "ineligible"
                         : saved.length === 1 ? "single-answer" : compatibleAnswers >= 2 ? "different-features" : "single-compatible-answer";
           answerIntegration = { format: 1, reason, selectedResponses: saved.length, compatibleAnswers,
-            groupedAnswers: sharedAnswers ? batch.length : 0 };
+            groupedAnswers: sharedAnswers ? batch.length : 0,
+            ...(estimatedCosts.has(item.id) ? { cost: estimatedCosts.get(item.id)! } : {}) };
           report(answerIntegrationReasons[reason]);
         }
         if (!batch.length && manual?.questionTarget !== undefined) {

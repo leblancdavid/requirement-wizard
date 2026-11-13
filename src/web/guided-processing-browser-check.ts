@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { workspaceMenu, applicationMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, technicalProcessing, closeTechnicalViews, processingQueue, legacyWorkflowDetails } from "./menu-check-helpers.js";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import type { Connections } from "../providers/connections.js";
@@ -46,10 +46,16 @@ const browser = await chromium.launch();
 let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
+  await legacyWorkflowDetails(page);
   diagnose = browserDiagnostics(page);
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Guided processing browser/ }).click();
-  const settings = async () => { await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click(); };
+  const settings = async () => {
+    const controls = await technicalProcessing(page);
+    const details = controls.getByRole("region", { name: "Processing permissions", exact: true }).locator("details")
+      .filter({ has: page.locator(":scope > summary", { hasText: /^Processing details and advanced actions$/ }) });
+    if (await details.count() && !await details.evaluate(element => (element as HTMLDetailsElement).open)) await details.locator(":scope > summary").click();
+  };
   await settings();
   const permissions = page.getByRole("region", { name: "Processing permissions", exact: true });
   const saveMode = async () => {
@@ -66,7 +72,7 @@ try {
   await expect(permissions.getByRole("button", { name: "Use separate task settings", exact: true })).toHaveCount(0);
   await expect(permissions.getByLabel("Automatically process saved inputs", { exact: true })).toHaveCount(0);
   assert.equal(await page.evaluate(() => localStorage.getItem("reqwizit-auto")), "false");
-  await page.getByRole("button", { name: /Back to workspace/ }).click();
+  await closeTechnicalViews(page);
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   await expect.poll(() => store.submissions(p.id).length).toBe(1);
@@ -78,23 +84,27 @@ try {
   await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
   assert.equal(store.workflow(p.id).phase, "needs-decision"); assert.equal(store.workflow(p.id).paused, false);
   const firstGrant = structuredClone(store.workflow(p.id).grant!); assert.equal(firstGrant.used, 1);
-  await page.getByRole("button", { name: /Back to workspace/ }).click();
+  await closeTechnicalViews(page);
   await page.getByRole("button", { name: /Choose Encrypted\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeEnabled();
+  await technicalProcessing(page);
+  const submit = page.getByRole("dialog", { name: "Logs", exact: true }).getByRole("region", { name: "Advanced specification workflow", exact: true })
+    .getByRole("button", { name: "Submit saved responses", exact: true });
+  await expect(submit).toBeEnabled();
   assert.equal(store.submissions(p.id).at(-1)!.status, "queued");
   assert.equal(calls, 1, "Saving another answer must not launch processing while collecting decisions");
   assert.deepEqual(store.workflow(p.id).grant, firstGrant, "Saving cannot spend or renew the previous grant");
   await page.reload();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeEnabled();
+  await technicalProcessing(page);
+  await expect(submit).toBeEnabled();
   assert.equal(calls, 1, "Reload cannot submit saved answers");
-  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
+  await submit.click();
   await expect.poll(() => store.submissions(p.id).find((s) => s.id !== store.submissions(p.id)[0]!.id)?.status, { timeout: 15000 }).toBe("completed");
   await expect.poll(() => store.workflowBusy(p.id), { timeout: 15000 }).toBe(false);
   assert.notEqual(store.workflow(p.id).grant!.id, firstGrant.id, "Explicit submission authorizes the next captured batch");
   assert.equal(store.workflow(p.id).grant!.submissionIDs.length, 1); assert.equal(store.execution(p.id).run, undefined); assert.equal(store.execution(p.id).planning, undefined);
   const beforeSwitch = calls, spent = structuredClone(store.workflow(p.id).grant!);
-  await page.locator(".topbar .queue-trigger").click();
+  await processingQueue(page);
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await expect(drawer.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText(`Current follow-through · revision ${store.projectRevision(p.id)}`);
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();

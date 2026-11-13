@@ -1,5 +1,43 @@
 # Browser workspace, epics, and estimated completeness
 
+Dense discovery can reuse an independently authenticated unchanged paid read
+prefix on fresh work. Progress includes these retained reads, while diagnostics
+separately report reused collection batches and actual new attempts. Changed/later
+reads and every current proposal check still run; no semantic unaffected skip or
+new retry allowance is inferred. Restart/clone retains original source provenance
+under SQLite 76 / conditional portable 47. See
+[upgrade rules](migrations.md#authenticated-incremental-collection-2026-11-13).
+
+## Cost-aware new answer groups (2026-11-13)
+
+Before starting a new eligible same-feature group, the workflow now compares its
+estimated full-evidence request cost with individual processing. Clearly more
+expensive shared schedules stay individual; ties, near ties and unknown estimates
+retain normal grouping. Logs/diagnostics distinguish `estimated-cost` and the numeric
+forecast from actual requests. Drafts, lookups and repairs are unknown at selection
+time, so this is not a final cost guarantee. Started/paid groups and individual work
+never change paths to obtain fresh attempts. Scoped answers, feature boundaries,
+consent, exact evidence and all verification gates are preserved. SQLite 75 keeps
+existing work; restart the updated backend without resetting data. Semantic
+incremental-discovery skips are not enabled by the new read-only impact preflight.
+
+## Bounded portable rendering (2026-11-13)
+
+Folder saving now streams continuation history and hashes existing artifacts in
+bounded chunks. SQLite decisions remain durable while publication runs. Files retain
+their existing format and exact bytes; external edits still stop publication. An
+export exceeding existing import bounds stops before managed files are replaced.
+This addresses a measured render-allocation hazard, but the reported project's
+exit-134 save abort is not yet qualified as fixed. Restart the backend to load the
+change; do not reset data or repeat paid processing to retry folder sync.
+
+Packed saved-response diagnostics now report their actual verification total,
+instead of showing two nonexistent remaining checks after 16/16 completion. SQLite
+74 also retains exact-input negative historical-policy probes as local CPU work,
+not model findings. New compact shared schedules can pack complete reads more
+densely without changing existing paid layouts or dropping draft growth reserve.
+See [migration and qualification](migrations.md#bounded-portable-rendering-and-exact-policy-misses-2026-11-13).
+
 ## Gap discovery continuation and question windows (2026-11-12)
 
 Unchanged coordinator-owned staged work can continue directly from its saved

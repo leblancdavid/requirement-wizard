@@ -112,7 +112,7 @@ export function pendingEvidenceCompatible(project: Project, work: EpicStages | u
   if (!contexts || !work) return false;
   try {
     return supports.every(s => {
-      const base = contexts[s.fromReceipt % work.batches]!, { context, addedIDs } = supportingContext(project, base, true);
+      const base = contexts[(s.fromReceipt + (work.collectionBaseline?.reads ?? 0)) % work.batches]!, { context, addedIDs } = supportingContext(project, base, true);
       return s.prefixKey === hash(work.receipts.slice(0, s.fromReceipt)) && JSON.stringify(s.addedIDs) === JSON.stringify(addedIDs)
         && s.beforeEvidenceKey === retrievalEvidenceBasis(base).key && s.afterEvidenceKey === retrievalEvidenceBasis(context).key;
     });

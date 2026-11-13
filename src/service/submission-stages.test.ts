@@ -437,6 +437,9 @@ test("72 to 73 preserves paid reads; verification packing survives rollback, reo
         return adapter(f).analyze(p, options);
       } }, clone.get(f.project.id), next, clone.submissions(f.project.id).find(s => s.id === f.item.id)!, f.task, { research: false, signal: new AbortController().signal });
       assert.equal(result.status, "completed"); assert.equal(calls, w.verification!.batches.length);
+      const diagnostic = clone.discoveryDiagnostics(f.project.id, [next.id]).runs[0]!;
+      assert.equal(diagnostic.savedWork.totalSteps, submissionTotalSteps(result.submissionWork!));
+      assert.equal(diagnostic.savedWork.remainingSteps, 0); assert.equal(diagnostic.savedWork.phase, "complete");
       assert.deepEqual(result.submissionWork!.receipts.slice(0, oldReads.length), oldReads);
       assert.deepEqual(clone.getJob(job.id).submissionWork, w);
     } finally { clone.close(); }

@@ -16,6 +16,26 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+New answer groups now compare estimated complete-evidence request costs with
+individual processing before any shared work starts. Clearly costlier shared plans
+stay individual; paid work retains its original path. SQLite 75 preserves additive
+diagnostic estimates. Incremental discovery has an authenticated baseline/delta
+preflight, but semantic skips are **not enabled**. See
+[compatibility and boundaries](docs/migrations.md#new-answer-cost-routing-and-impact-preflight-2026-11-13).
+
+Fresh dense discovery can now reuse an authenticated, unchanged paid read prefix;
+changed/later batches and every current proposal check remain required. SQLite 76
+and conditional portable 47 preserve original receipts and charged attempts through
+restart/clone. This is exact-prefix reuse, not semantic unaffected skipping. See
+[incremental collection compatibility](docs/migrations.md#authenticated-incremental-collection-2026-11-13).
+
+Portable continuation rendering now streams to a staged file to reduce peak memory,
+and exact-input historical policy misses can survive context-cache eviction. New
+shared-answer schedules measure complete packets before choosing a smaller read
+layout. SQLite 74 preserves existing paid work and portable formats. The reported
+real-project save abort is still not qualified as fixed; broader semantic incremental
+discovery remains outstanding. See [compatibility and measurements](docs/migrations.md#bounded-portable-rendering-and-exact-policy-misses-2026-11-13).
+
 Saved-response verification can now pack wholly unstarted checks using the actual
 frozen draft, retaining every mandatory record, paid read and spent attempt. Portable
 publication shares repeated decoded history to reduce memory; the reported real-project

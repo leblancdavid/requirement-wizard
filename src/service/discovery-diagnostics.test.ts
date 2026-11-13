@@ -44,6 +44,9 @@ test("latest workspace publication diagnostics are numeric, separately scoped, r
   assert.equal(discoveryDiagnosticReport([row]).workspacePublication, undefined);
   assert.equal(discoveryDiagnosticReport([row], { format: 999, revision: 99 }).workspacePublication, undefined);
   assert.equal(discoveryDiagnosticReport([row], { format: 1, revision: 99, elapsedMs: -1 }).workspacePublication, undefined);
+  const sized = discoveryDiagnosticReport([row], { format: 1, revision: 99, continuationBytes: 1024, artifactBytes: 2048, path: "PRIVATE folder" });
+  assert.equal(sized.workspacePublication!.continuationBytes, 1024); assert.equal(sized.workspacePublication!.artifactBytes, 2048);
+  assert.ok(!JSON.stringify(sized).includes("PRIVATE"));
   const profile = { selectionMs: 3, snapshotReadMs: 4, deltaMs: 5, serializedRecords: 10, digestComputations: 2, digestHits: 8 };
   const detailed = discoveryDiagnosticReport([row], { format: 1, revision: 99, status: "saved", continuationProfile: { ...profile, "PRIVATE path": "PRIVATE input" } });
   assert.deepEqual(detailed.workspacePublication!.continuationProfile, profile);

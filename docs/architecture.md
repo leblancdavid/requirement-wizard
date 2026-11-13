@@ -1,5 +1,32 @@
 # Architecture outline
 
+`src/core/epic-collection-baseline.ts` now supplies active exact-prefix collection
+reuse for fresh dense-v5 discovery. It independently authenticates a completed
+source and compares expanded model-visible read evidence, guidance and drafts.
+The first change stops reuse; later reads and all current checks remain mandatory.
+Storage authenticates the referenced source again at publication; portable 47
+retains and validates ancestry. SQLite 76 adds the reader boundary without rewriting
+paid work. This is separate from the read-only semantic impact hypothesis below.
+See [compatibility](migrations.md#authenticated-incremental-collection-2026-11-13).
+
+New shared-answer selection has a read-only cost forecast before work starts.
+`src/core/answer-integration-cost.ts` measures complete evidence/support packets,
+compares individual schedules, labels unknown draft/lookup/repair cost and never
+supplies progress or verification authority. Retained work is not repriced.
+SQLite 75 preserves the additive diagnostic reason/estimate; portable formats stay
+unchanged. `src/core/epic-change-impact.ts` authenticates a prospective incremental
+baseline/delta and validates **untrusted hypotheses only**. It is not dispatched or
+used for scheduling skips. See [implementation boundaries](migrations.md#new-answer-cost-routing-and-impact-preflight-2026-11-13).
+
+`src/storage/staged-json.ts` streams continuation JSON to a private temporary file
+with incremental UTF-8 hashing. The publisher preserves exact portable bytes and
+manifest-last/journal/CAS semantics without retaining the whole serialized history.
+Conflict hashing is bounded too; exports enforce existing import size limits before
+managed writes. SQLite 74 adds only exact-input historical policy-miss CPU caching.
+Fresh compact shared-answer schedules measure complete scoped-read packets with
+the full draft reserve; old paid arrays replay verbatim. See
+[compatibility and limits](migrations.md#bounded-portable-rendering-and-exact-policy-misses-2026-11-13).
+
 Frozen-draft saved-response verification retains original read plans and adds a
 separately authenticated exact-evidence packing plan only before any check attempt.
 SQLite 73 is a reader boundary; conditional portable 46 carries the new metadata.

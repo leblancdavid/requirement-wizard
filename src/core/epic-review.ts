@@ -14,6 +14,7 @@ import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js
 import { epicPlanningProjectKey } from "./epic-planning-input.js";
 import { completedRecordStagesEquivalent, recordStagePolicy } from "./epic-stage-reuse.js";
 import { questionAnswerUnitIDs, pendingQuestionIDs, planLinkedEvidenceRecovery, pendingEvidenceCompatible } from "./epic-linked-evidence.js";
+import { digestJSONArray } from "./json-digest.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -136,7 +137,7 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
   const legacyKey = hash(["epic-context-computation-v1", project.id, project.revision, review, extraIDs, final, guardrailIDs]);
   const cached = memo.contexts.get(key) ?? memo.contexts.get(legacyKey);
   if (cached) {
-    if (cached.outcome === "planning-failure" || cached.outcome === "staged") throw new Error("Invalid context computation checkpoint.");
+    if (cached.outcome !== "context" && cached.outcome !== "budget") throw new Error("Invalid context computation checkpoint.");
     rememberEpicContext(memo.contexts, key, cached);
     memo.onContext?.(key, cached, true);
     if (cached.outcome === "context") {
@@ -564,6 +565,12 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const equivalentCompleted = options.completedEquivalence ?? new Map<string, boolean>();
   const completedInventories = new WeakMap<ContextPack[], Set<string>>();
   const pendingProofs = new Map<string, boolean>();
+  const historyProofs = new WeakMap<Job, string>();
+  const historyProof = (job: Job) => {
+    let key = historyProofs.get(job);
+    if (!key) { key = digestJSONArray([job]); historyProofs.set(job, key); }
+    return key;
+  };
   const pendingCompatible = (j: Job, candidate: Candidate) => {
     const work = j.retrievalWork?.epicStages, supports = work?.linkedEvidence?.filter(s => s.kind === "pending-questions-v1");
     if (!work || !supports?.length) return true;
@@ -658,20 +665,54 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     for (const group of policyGroups.values()) {
       if (group[0]!.index >= winner) continue;
       const first = group[0]!.job.context!.epicReview!;
+      const missKey = currentProjectKey && hash(["exact-policy-miss-v1", currentProjectKey, epicID, epicIDs, kind,
+        records.map(r => r.id).sort(), first.contextPolicy, first.recordGrouping, group.map(({ job }) => historyProof(job))]);
+      const miss = missKey && options.contexts?.get(missKey);
+      if (miss && miss.outcome === "policy-miss") { options.onContext?.(missKey!, miss, true); continue; }
       const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, first.contextPolicy, first.recordGrouping));
+      let matched = false;
       for (const { job, index } of group) {
         if (index >= winner) break;
-        if (during("saved-policy", () => matches(job, saved))) { candidate = saved; winner = index; break; }
+        if (during("saved-policy", () => matches(job, saved))) { candidate = saved; winner = index; matched = true; break; }
+      }
+      // Only exhaustive negative probes are durable. A winning earlier policy
+      // may stop this group before all members; never cache that as a miss.
+      if (!matched && group.every(({ index }) => index < winner) && missKey && options.contexts) {
+        const value: EpicContextCheckpoint = { format: 1, outcome: "policy-miss" };
+        rememberEpicContext(options.contexts, missKey, value); options.onContext?.(missKey, value, false);
       }
     }
     const preserved = !!candidate;
     if (!candidate) {
       const children = new Map<string, Record[]>();
-      for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length < records.length)) {
-        const ids = new Set(j.context!.epicReview!.recordIDs), subset = records.filter((r) => ids.has(r.id));
-        if (during("saved-policy", () => matches(j, build(epicID, epicIDs, kind, subset, j.context!.epicReview!.contextPolicy, j.context!.epicReview!.recordGrouping)))) {
-          children.set(j.context!.epicReview!.packageID, subset);
+      const smaller = history.filter(j => j.context!.epicReview!.recordIDs.length < records.length);
+      const groups = new Map<string, { subset: Record[]; jobs: Job[] }>();
+      for (const job of smaller) {
+        const review = job.context!.epicReview!, ids = new Set(review.recordIDs);
+        const key = JSON.stringify([review.contextPolicy, review.recordGrouping, [...ids].sort()]);
+        const group = groups.get(key) ?? { subset: records.filter(r => ids.has(r.id)), jobs: [] };
+        group.jobs.push(job); groups.set(key, group);
+      }
+      const compatible = new Set<Job>();
+      for (const { subset, jobs: group } of groups.values()) {
+        const first = group[0]!.context!.epicReview!;
+        const missKey = currentProjectKey && hash(["exact-policy-miss-v1", currentProjectKey, epicID, epicIDs, kind,
+          subset.map(r => r.id).sort(), first.contextPolicy, first.recordGrouping, group.map(historyProof)]);
+        const miss = missKey && options.contexts?.get(missKey);
+        if (miss && miss.outcome === "policy-miss") { options.onContext?.(missKey!, miss, true); continue; }
+        const saved = during("saved-policy", () => build(epicID, epicIDs, kind, subset, first.contextPolicy, first.recordGrouping));
+        let matched = false;
+        for (const job of group) if (during("saved-policy", () => matches(job, saved))) { compatible.add(job); matched = true; }
+        if (!matched && missKey && options.contexts) {
+          const value: EpicContextCheckpoint = { format: 1, outcome: "policy-miss" };
+          rememberEpicContext(options.contexts, missKey, value); options.onContext?.(missKey, value, false);
         }
+      }
+      // Group the expensive probes, not the output. Historical child insertion
+      // order and overlap priority remain identical to the original traversal.
+      for (const job of smaller) if (compatible.has(job)) {
+        const review = job.context!.epicReview!, ids = new Set(review.recordIDs);
+        children.set(review.packageID, records.filter(r => ids.has(r.id)));
       }
       if (children.size) {
         const covered = new Set([...children.values()].flat().map((r) => r.id));

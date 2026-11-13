@@ -106,6 +106,9 @@ export type DiagnosticSource = {
   interruptionCause?: string | null;
   savedStageFormat?: number | null;
   savedDraftRepairFormat?: number | null;
+  savedVerificationFormat?: number | null;
+  savedVerificationBatches?: number | null;
+  reusedCollectionBatches?: number | null;
   answerGroupPhase?: string | null;
   groupRecoveryRequests?: number | null;
   groupSupportRecords?: number | null;
@@ -118,6 +121,7 @@ const workspacePublicationSchema = z.object({ format: z.literal(1), revision: co
   status: z.enum(["saved", "pending", "conflict", "unavailable"]).optional(),
   elapsedMs: duration.optional(), historyMs: duration.optional(), continuationMs: duration.optional(),
   renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional(),
+  continuationBytes: count.optional(), artifactBytes: count.optional(),
   historyObjects: z.object({ reusedNodes: count, createdNodes: count, peakCacheBytes: count }).strict().optional(),
   continuationProfile: z.object({ selectionMs: duration, snapshotReadMs: duration, deltaMs: duration,
     serializedRecords: count, digestComputations: count, digestHits: count,
@@ -137,6 +141,8 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
         throw new Error("Unsupported saved clarification/response stage format. Upgrade the app; saved work was not overwritten.");
       if (row.savedDraftRepairFormat !== undefined && row.savedDraftRepairFormat !== null && row.savedDraftRepairFormat !== 1)
         throw new Error("Unsupported saved-response corrective review format. Upgrade the app; saved work was not overwritten.");
+      if (row.savedVerificationFormat !== undefined && row.savedVerificationFormat !== null && row.savedVerificationFormat !== 1)
+        throw new Error("Unsupported saved-response verification format. Upgrade the app; saved work was not overwritten.");
       const metrics = row.metrics === null ? null : discoveryMetricsSchema.parse(JSON.parse(row.metrics));
       const adapterMs = metrics?.state === "finished" && metrics.requests.every((request) => request.durationMs !== null)
         ? metrics.requests.reduce((sum, request) => sum + request.durationMs!, 0) : null;
@@ -145,7 +151,9 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
       const stored = row.sections === null ? {} : JSON.parse(row.sections) as Record<string, unknown>;
       for (const key of diagnosticSections) if (typeof stored[key] === "number") sections[key] = count.parse(stored[key]);
       const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "");
-       const legacyTotalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 + Number(row.savedDraftRepairFormat === 1) : null;
+       const legacyTotalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches)
+         + (row.savedDraftRepairFormat !== 1 && row.savedVerificationFormat === 1 && row.savedVerificationBatches != null
+           ? count.parse(row.savedVerificationBatches) : count.parse(row.stagedBatches)) + Number(row.savedDraftRepairFormat === 1) : null;
       const group = row.groupProgress ? groupProgressSchema.parse(JSON.parse(row.groupProgress)) : null;
        const groupProgress = group ? answerGroupProgress(group) : null;
        const totalSteps = groupProgress?.total ?? legacyTotalSteps;
@@ -164,6 +172,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
         savedContext: { characters: nullableCount(row.characters), budget: nullableCount(row.budget), includedRecords: nullableCount(row.included),
           omittedRecords: nullableCount(row.omitted), areas: nullableCount(row.areas), sections },
         savedWork: { navigationStages: nullableCount(row.stages), attempts: nullableCount(row.savedAttempts), reusedStages: nullableCount(row.reusedStages),
+          reusedCollectionBatches: row.reusedCollectionBatches == null ? null : count.parse(row.reusedCollectionBatches),
           additionalRecoveryRequestsGranted: nullableCount(row.groupRecoveryRequests ?? null), originalSupportRecords: nullableCount(row.groupSupportRecords ?? null),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
            totalSteps, remainingSteps: totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,

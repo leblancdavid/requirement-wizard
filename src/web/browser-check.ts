@@ -1123,10 +1123,14 @@ try {
   await expect(page.getByText(/^Replaced responses/)).toHaveCount(0);
   await expect(details).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveCount(0);
-   await expect(page.getByRole("tab", { name: "Design" })).toContainText("2"); // One unanswered question plus the retained failed answer.
+   assert.ok(store.submissions(safetyProjectID).some(s => s.input.type === "answer" && s.status === "completed"), "Earlier paid answer processing remains completed");
+   await expect(page.getByRole("tab", { name: "Design" })).toContainText("1"); // One unanswered question; resolved historical attempts are not new Design work.
   // A round result and polling must not replace another question's draft.
-  releases[0]!();
-  await expect.poll(() => releases.length).toBe(2);
+   releases[0]!();
+   await expect.poll(() => store.submissions(safetyProjectID).filter(s => s.status === "processing").length).toBe(0);
+   await runQueueAction(page, "Process saved responses only"); // Explicitly capture the answer saved after the original action.
+   await expect.poll(() => releases.length).toBe(2);
+   await processingQueue(page);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 0 waiting");
   await expect(details).toHaveCount(0);
   await closeTechnicalViews(page);
@@ -1150,8 +1154,10 @@ try {
   // additional note waiting so the later stop/resume check still cancels real work.
   store.enqueue(safetyProjectID, { id: crypto.randomUUID(), auto: true, research: false,
     input: { type: "note", epicID: "project", text: "Keep this cancellation/resume fixture note" } });
-  releases[1]!();
-  await expect.poll(() => releases.length).toBe(3);
+   releases[1]!();
+   await expect.poll(() => store.submissions(safetyProjectID).filter(s => s.status === "processing").length).toBe(0);
+   await runQueueAction(page, "Process saved responses only"); // Capture offline response and the retained stop/resume note together.
+   await expect.poll(() => releases.length).toBe(3);
   releases[2]!();
   await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.status === "completed").length).toBe(completedBeforeLayout + 3);
   await expect(page.getByText(/^Recent completed work/)).toHaveCount(0);
@@ -1347,12 +1353,12 @@ try {
     assert.equal(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!.status, "accepted");
     assert.equal(store.jobs(reviewProject.id).length, reviewJobs);
     assert.equal(reviewReleases.length, 0);
-    await expect(page.locator(".project-status")).toContainText("Your project needs attention");
+     await expect(page.locator(".project-status")).toContainText("Idle · Ready when you are"); // Header reports active work; durable blockers remain on the submitted item.
     await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
     await expect(reviewPanel).toContainText("too much related information to review in one step");
     await expect(reviewPanel).toContainText("Your response is saved");
     await page.reload();
-    await expect(page.locator(".project-status")).toContainText("Your project needs attention");
+     await expect(page.locator(".project-status")).toContainText("Idle · Ready when you are");
      const retainedApproval = structuredClone(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!);
      const retainedAttempts = store.submissions(reviewProject.id).length;
      await runQueueAction(page, "Process saved responses only");
@@ -2667,7 +2673,7 @@ try {
     retrievalProject = store.get(retrievalProject.id);
     const retrievalOriginal = structuredClone(retrievalProject);
     await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Staged retrieval fixture/ }).click();
-    await page.getByRole("tab", { name: /^Design/ }).click();
+   await page.getByRole("tab", { name: /^Design/ }).click();
       await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
       await discoveryActions(page);
        const retrievalTuning = await technicalProcessing(page);

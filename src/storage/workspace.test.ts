@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync, symlinkSync, statSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync, symlinkSync, statSync, utimesSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { PublicationObjects } from "./publication-objects.js";
+import { writePrettyJSON, stageJSON, discardStaged } from "./staged-json.js";
 import { continuationState } from "./portable.js";
 import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
@@ -16,6 +17,55 @@ import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 const parent = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "private-account" } as const;
+
+test("bounded JSON staging preserves exact ordered Unicode bytes and rejects incomplete/oversized artifacts", () => {
+  const directory = mkdtempSync(join(parent, "staged-json-"));
+  try {
+    const shared = { evidence: "x".repeat(16382) + "😀é\ud800\n\"\\" };
+    const value = { "2": 2, "1": 1, omitted: undefined, ordered: [shared, shared, , undefined, NaN, Infinity, -0], empty: {}, array: [] };
+    const expected = JSON.stringify(value, null, 2) + "\n", chunks: string[] = [];
+    writePrettyJSON(value, chunk => chunks.push(chunk));
+    assert.equal(chunks.join(""), expected); assert.ok(chunks.every(chunk => chunk.length <= 32768));
+    const staged = stageJSON(directory, value);
+    assert.equal(readFileSync(staged.path, "utf8"), expected); assert.equal(staged.hash, hash(expected));
+    assert.equal(staged.bytes, Buffer.byteLength(expected)); discardStaged(staged);
+    assert.throws(() => stageJSON(directory, value, 100), /import size/);
+    const cycle: unknown[] = []; cycle.push(cycle);
+    assert.throws(() => stageJSON(directory, cycle), /cyclic/);
+    assert.throws(() => stageJSON(directory, { invalid: 1n }));
+    assert.deepEqual(readdirSync(directory), [], "Failed staging leaves no managed or temporary artifact");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("streamed continuation preserves artifact/manifest bytes, journal compatibility and external edits", () => {
+  const f = fixture();
+  try {
+    const p = generate(f.store, f.project), state = continuationState(p, f.store.jobs(p.id), [], revision => f.store.get(p.id, revision));
+    const regular = renderWorkspace(p, undefined, state), directory = join(f.path, workspaceFolder);
+    const staged = stageJSON(directory, state);
+    try {
+      const files = renderWorkspace(p, undefined, state, staged);
+      assert.equal(files["continuation.json"], undefined);
+      assert.deepEqual({ ...files, "continuation.json": readFileSync(staged.path, "utf8") }, regular);
+      f.store.connectWorkspace(p.id, p.revision, f.path);
+      const binding = f.store.workspace(p.id)!;
+      // Curated interrupted journal: every installed byte is recognized on reopen.
+      binding.pendingHashes = Object.fromEntries(Object.entries(regular).map(([name, content]) => [name, [hash(content)]]));
+      const db = new Database(f.database);
+      db.prepare("UPDATE workspaces SET payload=?, dirty=1 WHERE project_id=?").run(JSON.stringify(binding), p.id); db.close();
+      publishWorkspace(directory, files, [], staged);
+      checkWorkspace(binding, Object.keys(regular));
+      f.store.syncWorkspace(p.id); assert.equal(f.store.workspace(p.id)!.status, "saved");
+      for (const [name, content] of Object.entries(regular)) assert.equal(readFileSync(join(directory, name), "utf8"), content);
+      const next = stageJSON(directory, state);
+      try {
+        writeFileSync(join(directory, "continuation.json"), "Human external edit");
+        assert.throws(() => checkWorkspace(binding), /Workspace conflict/);
+        assert.equal(readFileSync(join(directory, "continuation.json"), "utf8"), "Human external edit");
+      } finally { discardStaged(next); }
+    } finally { discardStaged(staged); }
+  } finally { f.cleanup(); }
+});
 
 test("publication sharing preserves exact ordered JSON and copy-on-write portable sanitization", () => {
   const f = fixture();
@@ -47,6 +97,13 @@ test("diagnostic-heavy discovery history larger than a capped heap still plans a
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   const report = JSON.parse(result.stdout.trim()) as { archiveBytes: number; projectedJobs: number; portableSaved: boolean };
   assert.ok(report.archiveBytes > 64 * 1024 * 1024); assert.equal(report.projectedJobs, 401); assert.equal(report.portableSaved, true);
+});
+
+test("continuation rendering larger than the heap is streamed and conflict-hashed without whole-document strings", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=48", "--import", "tsx", "scripts/check-publication-render-memory.ts"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.ok(JSON.parse(result.stdout.trim()).bytes > 48 * 1024 * 1024);
 });
 
 test("repeated paid reply graphs publish under a capped heap without discarding durable originals", { timeout: 60000 }, () => {

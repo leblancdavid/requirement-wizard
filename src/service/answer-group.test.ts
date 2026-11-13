@@ -21,9 +21,91 @@ import { ProjectWorkflow } from "./workflow.js";
 import { authorizeAnswerGroupVerification, answerGroupVerificationPreview, adoptAnswerGroupInputCapacity, adoptAnswerGroupRepairPolicy, adoptAnswerGroupUnionPageCapacity, answerGroupPageStepLimit } from "../core/answer-group.js";
 import { startApp } from "../web/server.js";
 import { workflowInputKey } from "../core/workflow.js";
+import { estimateAnswerIntegrationCost } from "../core/answer-integration-cost.js";
 import { answerGroupClarificationPreview, adoptAnswerGroupPlay, answerGroupClarifications } from "../core/answer-group.js";
 
 const empty = (): Analysis => ({ summary: "Shared answer integration", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("fresh-answer routing compares complete-evidence forecasts without granting progress or repricing paid work", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, true, () => randomBytes(4900).toString("hex"), false, false,
+      i => `Original ${i}: ${randomBytes(4200).toString("hex")}`, 6);
+    const m = answerGroupMaterials(p, items), work = planAnswerGroup(m, true), original = structuredClone({ p, items, work });
+    const cost = estimateAnswerIntegrationCost(p, items, m, work)!;
+    assert.ok(cost); assert.equal(cost.selected, "individual");
+    assert.equal(cost.individualRequests, 2); assert.ok(cost.sharedReadRequests + cost.sharedVerificationProxyRequests > cost.individualRequests);
+    assert.equal(cost.uncertainty, "draft-lookups-and-repairs-unknown");
+    assert.deepEqual({ p, items, work }, original); assert.deepEqual(replayAnswerGroup(m, work), { draft: undefined, blocked: undefined });
+    assert.throws(() => estimateAnswerIntegrationCost(p, items, m, { ...work, attempts: 1 }), /before shared work starts/);
+    assert.throws(() => estimateAnswerIntegrationCost(p, items.map(item => ({ ...item, jobID: "already-started" })), m, work), /before shared work starts/);
+    assert.throws(() => estimateAnswerIntegrationCost({ ...p, goals: ["Changed context"] }, items, m, work), /does not match/);
+    console.log(JSON.stringify({ fixtureOnly: true, ...cost }));
+  } finally { store.close(); }
+});
+
+test("workflow selects cheaper new individual work, exports honest cost metadata and preserves it across 74 to 75 reopen", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "answer-cost-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file), workflow: ProjectWorkflow | undefined;
+  try {
+    const { p, items } = fixture(store, 2, true, () => randomBytes(4900).toString("hex"), false, false,
+      i => `Original ${i}: ${randomBytes(4200).toString("hex")}`, 6);
+    let calls = 0;
+    workflow = new ProjectWorkflow(store, { async analyze(project, { context }) {
+      calls++;
+      if (context.manifest.submissionIDs?.length) {
+        assert.equal(context.manifest.submissionIDs.length, 1); assert.equal(context.manifest.answerGroupStage, undefined);
+        return empty();
+      }
+      return { ...empty(), questions: [{ epicID: "project", text: "A next explicit product decision?", whyItMatters: "Fixture ends at a decision",
+        evidenceIDs: [project.sources[0]!.id], options: [{ label: "Keep", consequence: "Retain" }, { label: "Change", consequence: "Revise" }] }] };
+    } });
+    workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous"); await workflow.wait(p.id);
+    const jobs = store.jobs(p.id).filter(j => j.context?.submissionIDs?.length);
+    assert.equal(jobs.length, 2); assert.ok(store.submissions(p.id).every(s => s.status === "completed"));
+    const diagnostic = store.discoveryDiagnostics(p.id, [jobs[0]!.id]).runs[0]!.measurements!.answerIntegration!;
+    assert.equal(diagnostic.reason, "estimated-cost"); assert.equal(diagnostic.groupedAnswers, 0);
+    assert.equal(diagnostic.cost!.selected, "individual"); assert.equal(diagnostic.cost!.individualRequests, 2);
+    assert.equal(jobs[1]!.discoveryMetrics!.answerIntegration!.reason, "single-answer");
+    assert.deepEqual(store.submissions(p.id).map(s => s.input), items.map(s => s.input));
+    const portable = continuationState(store.get(p.id), store.jobs(p.id), store.submissions(p.id), revision => store.get(p.id, revision));
+    assert.ok(!JSON.stringify(portable).includes("complete-evidence-estimate-v1"), "Cost is diagnostic metadata, not portable evidence");
+    await workflow.close(); workflow = undefined;
+    const before = store.getJob(jobs[0]!.id); store.close();
+    const db = new Database(file);
+    db.exec("DELETE FROM migration_history WHERE version>=75; PRAGMA user_version=74; CREATE TRIGGER fail_cost_migration BEFORE INSERT ON migration_history WHEN NEW.version=75 BEGIN SELECT RAISE(ABORT, 'interrupted cost migration'); END;"); db.close();
+    assert.throws(() => new ProjectStore(file), /interrupted cost migration/);
+    const recovery = new Database(file); assert.equal(recovery.pragma("user_version", { simple: true }), 74);
+    recovery.exec("DROP TRIGGER fail_cost_migration"); recovery.close();
+    const used = calls;
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(before.id), before); store.close(); }
+    assert.equal(calls, used, "Startup cannot reprice, regroup or repeat paid work");
+    store = new ProjectStore(file);
+    const futureDB = new Database(file);
+    const payload = (futureDB.prepare("SELECT payload FROM jobs WHERE id=?").get(before.id) as { payload: string }).payload;
+    const future = JSON.parse(payload); future.discoveryMetrics.answerIntegration.cost.policy = "future-cost-policy";
+    futureDB.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), before.id);
+    assert.throws(() => store.getJob(before.id));
+    assert.equal((futureDB.prepare("SELECT payload FROM jobs WHERE id=?").get(before.id) as { payload: string }).payload, JSON.stringify(future));
+    futureDB.prepare("UPDATE jobs SET payload=? WHERE id=?").run(payload, before.id); futureDB.close();
+    assert.deepEqual(store.getJob(before.id), before);
+  } finally { await workflow?.close(); if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("fresh measured shared packing preserves exact evidence and never changes paid layouts", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, true, undefined, false, false, i => `Original ${i}: ${randomBytes(4200).toString("hex")}`, 32);
+    const m = answerGroupMaterials(p, items), legacy = planAnswerGroup(m, true, true, false), dense = planAnswerGroup(m, true);
+    assert.ok(dense.batches.length < legacy.batches.length);
+    assert.deepEqual(new Set(dense.batches.flat()), new Set(legacy.batches.flat()));
+    for (const batch of dense.batches) assert.ok(answerGroupContext(m, { ...dense, batches: [batch] }).manifest.characters + answerGroupLimits.draft <= answerGroupLimits.characters);
+    assert.deepEqual(replayAnswerGroup(m, legacy), { draft: undefined, blocked: undefined });
+    assert.equal(legacy.planKey, planAnswerGroup(m, true, true, false).planKey);
+    console.log(JSON.stringify({ fixtureOnly: true, formerSharedReads: legacy.batches.length, measuredSharedReads: dense.batches.length }));
+  } finally { store.close(); }
+});
 
 function unpackShared(input: unknown): Record<string, unknown> {
   const data = input as { identifierTable?: { values: string[] }; sharedText?: { values: Record<string, string> } };

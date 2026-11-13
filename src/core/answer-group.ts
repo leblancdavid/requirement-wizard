@@ -1229,7 +1229,7 @@ export function authorizeAnswerGroupVerification(m: AnswerGroupMaterials, w: Ans
   replayAnswerGroup(m, next);
   return next;
 }
-export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = false, compactPacking = unionVerification): AnswerGroupWork {
+export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = false, compactPacking = unionVerification, measuredPacking = compactPacking): AnswerGroupWork {
   const w: AnswerGroupWork = { format: 1, policy: "exact-answer-group-v1", submissionIDs: m.items.map(s => s.id), epicID: m.epicID,
     ...(unionVerification ? { verificationPolicy: "union-v1" as const } : {}),
     ...(compactPacking ? { packingPolicy: "lossless-v1" as const } : {}),
@@ -1245,8 +1245,6 @@ export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = fal
   if (batch.length) w.batches.push(batch);
   if (!w.batches.length) w.batches.push([...m.pins]);
   if (support.length) w.sourceSupport = { format: 1, fromReceipt: 0, prefixKey: hash([]), records: support, targets: [] };
-  // New schedules use more of the actual bounded packet, while retaining the full
-  // draft reserve. Saved schedules are never repacked or assigned a different key.
   const fit = (ids: string[]): string[][] => {
     const c = renderAnswerGroupContext(m, { ...w, batches: [ids] }, undefined, undefined, { unbounded: true });
     if (c.manifest.characters + answerGroupLimits.draft <= answerGroupLimits.characters) return [ids];
@@ -1255,6 +1253,34 @@ export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = fal
     return [...fit(ids.slice(0, middle)), ...fit(ids.slice(middle))];
   };
   w.batches = w.batches.flatMap(fit);
+  if (compactPacking && measuredPacking) {
+    // New work only: measure complete original/support closures in the same
+    // scoped-read encoder used by dispatch. Shared support is counted once per
+    // packet, not once per requirement. Keep the full possible draft growth.
+    const ids = m.records.filter(r => !m.pins.has(r.record.id)).map(r => r.record.id);
+    const fits = (selected: string[]) => {
+      const context = renderAnswerGroupContext(m, { ...w, batches: [selected] }, undefined, undefined, { unbounded: true,
+        pagePlan: { format: 9, fromReceipt: 0, prefixKey: receiptPrefixKey([]), step: 0, phase: "read", pages: [selected] } });
+      return context.manifest.characters + answerGroupLimits.draft + 256 <= answerGroupLimits.characters;
+    };
+    const dense: string[][] = [];
+    for (let offset = 0; offset < ids.length;) {
+      let low = offset + 1, high = ids.length, end = offset;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        if (fits(ids.slice(offset, middle))) { end = middle; low = middle + 1; } else high = middle - 1;
+      }
+      // Preserve the existing indivisible-unit failure/recovery behavior.
+      if (end === offset) break;
+      dense.push(ids.slice(offset, end)); offset = end;
+    }
+    if (dense.flat().length === ids.length && dense.length && dense.length < w.batches.length) {
+      const checked = dense.flatMap(fit);
+      if (checked.length < w.batches.length) w.batches = checked;
+    }
+  }
+  // New schedules use more of the actual bounded packet, while retaining the full
+  // draft reserve. Saved schedules are never repacked or assigned a different key.
   w.planKey = answerGroupPlanKey(w);
   answerGroupWorkSchema.parse(w);
   return w;

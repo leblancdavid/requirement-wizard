@@ -25,6 +25,7 @@ import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext, epicCitationPrefixKey } from "../core/epic-stages.js";
+import { planEpicCollectionBaseline, type EpicCollectionSource } from "../core/epic-collection-baseline.js";
 import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -748,14 +749,14 @@ export class DiscoveryService {
         const checkpoint = () => {
           context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
-           if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length,
+            if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length + (work.epicStages.collectionBaseline?.reads ?? 0),
             batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
             ...(work.epicStages.emptyCompletion ? { emptyCompletion: work.epicStages.emptyCompletion } : {}) };
           if (measurement && work.epicStages) measurement.value.epicProposals = {
             ...proposalCounts,
             questions: work.epicStages.candidates.questions.length, requirements: work.epicStages.candidates.requirements.length,
             phase: work.epicStages.phase, emptyCompletion: !!work.epicStages.emptyCompletion,
-            checksNotRequested: work.epicStages.emptyCompletion ? work.epicStages.batches * 2 - work.epicStages.receipts.length : 0 };
+            checksNotRequested: work.epicStages.emptyCompletion ? work.epicStages.batches * 2 - work.epicStages.receipts.length - (work.epicStages.collectionBaseline?.reads ?? 0) : 0 };
           this.store.checkpointRetrieval(job.id, work, context.manifest, this.navigation.workflow?.continuous ? Date.now() + 360000 : undefined);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
@@ -777,7 +778,24 @@ export class DiscoveryService {
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
             completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
-          validateEpicStages(project, review, staged, batches, proposalCounts);
+          const readCollectionSource: EpicCollectionSource = sourceID => {
+            const source = this.store.getJob(sourceID);
+            if (source.projectID !== project.id) throw new Error("Incremental collection source belongs to another project.");
+            return { project: this.store.get(project.id, source.expectedRevision), job: source };
+          };
+          if (!prior && !staged.collectionBaseline && review.contextPolicy === "staged-dense-records-v5") {
+            const sources = epicHistory.slice().reverse().filter(source => source.status === "completed" && source.result
+              && source.expectedRevision < project.revision && source.context?.epicReview?.packageID === review.packageID
+              && !source.retrievalWork?.epicStages?.collectionBaseline).slice(0, 4);
+            for (const source of sources) {
+              const prepared = planEpicCollectionBaseline(project, review, batches, readCollectionSource(source.id));
+              if (!prepared) continue;
+              staged.collectionBaseline = prepared.baseline; staged.nextBatch = prepared.baseline.reads; staged.candidates = prepared.draft;
+              report(`Incremental collection reuses ${prepared.baseline.reads} exact unchanged paid read batches from their original job. Changed/later batches and every current proposal check remain required; no semantic independence or fresh retry allowance is inferred.`);
+              break;
+            }
+          }
+          validateEpicStages(project, review, staged, batches, proposalCounts, readCollectionSource);
           // Carry the validated paid ledger before progress callbacks/cancellation
           // can leave a newer matching job without its original saved stages.
           context = staged.phase === "complete" ? epicStagePublicationContext(batches, staged)
@@ -788,7 +806,7 @@ export class DiscoveryService {
               prior?.epicReviewReport?.blockers.find(blocker => blocker.packageID === review.packageID)?.reason, batches);
             if (!support) throw new Error("Saved linked-evidence recovery is no longer compatible. Original stages and spent attempts remain saved.");
             (staged.linkedEvidence ??= []).push(support);
-            validateEpicStages(project, review, staged, batches, proposalCounts);
+            validateEpicStages(project, review, staged, batches, proposalCounts, readCollectionSource);
             context = epicStageContext(linkedEvidenceStageBase(project, staged, batches[staged.nextBatch]!, staged.receipts.length, staged.candidates), staged);
             checkpoint();
             report("Continuing the saved draft with its missing linked question/answer or pending-question evidence. Completed stages and spent attempts are retained; a new response and every remaining check are required before publication.");
@@ -853,7 +871,7 @@ export class DiscoveryService {
             if (completeEmptyEpicStages(staged)) report("All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
             checkpoint();
           }
-          validateEpicStages(project, review, staged, batches, proposalCounts);
+          validateEpicStages(project, review, staged, batches, proposalCounts, readCollectionSource);
           context = epicStagePublicationContext(batches, staged);
           validateEpicReviewFinal(project, context, staged.candidates);
           work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: staged.candidates };

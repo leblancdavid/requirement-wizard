@@ -13,10 +13,17 @@ export const answerIntegrationReasons = {
   "single-answer": "Only one response was available in the submitted set. Save several answers before submitting to allow eligible grouping.",
   "single-compatible-answer": "No second compatible new answer in this feature was available in the submitted set.",
   "context-budget": "The exact combined evidence cannot fit a shared schedule. Individual work was selected before any shared request started.",
+  "estimated-cost": "The new shared schedule is estimated to need more requests than individual processing. Individual work was selected before any shared request started; repairs and actual frozen drafts can change the final cost.",
   ineligible: "The saved answer does not meet the current exact-source eligibility checks for shared integration.",
 } as const;
+const requests = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const answerIntegrationCostSchema = z.object({ policy: z.literal("complete-evidence-estimate-v1"),
+  sharedReadRequests: requests, sharedVerificationProxyRequests: requests, individualRequests: requests,
+  selected: z.enum(["shared", "individual"]), uncertainty: z.literal("draft-lookups-and-repairs-unknown") }).strict();
+export type AnswerIntegrationCost = z.infer<typeof answerIntegrationCostSchema>;
 export const answerIntegrationSchema = z.object({ format: z.literal(1), reason: z.enum(Object.keys(answerIntegrationReasons) as [keyof typeof answerIntegrationReasons, ...(keyof typeof answerIntegrationReasons)[]]),
   selectedResponses: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), compatibleAnswers: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   groupedAnswers: z.number().int().min(0).max(5),
+  cost: answerIntegrationCostSchema.optional(),
 }).strict();
 export type AnswerIntegrationDiagnostic = z.infer<typeof answerIntegrationSchema>;

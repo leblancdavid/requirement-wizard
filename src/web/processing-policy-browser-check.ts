@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { workspaceMenu, applicationMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, technicalProcessing, closeTechnicalViews } from "./menu-check-helpers.js";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import type { Connections } from "../providers/connections.js";
@@ -25,7 +25,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "true"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Manual processing browser/ }).click();
-  const settings = async () => { await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click(); };
+  const settings = async () => { await technicalProcessing(page); };
   await settings();
   const permissions = page.getByRole("region", { name: "Processing permissions", exact: true });
   const manual = permissions.getByRole("radio", { name: "Manual processing", exact: true });
@@ -46,7 +46,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-manual-processing-mobile.png", fullPage: true });
-  await page.getByRole("button", { name: /Back to workspace/ }).click();
+  await closeTechnicalViews(page);
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   await expect.poll(() => store.submissions(p.id).length).toBe(1);

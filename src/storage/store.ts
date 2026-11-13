@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { PublicationObjects } from "./publication-objects.js";
+import { stageJSON, discardStaged, portableArtifactLimit, portableProjectLimit, type StagedArtifact } from "./staged-json.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
@@ -697,6 +698,7 @@ export class ProjectStore {
     const generation = (this.db.prepare("SELECT publication_version AS version FROM workspaces WHERE project_id = ?").get(id) as { version: number }).version;
     const publicationStarted = performance.now();
     let publicationMetrics: Workspace["publicationMetrics"];
+    let stagedContinuation: StagedArtifact | undefined;
     try {
       if ((binding.formatVersion ?? 1) > 3) throw new Error("Workspace conflict: unsupported future workspace format. Upgrade the app; files were not overwritten.");
       checkWorkspace(binding);
@@ -724,25 +726,33 @@ export class ProjectStore {
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       phase("render");
-      const files = renderWorkspace(project, this.execution(id), continuation);
+      stagedContinuation = stageJSON(directory, continuation);
+      metrics.continuationBytes = stagedContinuation.bytes;
+      const files = renderWorkspace(project, this.execution(id), continuation, stagedContinuation);
+      const names = [...Object.keys(files), "continuation.json"];
+      const hashes = { ...Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])), "continuation.json": stagedContinuation.hash };
+      const sizes = Object.values(files).map(content => Buffer.byteLength(content, "utf8"));
+      metrics.artifactBytes = sizes.reduce((sum, bytes) => sum + bytes, stagedContinuation.bytes);
+      if (sizes.some(bytes => bytes > portableArtifactLimit) || metrics.artifactBytes > portableProjectLimit)
+        throw new Error("Portable project exceeds supported import size bounds. SQLite work is retained; no managed files were replaced.");
       metrics.renderMs = performance.now() - started; started = performance.now();
       // Worker computation can overlap newer decisions or same-revision job
       // checkpoints. Never publish a mixed snapshot or clear their pending save.
       const current = this.db.prepare("SELECT publication_version AS version, owner, lease_until AS lease FROM workspaces WHERE project_id = ?").get(id) as { version: number; owner: string; lease: number } | undefined;
       if (!current || current.owner !== owner || current.lease <= Date.now()) throw new Error("Workspace publication lease changed or expired. Saved decisions remain in SQLite.");
       if (current.version !== generation || this.projectRevision(id) !== project.revision) return this.workspace(id);
-      checkWorkspace(binding, Object.keys(files));
+      checkWorkspace(binding, names);
       phase("files");
-      binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
+      binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !names.includes(name));
       // Retain every recognized intermediate write until the whole publication succeeds.
-      for (const [name, content] of Object.entries(files)) binding.pendingHashes[name] = [...new Set([...(binding.pendingHashes[name] ?? []), hash(content)])];
+      for (const [name, digest] of Object.entries(hashes)) binding.pendingHashes[name] = [...new Set([...(binding.pendingHashes[name] ?? []), digest])];
       binding.status = "pending"; binding.diagnostic = null;
       // Commit the intended hashes before touching files: partial writes can be recovered.
        if (!this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ? AND publication_version = ?")
          .run(JSON.stringify(binding), id, owner, generation).changes) return this.workspace(id);
-      publishWorkspace(directory, files, binding.pendingRemovals);
+      publishWorkspace(directory, files, binding.pendingRemovals, stagedContinuation);
       metrics.filesMs = performance.now() - started;
-      binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
+      binding.hashes = hashes; binding.pendingHashes = {};
       binding.pendingRemovals = []; binding.formatVersion = 3;
       binding.portableBase ??= portableDigest(JSON.parse(files["manifest.json"]!).hashes);
       binding.savedRevision = project.revision; binding.status = "saved";
@@ -760,6 +770,9 @@ export class ProjectStore {
       binding.diagnostic = message;
       this.db.prepare("UPDATE workspaces SET payload = ?, dirty = 1 WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
     } finally {
+      // Temporary cleanup must never strand the publication lease or turn a
+      // committed manifest into a failed save. Unreferenced temps are not authority.
+      try { discardStaged(stagedContinuation); } catch { /* A locked temp may remain after an OS/process failure. */ }
       this.db.prepare("UPDATE workspaces SET owner = NULL, lease_until = NULL WHERE project_id = ? AND owner = ?").run(id, owner);
       if (binding.status === "saved" && this.workspace(id)?.status === "pending") {
         // Another process may have committed a newer revision during publication.
@@ -1788,6 +1801,9 @@ export class ProjectStore {
       CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
        COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format'), json_extract(payload, '$.answerGroupWork.format')) AS savedStageFormat,
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
+       json_extract(payload, '$.submissionWork.verification.format') AS savedVerificationFormat,
+       json_array_length(payload, '$.submissionWork.verification.batches') AS savedVerificationBatches,
+       json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline.reads') AS reusedCollectionBatches,
        json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
        COALESCE(json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests'), json_extract(payload, '$.answerGroupWork.pageRecovery.additionalRequests')) AS groupRecoveryRequests,
         json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
@@ -1829,7 +1845,7 @@ export class ProjectStore {
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
         WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) r WHERE json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL OR json_extract(r.value, '$.response.answerGroupKeep') = 1 OR (json_extract(r.value, '$.response.answerGroupCheck.valid') = 1 AND CAST(r.key AS INTEGER) > COALESCE((SELECT MAX(CAST(repair.key AS INTEGER)) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) repair WHERE json_type(repair.value, '$.response.answerGroupRepair') IS NOT NULL), -1)))
-        ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
+        ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts') + COALESCE(json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline.reads'), 0), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
       COALESCE(json_extract(payload, '$.epicReviewReport.waiting'), json_extract(payload, '$.gapReport.waiting')) AS waiting,
@@ -2023,7 +2039,7 @@ export class ProjectStore {
     // for each checkpoint. Reject future variants before deleting a generation.
     if (this.db.prepare(`SELECT 1 FROM epic_planning_contexts INDEXED BY epic_planning_context_pool WHERE project_id = ? AND
       (format != 1 OR COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'staged', 'budget', 'planning-failure') OR
+       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'staged', 'budget', 'planning-failure', 'policy-miss') OR
        (json_extract(payload, '$.outcome') = 'planning-failure' AND
         COALESCE(json_extract(payload, '$.kind'), '') NOT IN ('context', 'target', 'seed', 'stage-limit')))` ).get(projectID))
       throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
@@ -2064,6 +2080,7 @@ export class ProjectStore {
       if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       const work = retrievalWorkSchema.parse(input);
       if (job.retrievalWork && (job.retrievalWork.research !== work.research
+        || JSON.stringify(job.retrievalWork.epicStages?.collectionBaseline ?? null) !== JSON.stringify(work.epicStages?.collectionBaseline ?? null)
         || job.retrievalWork.epicStages?.planKey !== work.epicStages?.planKey
         || JSON.stringify(job.context?.gapExploration) !== JSON.stringify(context.gapExploration)
         || job.context?.epicReview?.packageID !== context.epicReview?.packageID
@@ -3031,7 +3048,11 @@ export class ProjectStore {
               const staged = job.retrievalWork?.epicStages;
               if (!staged || staged.phase !== "complete" || !job.retrievalWork?.final) throw new Error("Partial staged decision review cannot publish proposals.");
               const batches = epicReviewBatches(project, job.context.epicReview);
-              const verified = validateEpicStages(project, job.context.epicReview, staged, batches);
+              const verified = validateEpicStages(project, job.context.epicReview, staged, batches, undefined, sourceID => {
+                const source = this.getJob(sourceID);
+                if (source.projectID !== project.id) throw new Error("Incremental collection source belongs to another project.");
+                return { project: this.get(project.id, source.expectedRevision), job: source };
+              });
               const publication = epicStagePublicationContext(batches, staged);
               if (JSON.stringify(result) !== JSON.stringify(verified) || JSON.stringify(job.retrievalWork.final.output) !== JSON.stringify(verified)
                 || JSON.stringify(job.context.includedIDs) !== JSON.stringify(publication.manifest.includedIDs)
