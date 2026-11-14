@@ -1,5 +1,69 @@
 # Data migrations and upgrade compatibility
 
+## Lower-allocation portable rendering (2026-11-13)
+
+**No SQLite/portable format or freshness change.** The serializer emits exactly
+the existing ordered `JSON.stringify(value, null, 2) + "\n"` bytes for app-owned
+plain JSON records. Arrays no longer allocate a second tuple/key/value graph;
+objects no longer construct/filter `Object.entries` copies. Long keys/text encode
+in bounded slices with surrogate-pair boundaries preserved and native escaping for
+lone surrogates. Undefined/function/symbol object fields remain omitted; array
+slots retain native null behavior. Ancestor cycles/non-plain records still reject,
+and staging errors retain the existing temp cleanup and size guards.
+
+After continuation selection, publication explicitly releases its private original
+job/submission arrays, structural-sharing lookup and encoded historical-string
+memo before render. Retained continuation nodes remain owned by the output graph;
+no paid evidence, receipts, drafts, revisions, model selections or durable caches
+are deleted or rewritten. Clearing a snapshot memo causes a later read to authenticate
+the same original records again. This is an allocation/lifetime optimization, not
+a reason to invalidate or repeat completed work. Segmented part sizing counts
+newlines without allocating regex match arrays; part bytes and publication order
+remain unchanged.
+
+The supplied revision-3710 abort reported render at about 184 MB heap usage under
+a 256 MiB old-space cap. The duplicate-container and retained-cache costs are real
+code paths; the exact production abort has **not** been reproduced or proven fixed.
+A curated 750,000-element array now stages/hashes with a 48 MiB heap. Unicode,
+escaping, lone/pair surrogate boundaries and released-cache evidence preservation
+have targeted tests. A retained 24 MiB string also staged and incrementally hashed
+under that same 48 MiB cap without a whole encoded copy. All 39 workspace/snapshot
+tests passed together, including both constrained-heap cases. Type checking (including explicit strict
+checks of the opt-in scripts), desktop TypeScript emission and an emitted
+publication-child smoke and portable browser checks passed. No user project or production managed folder was
+modified. The full `npm test` chain passed 2,127 tests (982 pretest, 836 main,
+309 posttest); the later-added retained-text heap case also passed in the separate
+39-test workspace/snapshot run.
+
+## Footer discovery batch control (2026-11-13)
+
+No persisted schema or evidence/freshness changes. The existing project-local
+question target is now visible in the footer. An explicit request-only
+`collectQuestionBatch` option permits the Discover loop to cross saved staged
+request/time scheduling checkpoints, bounded by the existing ten-pass/fifteen-minute
+run. Only interrupted staged scheduling stops with zero unfinished attempts qualify;
+failures and user cancellation do not. Paid jobs remain immutable and normal
+checkpoint replay preserves every receipt/attempt. Legacy requests retain their
+single-window pause semantics. Explicit scoped batching counts only pending
+questions in that epic; older targeted requests retain project-wide counting.
+No startup or reload grants work. The coordinated workflow retains its separate
+five-question policy; this change does not expand existing workflow consent.
+
+Latest supplied diagnostics: 190 calls across 20 runs, about 1,916 seconds elapsed
+and 1,652 seconds adapter time (86%). Packed verification is active, but repeated
+packages still often yield one surviving question. A larger batch improves the
+interaction cadence, not the latency of each model request. The revision-3710
+portable render child abort remains unreplicated and is not claimed fixed here.
+
+Qualification: type checking and UI build passed; eight targeted resume/batch tests
+passed, including checkpoint continuation without replay, 5/10 target failure stops,
+scope counting and unchanged legacy six-request explicit-resume behavior. The
+39 collection/diagnostic tests passed. The question-collection browser check passed
+footer selection/reload with zero requests, existing pause/resume and mobile flows.
+The complete `npm run test:browser` chain, including postchecks, passed; the final
+footer dispatch/mobile assertions also passed separately.
+No live model comparison or production-project mutation was performed.
+
 ## Question yield, frozen discovery checks and segmented continuation (2026-11-13)
 
 The new export supplied after revision 3679 records 18 runs, 220 adapter attempts

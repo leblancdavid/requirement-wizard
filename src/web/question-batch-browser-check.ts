@@ -45,6 +45,10 @@ try {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: "Question collection browser", exact: true }).click();
+  const target = page.getByRole("combobox", { name: "Question batch target", exact: true });
+  await target.selectOption("10"); assert.equal(topics.length, 0, "Selecting a target must not spend requests");
+  await page.reload(); await expect(target).toHaveValue("10");
+  await target.selectOption("5"); assert.equal(topics.length, 0);
   await processingQueue(page);
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await queue.getByRole("button", { name: "Continue specification", exact: true }).click();

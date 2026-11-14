@@ -38,6 +38,31 @@ test("bounded JSON staging preserves exact ordered Unicode bytes and rejects inc
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("bounded string encoding preserves escapes and lone/pair surrogates at every chunk boundary", () => {
+  for (const suffix of ["😀", "\ud800", "\udfff", '"\\\n\r\t\u0000', "é\u2028\u2029"]) {
+    for (const offset of [16382, 16383, 16384, 32767]) {
+      const key = "k".repeat(offset) + suffix, text = "x".repeat(offset) + suffix + "tail";
+      const value = Object.assign(Object.create(null) as Record<string, unknown>, { [key]: [text, undefined, Symbol("omit"), () => 0], omitted: undefined });
+      let actual = ""; writePrettyJSON(value, chunk => { actual += chunk; });
+      assert.equal(actual, JSON.stringify(value, null, 2) + "\n");
+    }
+  }
+});
+
+test("wide JSON arrays stage within a constrained heap without a second container graph", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=48", "--import", "tsx", "scripts/check-staged-json-memory.ts"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.equal(JSON.parse(result.stdout.trim()).entries, 750000);
+});
+
+test("large retained text stages within a constrained heap without a whole encoded string copy", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=48", "--import", "tsx", "scripts/check-staged-json-memory.ts", "--text"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.equal(JSON.parse(result.stdout.trim()).bytes, 24 * 1024 * 1024 + 3);
+});
+
 test("streamed continuation preserves artifact/manifest bytes, journal compatibility and external edits", () => {
   const f = fixture();
   try {
@@ -89,6 +114,8 @@ test("publication sharing preserves exact ordered JSON and copy-on-write portabl
     const bounded = new PublicationObjects(512, 2);
     for (let index = 0; index < 100; index++) assert.deepEqual(bounded.share({ index, exact: `Record ${index}` }), { index, exact: `Record ${index}` });
     assert.ok(bounded.profile.peakCacheBytes <= 512);
+    pool.clear(); assert.deepEqual(shared, before, "Releasing a lookup cache cannot mutate retained evidence");
+    assert.deepEqual(pool.share(job), job, "The released cache may be reused without changing the source graph");
   } finally { f.cleanup(); }
 });
 

@@ -533,7 +533,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
-        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), continueRefinementJobID: z.string().uuid().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional() }).strict().parse(raw);
+        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), continueRefinementJobID: z.string().uuid().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional(), collectQuestionBatch: z.boolean().optional() }).strict()
+          .refine(v => !v.collectQuestionBatch || v.questionTarget !== undefined && v.gapMode === "epic" && !v.refinementOnly, "Batch collection requires an explicit epic question target.").parse(raw);
         if (input.savedEvidencePolicy === "prefix-aux-v1" && (input.refinementOnly || !project.requirements.length && !project.questions.length)) throw new Error("The saved-evidence pilot is only available for manual next-gap exploration after initial interpretation.");
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {

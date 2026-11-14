@@ -74,6 +74,44 @@ test("finite response processing cannot fall through to legacy discovery when it
   } finally { await queue?.close(); store.close(); }
 });
 
+test("explicit footer batch crosses scheduling windows without replaying paid stages", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    let p = seed(store);
+    for (let i = 0; i < 30; i++) p = store.note(p.id, p.revision,
+      Array.from({ length: 64 }, (_, n) => createHash("sha256").update(`batch-${i}-${n}`).digest("hex")).join(""), "project");
+    const seen = new Set<string>();
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      const key = `${stage.phase}-${stage.batch}`; assert.ok(!seen.has(key)); seen.add(key);
+      return stage.phase === "discover" ? { ...empty(), questions: [{ text: "Retain this receipt?", whyItMatters: "Recovery", evidenceIDs: [context.manifest.includedIDs[0]!],
+        options: [{ label: "Keep", consequence: "Retain" }, { label: "Discard", consequence: "Remove" }] }] }
+        : { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+    } }, { stagedLimits: { requests: 2, durationMs: 900000 } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 5, collectQuestionBatch: true, research: false }); await idle(queue, p.id);
+    assert.ok(seen.size > 2); assert.ok(store.jobs(p.id).some(j => j.status === "interrupted"));
+    assert.ok(store.jobs(p.id).some(j => j.retrievalWork?.epicStages?.phase === "complete"));
+    assert.deepEqual(store.get(p.id).sources, p.sources);
+  } finally { await queue?.close(); store.close(); }
+});
+
+for (const target of [5, 10]) test(`footer target ${target} ignores pending questions outside the selected epic and stops on failure`, async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    let p = seed(store);
+    for (let offset = 0; offset < Math.min(target, 5); offset += 5) {
+      const initial = store.beginJob(p.id, store.projectRevision(p.id)).job; store.claimJob(initial.id, Date.now() + 60000);
+      store.finishJob(initial.id, { ...empty(), questions: Array.from({ length: 5 }, (_, i) => ({ epicID: "project", text: `Outside choice ${offset + i}?`, whyItMatters: "Scope",
+        options: [{ label: "Keep", consequence: "Retain" }, { label: "Discard", consequence: "Remove" }] })) });
+    }
+    p = store.get(p.id); let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { calls++; throw new Error("Fixture failure must stop the batch"); } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: target, collectQuestionBatch: true, research: false }); await idle(queue, p.id);
+    assert.equal(calls, 1); assert.equal(store.jobs(p.id).at(-1)!.status, "failed");
+    assert.deepEqual(store.get(p.id).questions, p.questions);
+  } finally { await queue?.close(); store.close(); }
+});
+
 test("browser staged Resume upgrades a legacy six-request pause after SQLite reopen without replay", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "browser-resume-")), path = join(directory, "projects.sqlite");

@@ -43,7 +43,10 @@ export function stageContinuation(directory: string, value: Continuation, partLi
         const item = (value[field] as unknown as Record<string, unknown>)[key];
         let recordBytes = 0, indentation = 0;
         // Extra indentation in the part envelope is bounded by its line count.
-        writePrettyJSON([key, item], chunk => { recordBytes += Buffer.byteLength(chunk, "utf8"); indentation += (chunk.match(/\n/g)?.length ?? 0) * 4; });
+        writePrettyJSON([key, item], chunk => {
+          recordBytes += Buffer.byteLength(chunk, "utf8");
+          for (let at = chunk.indexOf("\n"); at !== -1; at = chunk.indexOf("\n", at + 1)) indentation += 4;
+        });
         if (entries.length && size + recordBytes + indentation > partLimit) flush();
         entries.push([key, item]); size += recordBytes + indentation + 8; counts[field]++;
         if (size >= partLimit) flush();

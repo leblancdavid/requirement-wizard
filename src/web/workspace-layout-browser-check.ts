@@ -45,8 +45,8 @@ try {
   const footer = page.getByRole("contentinfo", { name: "Discovery controls", exact: true });
   await expect(footer).toBeInViewport();
   await expect(footer.getByRole("button", { name: "Discover", exact: true })).toBeEnabled();
-  await expect(footer.getByRole("combobox")).toHaveValue("all");
-  await expect(footer.getByRole("combobox").locator('option[value="all"]')).toHaveText("All epics");
+  await expect(footer.getByRole("combobox", { name: "Filter by feature" })).toHaveValue("all");
+  await expect(footer.getByRole("combobox", { name: "Filter by feature" }).locator('option[value="all"]')).toHaveText("All epics");
   // Footer guidance stays off the layout, waits for sustained hover, and is
   // immediately available to keyboard users without starting any work.
   const discover = footer.getByRole("button", { name: "Discover", exact: true });
@@ -64,12 +64,12 @@ try {
   await expect(page.getByRole("tooltip")).toBeInViewport();
   await discover.press("Escape");
   await expect(page.getByRole("tooltip")).toHaveCount(0);
-  await footer.getByRole("combobox").focus();
+  await footer.getByRole("combobox", { name: "Question batch target" }).focus();
   await page.keyboard.press("Tab");
   await expect(discover).toBeFocused();
   await expect(page.getByRole("tooltip")).toContainText("Uses your AI plan");
   await page.mouse.move(0, 0);
-  await footer.getByRole("combobox").focus();
+  await footer.getByRole("combobox", { name: "Filter by feature" }).focus();
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   await expect(page.locator(".work-heading")).toHaveCount(0);
   await expect(page.locator(".workspace-status")).toHaveCount(0);
@@ -79,7 +79,7 @@ try {
   await expect(page.getByRole("tab", { name: /^Design/ })).toContainText("1");
   await expect(page.getByRole("button", { name: "To answer 0", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Submitted 0", exact: true })).toBeVisible();
-  await footer.getByRole("combobox").selectOption("project");
+  await footer.getByRole("combobox", { name: "Filter by feature" }).selectOption("project");
   await page.getByRole("button", { name: "Needs attention 1", exact: true }).click();
   await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
   await expect(page.getByText(question.text, { exact: true })).toHaveCount(1);
@@ -91,7 +91,7 @@ try {
   await page.getByRole("button", { name: "Needs attention 1", exact: true }).click();
   await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
   await page.getByRole("button", { name: "To answer 0", exact: true }).click();
-  await footer.getByRole("combobox").selectOption("all");
+  await footer.getByRole("combobox", { name: "Filter by feature" }).selectOption("all");
   // A newer waiting correction belongs only in Submitted. Once its review has
   // completed, reopening must not resurrect the original failed attempt.
   const originalAttempt = structuredClone(store.submissions(p.id).find(item => item.id === response.id)!);
@@ -118,16 +118,23 @@ try {
   await expect.poll(() => requests.length).toBe(1);
   assert.equal(requests[0]!.focusEpicID, undefined);
   assert.equal(requests[0]!.gapMode, "epic");
-  await footer.getByRole("combobox").selectOption("inbox");
+  assert.equal(requests[0]!.collectQuestionBatch, true);
+  assert.equal(requests[0]!.questionTarget, 5);
+  await footer.getByRole("combobox", { name: "Question batch target" }).selectOption("10");
+  assert.equal(requests.length, 1, "Changing the batch size starts no request");
+  await footer.getByRole("combobox", { name: "Filter by feature" }).selectOption("inbox");
   await footer.getByRole("button", { name: "Discover", exact: true }).click();
   await expect.poll(() => requests.length).toBe(2);
   assert.equal(requests[1]!.focusEpicID, "inbox");
+  assert.equal(requests[1]!.questionTarget, 10);
+  assert.equal(requests[1]!.collectQuestionBatch, true);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(footer).toBeInViewport();
+  await expect(footer.getByRole("combobox", { name: "Question batch target" })).toBeInViewport();
   await expect(footer.getByRole("button", { name: "Discover", exact: true })).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-design-footer-mobile.png", fullPage: true });
-  await footer.getByRole("combobox").selectOption("all");
+  await footer.getByRole("combobox", { name: "Filter by feature" }).selectOption("all");
   await page.setViewportSize({ width: 1280, height: 960 });
   await page.unroute(analyzeRoute);
   await page.getByRole("tab", { name: /^Specification/ }).click();

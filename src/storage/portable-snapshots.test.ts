@@ -172,6 +172,10 @@ test("68 to 69 upgrade shares authenticated exact records, preserves old computa
     assert.deepEqual(warm(current.revision), later);
     assert.ok(shared.objectReads > 0 && shared.objectHits > 0, "Exact strings are authenticated once and shared across historical snapshots");
     assert.equal(shared.hits, 2);
+    const readsBeforeClear = shared.objectReads;
+    warm.clear();
+    assert.deepEqual(warm(seed.revision), old);
+    assert.ok(shared.objectReads > readsBeforeClear, "Released memo strings are reauthenticated from exact records, not silently trusted");
     const ordinary = continuationState(current, [job], [], normalize);
     const optimized = continuationState(current, [job], [], normalize, warm);
     assert.deepEqual(renderWorkspace(current, undefined, optimized), renderWorkspace(current, undefined, ordinary));

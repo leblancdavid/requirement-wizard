@@ -21,21 +21,45 @@ export function writePrettyJSON(value: unknown, write: (chunk: string) => void) 
       if (buffer.length >= 16384) { write(buffer); buffer = ""; }
     }
   };
+  const string = (text: string) => {
+    if (text.length <= 16384) { emit(JSON.stringify(text)); return; }
+    // Encode bounded slices, not another full copy of a retained human/model
+    // body. Never split a surrogate pair: JSON.stringify escapes lone surrogates.
+    emit('"');
+    for (let offset = 0; offset < text.length;) {
+      let end = Math.min(text.length, offset + 16384);
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]!) && /[\uDC00-\uDFFF]/.test(text[end]!)) end--;
+      emit(JSON.stringify(text.slice(offset, end)).slice(1, -1)); offset = end;
+    }
+    emit('"');
+  };
   const visit = (item: unknown, depth: number) => {
+    if (typeof item === "string") { string(item); return; }
     if (item === null || typeof item !== "object") { emit(JSON.stringify(item) ?? "null"); return; }
     if (ancestors.has(item)) throw new Error("Cannot publish cyclic JSON evidence.");
     if (Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null && !Array.isArray(item))
       throw new Error("Portable publication requires plain JSON records.");
     ancestors.add(item);
-    const array = Array.isArray(item), entries = array ? Array.from({ length: item.length }, (_, i) => [String(i), item[i]] as const)
-      : Object.entries(item).filter(([, v]) => v !== undefined && typeof v !== "function" && typeof v !== "symbol");
+    const array = Array.isArray(item);
     emit(array ? "[" : "{");
-    for (const [index, [key, child]] of entries.entries()) {
-      emit(`${index ? "," : ""}\n${"  ".repeat(depth + 1)}`);
-      if (!array) emit(`${JSON.stringify(key)}: `);
+    let count = 0;
+    const entry = (key: string | undefined, child: unknown) => {
+      emit(`${count++ ? "," : ""}\n${"  ".repeat(depth + 1)}`);
+      if (key !== undefined) { string(key); emit(": "); }
       visit(child, depth + 1);
+    };
+    if (array) {
+      // No tuple/key array proportional to a large evidence container. Sparse
+      // slots, undefined and functions still emit null exactly like JSON.stringify.
+      for (let index = 0; index < item.length; index++) entry(undefined, item[index]);
+    } else {
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        const child = (item as Record<string, unknown>)[key];
+        if (child !== undefined && typeof child !== "function" && typeof child !== "symbol") entry(key, child);
+      }
     }
-    if (entries.length) emit(`\n${"  ".repeat(depth)}`);
+    if (count) emit(`\n${"  ".repeat(depth)}`);
     emit(array ? "]" : "}"); ancestors.delete(item);
   };
   visit(value, 0); emit("\n"); if (buffer) write(buffer);

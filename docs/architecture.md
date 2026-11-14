@@ -1,5 +1,13 @@
 # Architecture outline
 
+Portable rendering now traverses arrays/objects without a second entry graph and
+encodes large text in bounded Unicode-safe slices. After continuation selection,
+`ProjectStore.syncWorkspace()` releases its publication-private historical arrays
+and lookup caches before staging. Output bytes, exact evidence and journal guards
+are unchanged; no durable format/freshness migration is needed. This reduces
+allocation pressure but does not yet qualify the supplied production render abort.
+See [compatibility and checks](migrations.md#lower-allocation-portable-rendering-2026-11-13).
+
 `src/core/epic-verification.ts` packs the exact dense discovery evidence inventory
 against its reconstructed frozen draft only before any check attempt/receipt.
 Original paid reads remain unchanged; every mandatory body is still checked. New

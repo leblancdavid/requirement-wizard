@@ -35,7 +35,7 @@ export const snapshotCacheProfile = (): SnapshotCacheProfile => ({ sourceReadMs:
 /** Publication-local, bounded exact-string sharing. Never retains mutable records
  * or trusts a snapshot without checking its original revision bytes. */
 export function createPortableSnapshotReader(db: Database.Database, projectID: string, normalize: (revision: number) => Project,
-  originals: Database.Database = db, profile = snapshotCacheProfile()): (revision: number) => PortableSnapshotRecords {
+  originals: Database.Database = db, profile = snapshotCacheProfile()): ((revision: number) => PortableSnapshotRecords) & { clear(): void } {
   const memo = new Map<string, string>(); let memoBytes = 0;
   const remember = (key: string, text: string) => {
     const bytes = (key.length + text.length) * 2 + 64;
@@ -128,8 +128,8 @@ export function createPortableSnapshotReader(db: Database.Database, projectID: s
   // Keep the source read/digest/cache resolution in one SQLite snapshot. A source
   // replacement cannot commit between authentication and use of its derived data.
   const transactionalRead = db.transaction(read);
-  return revision => {
+  return Object.assign((revision: number) => {
     try { return transactionalRead(revision); }
     catch (error) { memo.clear(); memoBytes = 0; throw error; }
-  };
+  }, { clear() { memo.clear(); memoBytes = 0; } });
 }

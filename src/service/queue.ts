@@ -640,7 +640,7 @@ export class DiscoveryQueue {
       : { ...options, gapMode: "epic" });
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; collectQuestionBatch?: boolean; processOnly?: boolean; submissionIDs?: string[] } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -659,6 +659,7 @@ export class DiscoveryQueue {
       replayRefinementStages(refinementMaterials(project, work.requirementID, undefined, work.pair), work);
     }
     if (options.questionTarget !== undefined && (!Number.isInteger(options.questionTarget) || options.questionTarget < 1 || options.questionTarget > 50 || options.refinementOnly)) throw new Error("Choose a question target from 1 to 50 for gap exploration.");
+    if (options.collectQuestionBatch && (options.questionTarget === undefined || options.gapMode !== "epic" || options.processOnly || options.refinementOnly)) throw new Error("Batch collection requires an explicit epic question target.");
     if (options.refreshProposalID) {
       const proposal = project.refinements.find((p) => p.id === options.refreshProposalID && p.status === "pending");
       if (!options.refinementOnly || !proposal || !refinementIsStale(project, proposal)) throw new Error("Choose an outdated pending proposal to refresh.");
@@ -763,7 +764,7 @@ export class DiscoveryQueue {
     }
   }
 
-  private async findQuestions(id: string, options: { questionTarget?: number; focusEpicID?: string; research?: boolean; gapMode?: "epic"; savedEvidencePolicy?: SavedEvidencePolicy }, signal: AbortSignal, report: (message: string) => void) {
+  private async findQuestions(id: string, options: { questionTarget?: number; collectQuestionBatch?: boolean; focusEpicID?: string; research?: boolean; gapMode?: "epic"; savedEvidencePolicy?: SavedEvidencePolicy }, signal: AbortSignal, report: (message: string) => void) {
     const target = options.questionTarget!;
     const batchSignal = AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]);
     const waitingInput = () => {
@@ -778,11 +779,17 @@ export class DiscoveryQueue {
         report("Gap scan paused for saved responses. Resolve or process waiting responses before finding more questions."); return;
       }
       const project = this.service.store.get(id);
-      // The target is project-wide, even when the next packages are feature-scoped.
-      const pending = project.questions.filter((q) => q.status === "pending").length;
+      const pending = project.questions.filter((q) => q.status === "pending"
+        && (!options.collectQuestionBatch || !options.focusEpicID || q.epicID === options.focusEpicID)).length;
       if (pending >= target) { report(`Question target reached: ${pending} pending (target ${target}). All questions from the last package were kept.`); return; }
       report(`Finding gaps · ${pending} pending / target ${target} · package ${index + 1} of at most 10. The target is not a quota or hard cap.`);
       const job = await this.service.analyze(id, project.revision, { ...options, signal: batchSignal, onProgress: report });
+      if (options.collectQuestionBatch && job.status === "interrupted" && !batchSignal.aborted
+        && job.retrievalWork?.stagedRun?.paused && job.retrievalWork.epicStages
+        && job.retrievalWork.attempts === 0 && this.service.store.projectRevision(id) === job.expectedRevision) {
+        report("Batch collection continues from the saved scheduling checkpoint; completed reads/checks and spent attempts remain retained.");
+        continue;
+      }
       if (job.status !== "completed") { this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Gap scan ${job.status}; completed packages are saved.`); return; }
       if (!job.result && job.context?.epicReview && job.epicReviewReport?.blockers.some((b) => b.packageID === job.context!.epicReview!.packageID)) {
         report("Package evidence blocker saved, not reviewed. Continuing independent eligible packages within the same run limits.");

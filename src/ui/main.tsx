@@ -343,7 +343,7 @@ function App() {
   }
   async function reviewEpic() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before reviewing.");
-    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic", questionTarget,
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic", questionTarget, collectQuestionBatch: true,
       research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function resumeDiscovery() {
@@ -820,7 +820,10 @@ function App() {
       {!showSettings && !creating && project && summary && data && (tab === "discover" || tab === "review") && <footer className="design-footer" role="contentinfo" aria-label={tab === "discover" ? "Discovery controls" : "Refinement controls"}>
         <div className="design-footer-inner gap-controls">
           <label className="area-filter">Epic<select aria-label={tab === "discover" ? "Filter by feature" : "Refinement scope"} value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
-          {tab === "discover" ? <ActionButton className="primary" reason={discoveryReason} tooltip={`Find missing decisions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan.`} tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>Discover</ActionButton>
+          {tab === "discover" && <label className="area-filter" title="Soft target for pending questions in the selected scope. Discover uses your AI plan for up to ten work windows or 15 minutes; fewer questions may be returned when evidence or decisions block progress.">Questions<select aria-label="Question batch target" value={questionTarget} disabled={busy} onChange={event => {
+            const value = Number(event.target.value); setQuestionTarget(value); localStorage.setItem(`reqwizit-question-target:${project.id}`, String(value));
+          }}>{[...new Set([1, 5, 10, questionTarget])].sort((a, b) => a - b).map(value => <option key={value} value={value}>{value}</option>)}</select></label>}
+          {tab === "discover" ? <ActionButton className="primary" reason={discoveryReason} tooltip={`Find missing decisions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan. Soft target: ${questionTarget} pending questions; up to ten work windows or 15 minutes. Blockers can yield fewer questions.`} tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>Discover</ActionButton>
             : <ActionButton className="primary" reason={discoveryReason} tooltip="Improve requirements for review in the selected epics: check wording, duplicates and conflicting choices. Uses your AI plan; no coding." tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={refineRequirements}>Refine</ActionButton>}
           {tab === "discover" && epicID === "all" && data.workflow?.canCollectMore && <ActionButton className="secondary" disabled={busy || connectionChanged || needsInitialization}
             tooltip="Find more independent questions across project areas in one additional work window, using your AI plan. Existing questions remain; no answers or assessments are processed."

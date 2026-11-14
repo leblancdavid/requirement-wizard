@@ -1,5 +1,15 @@
 # Browser workspace, epics, and estimated completeness
 
+The Design footer exposes a project-local **Questions** soft target (1, 5 or 10;
+existing custom targets remain selectable). Changing it starts no work. **Discover**
+uses that target in the selected epic, or project-wide under All epics. It may
+continue saved staged scheduling checkpoints within at most ten passes and fifteen
+minutes. Failures, cancellation, saved input and exhausted stage attempts still
+stop work; no partially checked draft publishes. Smaller batches remain possible
+when eligible independent gaps run out. This footer target applies to Discover,
+not the separate Continue specification workflow, which retains its five-question
+cooperative collection policy.
+
 After a useful smaller question batch stops at its work-window boundary, Design
 offers **Find more before processing answers** under All epics. It explicitly
 authorizes one more collection window, retaining questions and charged attempts;

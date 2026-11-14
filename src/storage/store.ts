@@ -724,6 +724,10 @@ export class ProjectStore {
       const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
         historicalRecords,
         (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile, { transferJobs: true });
+      // These are private publication inputs, not store-owned records. The
+      // continuation now owns everything selected for export. Release discarded
+      // jobs and encoded lookup caches before staging/rendering grows its buffers.
+      jobs.length = 0; submissions.length = 0; shared.clear(); historicalRecords.clear();
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       phase("render");

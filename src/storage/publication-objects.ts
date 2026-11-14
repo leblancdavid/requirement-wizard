@@ -12,6 +12,10 @@ export class PublicationObjects {
 
   share<T>(value: T): T { return this.visit(value).value as T; }
 
+  /** The output graph owns retained nodes; the lookup table is no longer needed
+   * during rendering and must not pin discarded historical jobs. */
+  clear() { this.nodes.clear(); this.bytes = 0; }
+
   private visit(input: unknown): { value: unknown; id: string } {
     let value: unknown, signature: string, bytes: number;
     if (Array.isArray(input)) {
