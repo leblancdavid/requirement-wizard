@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { PublicationObjects } from "./publication-objects.js";
 import { portableArtifactLimit, portableProjectLimit } from "./staged-json.js";
 import { stageContinuation, discardContinuation, type StagedContinuation } from "./continuation-parts.js";
+import { publicationFailureClassifier } from "./publication-failure.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
@@ -41,7 +42,7 @@ import { extendRecoveryRevision, recoveryRevisionSchema, definitionRevisionSchem
 import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, migrateWorkspaceDirectory, readPortableWorkspace, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace, type PublicationProgress } from "./workspace.js";
-import { continuationState, decodePortable, portableDigest } from "./portable.js";
+import { continuationState, decodePortable, portableDigest, portableFiles } from "./portable.js";
 import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
@@ -111,13 +112,17 @@ import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-gr
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
+import { organizationCheckSchema, validateOrganizationJob, organizationMaterials, organizationStage, organizationOperations, recordOrganizationReply, organizationReviewCurrent, organizationSize, organizationSchedulingKey } from "../core/organization-check.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
-  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review", "definition-change-review", "definition-change-group"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review", "definition-change-review", "definition-change-group", "organization-check"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind === "organization-check" || job.organizationCheck || job.context?.organizationCheck) {
+    validateOrganizationJob(job);
+  }
   if (job.definitionChangeGroupWork || job.kind === "definition-change-group" || job.context?.definitionChangeGroupReview) {
     const work = definitionChangeGroupWorkSchema.parse(job.definitionChangeGroupWork), marker = definitionChangeGroupMarkerSchema.parse(job.context?.definitionChangeGroupReview);
     if (job.kind !== "definition-change-group" || marker.groupKey !== work.groupKey || job.context?.revision !== job.expectedRevision
@@ -347,16 +352,18 @@ export class ProjectStore {
       const source = import.meta.url.endsWith(".ts"), owner = randomUUID();
       const entry = fileURLToPath(new URL(`./workspace-publication-process.${source ? "ts" : "js"}`, import.meta.url));
       const heap = Math.max(16, Math.min(512, this.options.publicationHeapMb ?? 256));
+      const failureCause = publicationFailureClassifier();
       const worker = this.publicationWorker = fork(entry, [this.path, owner], {
         execArgv: [`--max-old-space-size=${heap}`, ...(source ? ["--import", "tsx"] : [])],
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-        stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "json",
+        stdio: ["ignore", "ignore", "pipe", "ipc"], serialization: "json",
       });
+      worker.stderr?.on("data", (chunk: Buffer) => failureCause.observe(chunk));
       worker.on("message", ({ projectID, retry, progress }: { projectID: string; retry?: boolean; progress?: PublicationProgress }) => {
         if (this.publicationWorker !== worker) return;
         const task = this.publicationTasks.get(projectID);
         if (progress) {
-          if (task && progress.projectID === projectID && ["history", "continuation", "render", "files"].includes(progress.phase)
+          if (task && progress.projectID === projectID && ["history", "continuation", "continuation-staging", "workspace-render", "files"].includes(progress.phase)
             && Number.isSafeInteger(progress.revision) && progress.revision > 0 && Number.isSafeInteger(progress.heapUsedBytes) && progress.heapUsedBytes >= 0) task.progress = progress;
           return;
         }
@@ -373,7 +380,7 @@ export class ProjectStore {
           const binding = this.workspace(id);
           const progress = this.publicationTasks.get(id)?.progress;
           const last = progress ? `last reported phase ${progress.phase}, revision ${progress.revision}, heap ${progress.heapUsedBytes} bytes` : "no publication phase reported; child startup may not have finished";
-          if (binding) { binding.status = "unavailable"; binding.diagnostic = `The isolated portable-save process stopped before finishing (${exit}; heap cap ${heap} MiB; cause not established; ${last}). Committed SQLite decisions and checkpoints are retained. Retry folder sync; no model call will be repeated by publication.`;
+          if (binding) { binding.status = "unavailable"; binding.diagnostic = `The isolated portable-save process stopped before finishing (${exit}; heap cap ${heap} MiB; ${failureCause.description()}; ${last}). Committed SQLite decisions and checkpoints are retained. Retry folder sync; no model call will be repeated by publication.`;
             this.db.prepare("UPDATE workspaces SET payload = ?, dirty = 1, owner = NULL, lease_until = NULL WHERE project_id = ? AND (owner IS NULL OR owner = ?)")
               .run(JSON.stringify(binding), id, owner); }
         }
@@ -721,7 +728,7 @@ export class ProjectStore {
       const historicalRecords = createPortableSnapshotReader(this.db, id, (revision) => this.get(id, revision), this.db,
         metrics.continuationProfile.snapshotCache);
       phase("continuation");
-      const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
+      let continuation: ReturnType<typeof continuationState> | undefined = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
         historicalRecords,
         (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile, { transferJobs: true });
       // These are private publication inputs, not store-owned records. The
@@ -730,12 +737,19 @@ export class ProjectStore {
       jobs.length = 0; submissions.length = 0; shared.clear(); historicalRecords.clear();
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
-      phase("render");
+      phase("continuation-staging");
       stagedContinuation = stageContinuation(directory, continuation);
       const parts = Object.entries(stagedContinuation.parts ?? {});
       const continuationBytes = stagedContinuation.bytes + parts.reduce((sum, [, part]) => sum + part.bytes, 0);
       metrics.continuationBytes = continuationBytes;
-      const files = renderWorkspace(project, this.execution(id), continuation, stagedContinuation);
+      const execution = this.execution(id);
+      const preparedPortableFiles = portableFiles(project, execution, continuation, true);
+      // The bytes and their hashes are now durable in private staged files. Only
+      // small format/state metadata is needed to render the remaining artifacts.
+      // Do not pin every historical receipt/snapshot while creating those strings.
+      continuation = undefined;
+      phase("workspace-render");
+      const files = renderWorkspace(project, execution, undefined, stagedContinuation, preparedPortableFiles);
       const names = [...Object.keys(files), "continuation.json", ...parts.map(([name]) => name)];
       const hashes = { ...Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])), "continuation.json": stagedContinuation.hash,
         ...Object.fromEntries(parts.map(([name, part]) => [name, part.hash])) };
@@ -1173,6 +1187,143 @@ export class ProjectStore {
     return this.mutate(id, revision, "Human organized project areas", (project) => organize(project, operations));
   }
 
+  /** Metadata/evidence inspection only. Oversize or unverifiable candidates remain
+   * advisory; they neither start a model call nor block specification readiness. */
+  automaticOrganizationCandidate(id: string, resumeJobIDs: string[] = []) {
+    const project = this.get(id);
+    for (const epic of project.epics.filter(e => !e.archived && !["project", "inbox"].includes(e.id))) {
+      if (!organizationSize(project, epic.id).candidate) continue;
+      try {
+        const material = organizationMaterials(project, epic.id), schedulingKey = organizationSchedulingKey(project, epic.id);
+        let deferred = false;
+        for (const row of this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.kind') = 'organization-check'
+          AND json_extract(payload, '$.context.focusEpicID') = ? ORDER BY rowid DESC`).iterate(id, epic.id) as Iterable<{ payload: string }>) {
+          const job = readStoredJob(row.payload);
+          let same = job.organizationCheck!.inputKey === material.inputKey;
+          if (!same) {
+            try { same = organizationSchedulingKey(this.get(id, job.expectedRevision), epic.id) === schedulingKey; }
+            catch { deferred = true; break; } // Missing originals grant no automatic retry authority.
+          }
+          if (!same) continue;
+          if (job.status !== "completed" && resumeJobIDs.includes(job.id) && job.organizationCheck!.inputKey === material.inputKey
+            && job.model.providerID === project.model.providerID && job.model.modelID === project.model.modelID) {
+            organizationStage(project, job.organizationCheck!); return { epicID: epic.id, inputKey: material.inputKey };
+          }
+          deferred = true; break; // Includes keep, blocked, rejected verification and dismissed proposals.
+        }
+        if (deferred) continue;
+        // An accepted split is already a reviewed organization choice. Do not
+        // immediately split its large children again without changed evidence.
+        for (const review of project.organizationReviews.filter(r => r.status === "accepted")) {
+          if (!review.operations.some(op => op.type === "split" && op.destinations.some(d => d.epicID === epic.id))) continue;
+          if (!review.createdAtRevision) { deferred = true; break; }
+          try {
+            const original = this.get(id, review.createdAtRevision); organize(original, review.operations);
+            if (organizationSchedulingKey(original, epic.id) === schedulingKey) { deferred = true; break; }
+          } catch { deferred = true; break; }
+        }
+        if (!deferred) {
+          organizationStage(project, { format: 1, epicID: epic.id, inputKey: material.inputKey, reads: [], checks: [], attempts: 0 });
+          return { epicID: epic.id, inputKey: material.inputKey };
+        }
+      } catch { /* Exact evidence or a full request does not fit: manual check remains available. */ }
+    }
+    return undefined;
+  }
+
+  private assertOrganizationWorkflow(id: string, epicID: string, owner?: string) {
+    if (this.workflowBusy(id, owner)) throw new OperationConflictError("Another workflow owns this organization check. No request or split was authorized.");
+    if (!owner) return;
+    const state = this.workflow(id);
+    if (state.owner !== owner || (state.leaseUntil ?? 0) <= Date.now() || !state.enabled || state.paused || !state.grant
+      || !state.organizationPolicy || state.current?.kind !== "organization" || state.current.target !== epicID)
+      throw new OperationConflictError("The authorized feature-organization workflow changed. Saved replies were retained; no new work was authorized.");
+  }
+
+  beginOrganizationCheck(id: string, revision: number, epicID: string, workflowOwner?: string) {
+    return this.db.transaction(() => {
+      const project = this.get(id);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      this.assertNoExecution(id);
+      this.assertOrganizationWorkflow(id, epicID, workflowOwner);
+      if (this.discoveryActive(id) || this.workflowBusy(id, workflowOwner)) throw new OperationConflictError("Wait for active processing before checking feature organization.");
+      const material = organizationMaterials(project, epicID);
+      let previous: Job | undefined;
+      for (const row of this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.kind') = 'organization-check'
+        AND json_extract(payload, '$.context.focusEpicID') = ? AND json_extract(payload, '$.organizationCheck.inputKey') = ? ORDER BY rowid DESC`).iterate(id, epicID, material.inputKey) as Iterable<{ payload: string }>) {
+        const candidate = readStoredJob(row.payload);
+        // Account routing is machine-local, not semantic model/evidence identity.
+        // Portable adoption must not reread paid evidence solely for a new account ID.
+        if (candidate.model.providerID === project.model.providerID && candidate.model.modelID === project.model.modelID) { previous = candidate; break; }
+      }
+      if (previous?.status === "completed") return { project, job: previous, reused: true };
+      const work = previous?.organizationCheck ? structuredClone(previous.organizationCheck) : {
+        format: 1 as const, epicID, inputKey: material.inputKey, reads: [], checks: [], attempts: 0,
+      };
+      const stage = organizationStage(project, work);
+      const { job } = this.beginJob(id, revision, undefined, false, workflowOwner);
+      job.kind = "organization-check"; job.organizationCheck = work;
+      job.context = stage?.context.manifest ?? { revision, focusEpicID: epicID, characters: 0, budget: 48000, includedIDs: [], omittedIDs: [],
+        organizationCheck: { format: 1, inputKey: work.inputKey, phase: "check", index: work.checks.length } };
+      this.saveJob(job); this.pauseQueue(id, true);
+      return { project, job, reused: false };
+    }).immediate();
+  }
+
+  reserveOrganizationRequest(id: string, workflow?: { owner: string; beforeRequest: (jobID: string) => void }) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.kind !== "organization-check" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Organization check worker is not live.");
+      this.assertOrganizationWorkflow(job.projectID, job.organizationCheck!.epicID, workflow?.owner);
+      const project = this.get(job.projectID);
+      if (project.revision !== job.expectedRevision) throw new StaleRevisionError();
+      const stage = organizationStage(project, job.organizationCheck!);
+      if (!stage) return;
+      workflow?.beforeRequest(job.id);
+      job.organizationCheck!.attempts++; job.context = stage.context.manifest; this.saveJob(job);
+      return { project, ...stage };
+    }).immediate();
+  }
+
+  recordOrganizationResponse(id: string, response: unknown) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.kind !== "organization-check" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Organization check worker is not live.");
+      // Preserve a valid reply against its original snapshot before testing currentness.
+      job.organizationCheck = recordOrganizationReply(this.get(job.projectID, job.expectedRevision), job.organizationCheck!, response);
+      this.saveJob(job);
+      return job;
+    }).immediate();
+  }
+
+  finishOrganizationCheck(id: string, workflowOwner?: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.kind !== "organization-check" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Organization check worker is not live.");
+      const project = this.get(job.projectID), work = organizationCheckSchema.parse(job.organizationCheck);
+      this.assertOrganizationWorkflow(job.projectID, work.epicID, workflowOwner);
+      if (project.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (organizationStage(project, work)) throw new Error("Organization check is unfinished.");
+      const rejected = work.checks.find(c => !c.valid);
+      if (work.decision?.outcome === "split" && !rejected) {
+        const aliases = new Map(work.decision.groups.map(g => [g.key, randomUUID()]));
+        const operations = organizationOperations(project, work).map(op => op.type === "upsert"
+          ? { ...op, epicID: aliases.get(op.epicID)!, dependencies: op.dependencies.map(d => aliases.get(d) ?? d) }
+          : op.type === "split" ? { ...op, destinations: op.destinations.map(d => ({ ...d, epicID: aliases.get(d.epicID)! })) } : op);
+        const reviewID = randomUUID();
+        this.mutate(project.id, project.revision, "Feature organization check proposed a split; review required", p => {
+          p.organizationReviews.push({ id: reviewID, operations, reason: work.decision!.reason, status: "pending", createdAtRevision: p.revision + 1,
+            organizationBasis: { format: 1, epicID: work.epicID, inputKey: work.inputKey } });
+          p.roundChanges = ["Proposed smaller features. No requirements, answers or feature assignments changed; review before applying."];
+        });
+        work.reviewID = reviewID;
+      }
+      job.organizationCheck = work; job.status = "completed"; job.leaseUntil = null;
+      job.diagnostic = rejected ? `No split proposed: ${rejected.reason}` : work.decision!.reason;
+      this.saveJob(job); return job;
+    }).immediate();
+  }
+
   retireQuestions(id: string, revision: number, questionIDs: string[], reason: string) {
     if (!reason.trim() || reason.length > 2000 || !questionIDs.length || questionIDs.length > 100 || new Set(questionIDs).size !== questionIDs.length) throw new Error("Choose unique unanswered questions and supply a retirement reason.");
     return this.mutate(id, revision, "Human dismissed unrelated unanswered questions; history retained", (project) => {
@@ -1191,7 +1342,7 @@ export class ProjectStore {
     return this.mutate(id, revision, "Human reviewed organization changes", (project) => {
       const review = project.organizationReviews.find((item) => item.id === reviewID && item.status === "pending");
       if (!review) throw new Error("Pending organization review not found.");
-      if (accept && review.createdAtRevision && project.revision !== review.createdAtRevision) throw new Error("This organization proposal is outdated. Reject it and run discovery again to create a current proposal.");
+      if (accept && !organizationReviewCurrent(project, review)) throw new Error("This organization proposal is outdated. Reject it and run discovery again to create a current proposal.");
       if (accept) organize(project, review.operations);
       review.status = accept ? "accepted" : "rejected";
     });

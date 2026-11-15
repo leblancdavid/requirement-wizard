@@ -28,6 +28,24 @@ import { definitionLabelDrift } from "../core/definition-evidence-issue.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
+test("workflow status exposes saved task completion without rewriting legacy progress or dispatching work", async () => {
+  const store = new ProjectStore(":memory:");
+  const workflow = new ProjectWorkflow(store, { async analyze() { assert.fail("Status cannot start inference"); } });
+  try {
+    const p = store.create("Header continuation", "Choose the next process explicitly", { providerID: "openai", modelID: "fixture" });
+    for (const completed of [undefined, false, true]) {
+      const state = store.workflow(p.id);
+      state.enabled = true;
+      state.current = { kind: "discover", key: "a".repeat(64), target: "inbox", jobIDs: [], ...(completed !== undefined ? { completed } : {}) };
+      store.saveWorkflow(p.id, state);
+      const before = store.workflow(p.id);
+      assert.deepEqual(workflow.view(p.id).current, { kind: "discover", target: "inbox", completed });
+      assert.deepEqual(store.workflow(p.id), before);
+      assert.equal(store.jobs(p.id).length, 0);
+    }
+  } finally { await workflow.close(); store.close(); }
+});
+
 test("continuous workflow consent is additive, rejects future formats, and never arms after repeated reopen", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "workflow-continuous-")), path = join(directory, "state.sqlite");

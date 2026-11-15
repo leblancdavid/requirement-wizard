@@ -1,5 +1,144 @@
 # Data migrations and upgrade compatibility
 
+## Saved-response lookup safety and publication retention (2026-11-15)
+
+**SQLite and portable formats unchanged.** This is dispatch guidance, bounded
+protocol recovery and allocation/diagnostic handling, not a data or assessment
+migration. Historical context bytes, plan/material keys, layouts, receipt parsers,
+IDs, human evidence, completed checks and charged attempts remain unchanged. No
+startup/model calls, resets, model switches or new allowance are introduced.
+
+Saved-response dispatch now derives an exact loaded/missing inventory from the
+existing manifest. Lookup schemas allow only distinct missing original string IDs;
+an empty missing set removes lookup output. Read, check and corrective-read schemas
+advertise only that phase's outputs, avoiding the full unused draft schema during
+verification. The persisted response union remains compatible with old receipts.
+Validation distinguishes unknown, duplicate and already-loaded IDs with counts,
+without putting returned IDs in diagnostic prose. One consecutive invalid lookup
+can be corrected in an already authorized run, only within its original step,
+request-window, timeout and attempt bounds. A second consecutive invalid lookup
+stops. Cancellation, stale inputs, malformed output and semantic blockers do not
+trigger this correction. Invalid requests remain charged and earn no receipt,
+evidence or completion credit. Transient correction advice is not persisted or
+freshness authority; explicit continuation reconstructs the inventory and retains
+all spent attempts, including after an older failed job or restart.
+
+Publication now stages the complete continuation and computes its small portable
+format/state files before releasing the historical graph and rendering remaining
+workspace artifacts. Bytes, format selection, hashes, size bounds, expected
+revision/publication-generation guards and journal/manifest-last recovery stay
+unchanged. Old single-file and segmented continuations remain readable without
+reassessment. Child progress distinguishes `continuation-staging` from
+`workspace-render`. A bounded stderr classifier recognizes only a known V8 fatal
+heap-exhaustion marker; raw stderr is never logged/exported and other failures
+retain "cause not established". Failed publication retains SQLite work, releases
+only its owned lease, stops automatic retries and supports explicit folder-sync
+retry without inference.
+
+Verification: typecheck and 113 focused saved-response/workspace/portable tests
+passed, including older checkpoint/format upgrades, repeated reopen, charged
+correction, cancellation/staleness/window gates, unchanged output bytes, external
+edits, foreign leases and child-failure recovery. Full `npm test` also passed:
+1,002 pretests, 840 main tests and 350 posttests (2,192 total). UI build, both CLI
+help commands and `git diff --check` passed; no live model calls were made.
+A full staging/render fixture
+with 695 synthetic jobs, 492 snapshots and 35,187,938 staged bytes passed under
+the production 256 MiB V8 heap cap. This is not the user's original evidence graph;
+the reported revision-3772 render abort and live lookup/latency improvements remain
+unqualified. Runtime pooling, finer adapter/startup timing, discovery-planning
+optimization and model comparison are follow-on work, not claimed fixes here.
+
+## Coordinated feature organization policy (2026-11-15)
+
+**SQLite 80 → 81; portable format unchanged.** Migration 81 is a reader boundary
+for optional local `organizationPolicy: {format:1}` and `current.kind=organization`.
+The policy is adopted only by new explicit Continue/Play permission, not by startup,
+mode selection or assessment-only Review changes. Existing workflow settings, grants,
+reserved attempts, organization format-1 checkpoints, review bases, source/history IDs,
+assessments, implementation state and concurrency counters remain unchanged. Future
+policy versions or an organization current-task without its policy reject startup
+transactionally; supported original data permits repair/retry without resetting work.
+A derived partial index selects organization jobs by project/feature/input identity
+without decoding the unrelated paid job archive. Existing job payloads are unchanged.
+
+Organization requests now reserve their existing checkpoint attempt and charge the
+owned coordinator/run receipt in the same transaction. No extra allowance or independent
+automatic worker is introduced. The task's full exact-input publication identity and
+legacy/manual review semantics are unchanged. Shared ownership and Pause are checked
+before dispatch and publication; valid replies remain saved under original inputs.
+
+The new `organization-candidates-v1` digest is scheduling-only: it omits unrelated
+feature-map metadata, includes local/global/dependency evidence and incoming boundaries,
+and cannot make an old proposal current. Earlier completed jobs are compared using their
+original snapshots, without rewriting a checkpoint or requiring another model call just
+to adopt the scheduling representation. Reviewed split maps can be simulated from their
+original review revision to suppress unchanged large destinations. Missing/unfit originals
+defer automatic scheduling; manual checking remains explicit. Unchanged stopped manual
+work is not automatically retried. Keep/blocked/dismissed outcomes do not repeat on each
+Continue; relevant changed inputs can produce a new check.
+
+Workflow consent remains machine-local and is not exported. Existing conditional
+portable 52 checkpoints retain their original format and meaning, with no reset or
+new handoff format. Same-provider/model organization checkpoints also survive a changed
+machine-local account routing ID; adoption never copies credentials or silently switches
+provider/model. This avoids repeating exact paid reads solely because portable account
+routing was stripped/reselected. Definition/assessment fingerprints and historical completion are
+not migrated or weakened. Deterministic fixtures cover shared spending and reservation
+rollback, anti-churn, paused reply reuse, foreign ownership, prior-format repeated
+startup, future-policy rollback/repair and no-startup-call behavior. Browser fixtures
+cover Continue disclosure, shared request counts, proposal review, reload and mobile.
+Live boundary quality and real-project threshold calibration remain unqualified.
+
+Verification: the final full `npm test` chain and full `npm run test:browser` chain
+passed. The final 34-test organization suite also passed with same-model account
+rebinding, indexed history reads, shared spending, Pause/restart recovery and upgrade
+rollback. Type checking, UI build and diff checks passed. No live inference was run.
+
+## Explicit feature organization checks (2026-11-14)
+
+**SQLite 79 → 80; conditional portable 52.** Migration 80 is a reader boundary, not
+a payload rewrite. New `organization-check` jobs carry a strict format-1 exact-input
+checkpoint (collected replies, frozen decision, verification replies, reserved attempts,
+optional resulting review ID), plus a strict stage marker. Original paid replies can
+be copied into an explicitly continued job only when input identity and selected model
+match. No old job, requirement, ID, source body, assessment, execution state, history,
+revision or attempt counter is rewritten during upgrade. No startup calls are made.
+
+New split reviews optionally carry `organizationBasis` format 1: the source feature ID
+and exact organization-input digest. This checks relevant original evidence and active
+feature definitions at application while retaining expected-revision writes. It does
+not change legacy created-revision freshness, definition fingerprints or assessment
+semantics. Applying a split still archives the source, preserves all dated findings and
+requires new areas to establish their own reviews; old completed work is never made
+current by copying it to a destination.
+
+Startup validates marked jobs/review bases, including historical revision bases, inside
+the migration transaction. Covering organization-review indexes avoid reading whole
+historical snapshots during warm validation and preserve lazy handling of unrelated
+unmarked malformed history. Future/malformed/oversized checkpoint data rejects without
+advancing schema version or overwriting evidence. Restoring supported original data
+permits a retry. Schema versions remain distinct from project/job concurrency counters.
+
+Portable 52 is conditional on retained organization checkpoints or review bases.
+Older projects/exports retain their applicable format without backfilled evidence.
+Export retains semantic checkpoints and necessary original snapshots, not runtime
+sessions or the entire activity archive. Imported running work becomes interrupted;
+only explicit continuation can run calls. Downgraded envelopes and unsupported future
+checkpoint versions reject adoption. The browser snapshot omits checkpoint bodies.
+
+Tests cover prior-format reopen, repeated startup, preservation of history/jobs/current
+records, future-format rollback and repair, interrupted exact-batch reuse after SQLite
+reopen and actual portable adoption, stale results, cancellation, malformed proposals
+and explicit API consent. Live model boundary quality and universal large-feature
+recovery remain unqualified: indivisible evidence or an oversized joint proposal still
+blocks instead of being summarized away.
+
+Verification run: full `npm test` and `npm run test:browser` chains passed after fixing
+the warm historical-validation regression. Following final task-exclusivity hardening,
+type checking, an 81-test organization/migration/epic/provider suite, the organization
+browser check (including UI build) and `git diff --check` passed. No live inference
+was run. Existing unrelated working-tree changes were preserved.
+
 ## Candidate-first discovery and captured collection targets (2026-11-14)
 
 **SQLite 78 → 79; conditional portable 51.** Migration 79 is a reader boundary,

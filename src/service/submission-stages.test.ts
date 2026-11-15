@@ -19,7 +19,7 @@ import { submissionQuestionTask, submissionQuestionBlock, submissionClarificatio
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import Database from "better-sqlite3";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence } from "../core/submission-stages.js";
-import { packSubmissionVerification } from "../core/submission-stages.js";
+import { packSubmissionVerification, submissionDispatchSchema, submissionLookupInventory, SubmissionLookupError } from "../core/submission-stages.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
 
 for (const outcome of ["valid", "rejected", "cancelled", "malformed", "exhausted", "publication-failure"] as const) test(`completed saved review checks omitted linked support without repeating paid work: ${outcome}`, async () => {
@@ -149,6 +149,131 @@ for (const outcome of ["valid", "rejected", "cancelled", "malformed", "exhausted
 });
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
+
+test("saved-response dispatch exposes only distinct missing original IDs and phase-specific outputs", () => {
+  const f = fixture();
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const context = submissionStageContext(m, w, empty()), before = JSON.stringify(context);
+    const inventory = submissionLookupInventory(context), schema = submissionDispatchSchema(context);
+    const missing = inventory.requestableIDs[0]!, loaded = inventory.loadedIDs[0]!;
+    assert.ok(missing && loaded);
+    assert.equal(schema.safeParse({ submissionEvidence: { recordIDs: [missing] } }).success, true);
+    for (const ids of [[loaded], [missing, missing], ["new:guess"], ["0"], ["unknown"]])
+      assert.equal(schema.safeParse({ submissionEvidence: { recordIDs: ids } }).success, false);
+    assert.equal(schema.safeParse({ submissionKeep: true }).success, true);
+    assert.equal(schema.safeParse({ submissionCheck: { valid: true, reason: "Wrong phase" } }).success, false);
+    const check = { ...context, manifest: { ...context.manifest, submissionStage: { ...context.manifest.submissionStage!, phase: "check" as const } } };
+    const checkSchema = submissionDispatchSchema(check);
+    assert.equal(checkSchema.safeParse({ submissionCheck: { valid: true, reason: "Checked exact evidence" } }).success, true);
+    assert.equal(checkSchema.safeParse({ submissionKeep: true }).success, false);
+    assert.equal(checkSchema.safeParse(f.output()).success, false);
+    const noMissing = { ...check, manifest: { ...check.manifest, omittedIDs: [] } };
+    assert.equal(submissionDispatchSchema(noMissing).safeParse({ submissionEvidence: { recordIDs: [missing] } }).success, false);
+    const repair = { ...context, data: { submissionStage: { draftRepair: {} } } };
+    assert.equal(submissionDispatchSchema(repair).safeParse({ submissionKeep: true }).success, false);
+    assert.equal(submissionDispatchSchema(repair).safeParse(f.output()).success, true);
+    const readPrompt = discoveryPrompt(f.project, context), checkPrompt = discoveryPrompt(f.project, check);
+    assert.match(readPrompt, /overall task inventory, NOT a missing-record list/);
+    assert.match(readPrompt, /NEVER request them again/);
+    const wireSchema = (prompt: string) => JSON.parse(prompt.split("Stage response schema: ")[1]!.split("\nWorking evidence batch:")[0]!);
+    assert.ok(JSON.stringify(wireSchema(checkPrompt)).length < JSON.stringify(wireSchema(readPrompt)).length / 2,
+      "Verification should not repeat the unused large draft schema");
+    assert.equal(JSON.stringify(context), before, "Dispatch guidance cannot change old context bytes/receipt identity");
+    assert.throws(() => submissionLookupInventory({ ...context, manifest: { ...context.manifest, omittedIDs: [loaded] } }), /inventory is inconsistent/);
+  } finally { f.store.close(); }
+});
+
+test("saved-response lookup errors classify each cause without loading evidence or completing a step", () => {
+  const f = fixture();
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const context = submissionStageContext(m, w, empty()), missing = context.manifest.omittedIDs[0]!, loaded = context.manifest.includedIDs[0]!;
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    for (const [ids, issues] of [
+      [["invented"], { unknown: 1, duplicate: 0, alreadyLoaded: 0 }],
+      [[missing, missing], { unknown: 0, duplicate: 1, alreadyLoaded: 0 }],
+      [[loaded], { unknown: 0, duplicate: 0, alreadyLoaded: 1 }],
+    ] as const) {
+      const before = JSON.stringify(w); w.attempts = 1;
+      assert.throws(() => acceptSubmissionStage(m, w, empty(), { submissionEvidence: { recordIDs: ids } }, job), (error: unknown) => {
+        assert.ok(error instanceof SubmissionLookupError); assert.deepEqual(error.issues, issues);
+        assert.ok(!error.message.includes(ids[0]!)); return true;
+      });
+      assert.equal(w.receipts.length, 0); assert.equal(submissionStep(w), 0);
+      assert.equal(JSON.stringify(submissionStageContext(m, w, empty())), JSON.stringify(context));
+      w.attempts = JSON.parse(before).attempts;
+    }
+  } finally { f.store.close(); }
+});
+
+test("one lookup correction consumes the existing allowance, preserves its accepted reply and resumes without repeating it", async () => {
+  const f = fixture();
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let calls = 0;
+    const paused = await runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      calls++;
+      if (calls === 1) return { submissionEvidence: { recordIDs: [context.manifest.includedIDs[0]!] } };
+      assert.deepEqual(context.submissionLookupCorrection, { unknown: 0, duplicate: 0, alreadyLoaded: 1 });
+      assert.match(discoveryPrompt(f.project, context), /PROTOCOL CORRECTION:/);
+      return f.output();
+    } }, f.project, job, f.item, f.task, { signal: new AbortController().signal, research: false, limits: { requests: 2, durationMs: 60000 } });
+    assert.equal(calls, 2); assert.equal(paused.status, "interrupted");
+    assert.equal(paused.submissionWork!.receipts.length, 1);
+    assert.equal(paused.submissionWork!.receipts[0]!.attempt, 2);
+    const originalReceipt = structuredClone(paused.submissionWork!.receipts[0]);
+    const next = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(next.id, Date.now() + 60000);
+    const finished = await runSubmissionStages(f.store, { async analyze(p, options) {
+      assert.ok(options.context.manifest.submissionStage!.step > 0, "The accepted first read must not repeat");
+      assert.equal(options.context.submissionLookupCorrection, undefined);
+      return adapter(f).analyze(p, options);
+    } }, f.project, next, f.item, f.task, { signal: new AbortController().signal, research: false });
+    assert.equal(finished.status, "completed", finished.diagnostic);
+    assert.deepEqual(finished.submissionWork!.receipts[0], originalReceipt);
+  } finally { f.store.close(); }
+});
+
+test("repeated invalid lookups stop and explicit reopen cannot reset spent requests", async () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/lookup-upgrade-")), file = join(directory, "state.sqlite");
+  const f = fixture(file); let store = f.store;
+  try {
+    for (const [expected, expectedCalls] of [[2, 2], [4, 2], [4, 0]]) {
+      const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+      let calls = 0;
+      await assert.rejects(runSubmissionStages(store, { async analyze() {
+        calls++; return { submissionEvidence: { recordIDs: ["invented"] } };
+      } }, f.project, job, f.item, f.task, { signal: new AbortController().signal, research: false }), /lookup rejected|exhausted its four-request allowance/);
+      assert.equal(calls, expectedCalls);
+      const saved = store.getJob(job.id);
+      assert.equal(saved.submissionWork!.attempts, expected); assert.equal(saved.submissionWork!.receipts.length, 0);
+      store.failJob(job.id, "failed", "Retained invalid lookup");
+      const before = store.getJob(job.id); store.close(); store = new ProjectStore(file);
+      assert.deepEqual(store.getJob(job.id), before, "Reopen preserves the original paid attempt accounting");
+      assert.deepEqual(store.get(f.project.id), f.project);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const boundary of ["cancel", "stale", "window", "malformed"] as const) test(`lookup correction respects ${boundary} boundaries`, async () => {
+  const f = fixture(), controller = new AbortController();
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let calls = 0;
+    const run = runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      calls++;
+      if (boundary === "stale") f.store.note(f.project.id, f.project.revision, "New human decision");
+      return { submissionEvidence: { recordIDs: boundary === "malformed" ? [] : [context.manifest.includedIDs[0]!] } };
+    } }, f.project, job, f.item, f.task, { signal: controller.signal, research: false,
+      limits: { requests: boundary === "window" ? 1 : 32, durationMs: 60000 },
+      onProgress: message => { if (boundary === "cancel" && message.includes("Correcting this lookup")) controller.abort(new Error("Stop correction")); } });
+    if (boundary === "window") assert.equal((await run).status, "interrupted");
+    else await assert.rejects(run, boundary === "cancel" ? /Stop correction/ : boundary === "stale" ? /changed|revision/i : /Array must contain/);
+    assert.equal(calls, 1); assert.equal(f.store.getJob(job.id).submissionWork!.attempts, 1);
+    assert.equal(f.store.getJob(job.id).submissionWork!.receipts.length, 0);
+  } finally { f.store.close(); }
+});
 
 test("saved-response authoring schema constrains declaration aliases and prompt explains shared uniqueness", () => {
   const f = fixture();

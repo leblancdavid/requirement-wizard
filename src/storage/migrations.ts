@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { definitionChangeReceiptSchema, definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { definitionChangeGroupWorkSchema, definitionChangeGroupMarkerSchema } from "../core/definition-change-group.js";
+import { validateOrganizationJob } from "../core/organization-check.js";
+import { organizationReviewSchema } from "../core/epics.js";
 import { answerGroupWorkSchema, answerGroupStageSchema } from "../core/answer-group.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
@@ -30,7 +32,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 79;
+export const databaseSchemaVersion = 81;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -40,6 +42,13 @@ export function changeReviewValidationQuery(table: "projects" | "revisions") {
   return `SELECT CASE WHEN length(CAST((${changeReviewValue}) AS BLOB)) <= 2097152
     THEN (${changeReviewValue}) END AS reviews FROM ${table} INDEXED BY startup_${table}_change_reviews
     WHERE ${changeReviewPredicate}`;
+}
+const organizationReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.organizationReviews') END";
+const organizationReviewPredicate = `CASE WHEN json_valid(payload) THEN json_array_length(payload, '$.organizationReviews') > 0
+  ELSE instr(payload, '"organizationBasis"') > 0 END`;
+export function organizationReviewValidationQuery(table: "projects" | "revisions") {
+  return `SELECT (${organizationReviewValue}) AS reviews
+    FROM ${table} INDEXED BY startup_${table}_organization_reviews WHERE ${organizationReviewPredicate}`;
 }
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
@@ -420,6 +429,17 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader capability only. Never reorder old plans/receipts or repeat paid work.
 } }, { version: 79, name: "candidate-first-discovery-and-targeted-collection", apply() {
   // Reader boundary only. Preserve all old jobs, layouts, paid attempts and grants.
+} }, { version: 80, name: "explicit-feature-organization-checks", apply(db: Database.Database) {
+  // Reader boundary only. New versioned checkpoints/bases must not be silently
+  // stripped by older readers. No historical evidence or counters are rewritten.
+  for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_organization_reviews
+    ON ${table}((${organizationReviewValue})) WHERE ${organizationReviewPredicate}`);
+} }, { version: 81, name: "coordinated-feature-organization-policy", apply(db: Database.Database) {
+  // Reader boundary only for organizationPolicy/current.kind. Existing grants,
+  // checkpoints and decision evidence are unchanged; no startup opt-in or calls.
+  db.exec(`CREATE INDEX IF NOT EXISTS organization_jobs_by_feature ON jobs(project_id,
+    json_extract(payload, '$.context.focusEpicID'), json_extract(payload, '$.organizationCheck.inputKey'))
+    WHERE json_extract(payload, '$.kind') = 'organization-check'`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -437,6 +457,20 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= 4194304 THEN payload END AS payload
+      FROM jobs WHERE json_type(payload, '$.organizationCheck') IS NOT NULL OR json_type(payload, '$.context.organizationCheck') IS NOT NULL
+      OR json_extract(payload, '$.kind') = 'organization-check'`).iterate() as Iterable<{ payload: string | null }>) {
+      if (!row.payload) throw new Error("Unsupported or oversized saved organization check. Nothing was overwritten.");
+      validateOrganizationJob(JSON.parse(row.payload));
+    }
+    for (const table of ["projects", "revisions"] as const) {
+      for (const row of db.prepare(organizationReviewValidationQuery(table)).iterate() as Iterable<{ reviews: string | null }>) {
+        if (!row.reviews) throw new Error("Unsupported organization-review history. Nothing was overwritten.");
+        for (const review of z.array(z.object({ organizationBasis: organizationReviewSchema.shape.organizationBasis })).parse(JSON.parse(row.reviews))) {
+          organizationReviewSchema.shape.organizationBasis.parse(review.organizationBasis);
+        }
+      }
+    }
     reportStartup(progress, "checking-data");
     reportStartup(progress, "checking-review-history");
     const validatedReviews = new Set<string>();

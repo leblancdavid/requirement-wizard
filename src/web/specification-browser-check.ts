@@ -372,12 +372,12 @@ try {
     input: { type: "note", text: "Retained decision awaiting processing", epicID: "project" } });
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(stagedNotice.getByRole("button", { name: "Continue review", exact: true })).toBeDisabled();
-  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Process saved responses", exact: true })).toBeVisible();
   assert.equal(calls, beforeContinuation, "Saved input priority never dispatches inference on render");
   waitingDecision.archivedAt = new Date().toISOString(); store.saveSubmission(waitingDecision);
   await page.reload();
   await page.getByRole("tab", { name: /^Specification/ }).click();
-  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue Design", exact: true })).toBeVisible();
   await processingQueue(page);
   const clarificationRecovery = page.getByRole("region", { name: "Saved clarification progress", exact: true });
   await expect(clarificationRecovery).toContainText("1 / 2 exact read/check steps saved");
@@ -426,7 +426,7 @@ try {
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: followup.name, exact: true }).click();
   const beforeReviewResume = calls;
   await page.reload(); assert.equal(calls, beforeReviewResume, "Opening the saved review cannot start inference");
-  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await expect(page.locator(".topbar .queue-header").getByRole("button", { name: "Review saved responses", exact: true })).toBeVisible();
   await processingQueue(page);
   const retained = page.getByRole("region", { name: "Additional saved-response allowance", exact: true });
   await expect(retained).toContainText("eight total");

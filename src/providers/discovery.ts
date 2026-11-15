@@ -16,6 +16,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
   }
   constructor(private readonly connections: ConnectionManager, private readonly legacy: DiscoveryAdapter, private readonly request: typeof fetch = fetch) {}
   analyze(project: Project, options: DiscoveryOptions) {
+    if (options.context.manifest.organizationCheck && (options.scan || options.research)) throw new ProviderError("Organization checks cannot use scan or research profiles.");
     if (options.context.manifest.answerGroupStage && (options.scan || options.research)) throw new ProviderError("Shared answers cannot use scan or research profiles.");
     if ((options.context.manifest.definitionChangeReview || options.context.manifest.definitionChangeGroupReview) && (options.scan || options.research)) throw new ProviderError("Change review cannot use a scan or research profile.");
     if (options.context.manifest.definitionMixedReview) {
@@ -49,7 +50,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       return await this.connections.withAccount(project.model.connectionID!, async (account, signal) => {
         options.onProgress("Request sent to the selected ChatGPT model; awaiting its response…");
         const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request,
-          options.context.manifest.answerGroupStage || options.context.manifest.definitionChangeReview || options.context.manifest.definitionChangeGroupReview || options.context.manifest.definitionScopeReview || options.context.manifest.definitionMixedReview ? { policy: "scoped-no-tools-v1" } : undefined);
+          options.context.manifest.organizationCheck || options.context.manifest.answerGroupStage || options.context.manifest.definitionChangeReview || options.context.manifest.definitionChangeGroupReview || options.context.manifest.definitionScopeReview || options.context.manifest.definitionMixedReview ? { policy: "scoped-no-tools-v1" } : undefined);
         signal.throwIfAborted();
         options.onProgress("Response received; checking the returned output…");
         const usage = z.object({ input_tokens: z.number().nonnegative(), output_tokens: z.number().nonnegative(),

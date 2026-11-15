@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runOrganizationCheck } from "./organization-check.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
 import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Submission, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
@@ -91,6 +92,12 @@ export class DiscoveryService {
   requiresInitialization(projectID: string) {
     const project = this.store.get(projectID);
     return !project.scans.length && (!!project.origin || this.store.hasScanJob(projectID));
+  }
+  checkOrganization(projectID: string, revision: number, epicID: string, options: Parameters<typeof runOrganizationCheck>[5]) {
+    this.assertCanDiscover(projectID);
+    const workflow = this.navigation.workflow;
+    return runOrganizationCheck(this.store, this.adapter, projectID, revision, epicID, { ...options,
+      workflow: workflow ? { ...workflow.beforeJob(), owner: workflow.owner, beforeRequest: workflow.beforeRequest, shouldPause: workflow.shouldPause } : undefined });
   }
   /** Explicit one-request validation only. Never called by automatic coordination,
    * never publishes findings, and completed/returned equivalent work is reused. */

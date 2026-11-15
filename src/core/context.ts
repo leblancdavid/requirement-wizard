@@ -3,6 +3,8 @@ import { organizationRecords } from "./epics.js";
 import type { GapReport } from "./gap-types.js";
 
 export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport;
+  /** Transient protocol correction only; never evidence, a receipt or a new allowance. */
+  submissionLookupCorrection?: { unknown: number; duplicate: number; alreadyLoaded: number };
   answerGroupResponseCharacters?: number;
   answerGroupRepairAdvice?: { targetIDs: string[]; witnessIDs: string[] };
   answerGroupProgressPolicy?: boolean;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { MaintenanceQueue, type MaintenanceAction } from "./maintenance-controls.js";
-import { WorkflowControls, workflowLabels, mayContinueProject, type WorkflowConfigure } from "./workflow-controls.js";
+import { WorkflowControls, workflowLabels, type WorkflowConfigure } from "./workflow-controls.js";
 import { ProjectStatus } from "./project-status.js";
 import { answerIntegrationReasons } from "../core/answer-integration-diagnostics.js";
 import type { WorkflowView } from "../service/workflow.js";
@@ -9,7 +9,7 @@ import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
-import { definitionActivityLabel, discoveryResumeJob, type QueueActivity } from "./queue-activity.js";
+import { definitionActivityLabel, discoveryResumeJob, savedWorkflowLabel, type QueueActivity } from "./queue-activity.js";
 import { ActivityBar, ActivityFeedback, Spinner } from "./activity.js";
 import "./processing-queue.css";
 import { ActionScope } from "./action-button.js";
@@ -44,7 +44,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   maintenanceSettings?: () => void; openRequest?: number;
   workflow?: WorkflowView; configureWorkflow?: WorkflowConfigure; openWorkflowDecision?: (decision: WorkflowDecision) => void;
   diagnostics?: boolean;
-  executionResume?: () => void;
+  executionResume?: { label: string; onClick: () => void };
   executionSelected?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -105,11 +105,18 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     </article>);
   }
 
-  const continueSaved = executionSelected ? executionResume : (exhausted && extendSavedResponse ? () => openIssue?.(exhausted.item.id)
-    : clarificationResume ? continueClarification : refinementResume ? () => continueRefinement!(refinementJob!.id)
-    : lastJob?.context?.refinementOnly && canResume ? resume
-    : workflow?.enabled && (workflow.grant || workflow.lastRun) && configureWorkflow && mayContinueProject(workflow) ? () => configureWorkflow("play")
-    : processingFirst ? processSavedResponses : canResume ? resume : continuationAvailable ? continueExploration : undefined);
+  const workflowResumeLabel = workflow && savedWorkflowLabel(workflow);
+  const headerCanResume = canResume && (processable.length > 0 || !hasUnfinishedInput && !!resumeJob
+    && ["failed", "cancelled", "interrupted", "stale"].includes(resumeJob.status));
+  const continueSaved = executionSelected ? executionResume : (exhausted && extendSavedResponse && openIssue
+    ? { label: "Review saved responses", onClick: () => openIssue(exhausted.item.id) }
+    : clarificationResume ? { label: "Continue Design", onClick: continueClarification! }
+    : refinementResume ? { label: "Continue refinement", onClick: () => continueRefinement!(refinementJob!.id) }
+    : lastJob?.context?.refinementOnly && headerCanResume && !hasUnfinishedInput ? { label: "Continue refinement", onClick: resume }
+    : workflowResumeLabel && configureWorkflow ? { label: workflowResumeLabel, onClick: () => configureWorkflow("play") }
+    : processingFirst ? { label: "Process saved responses", onClick: processSavedResponses! }
+    : headerCanResume ? { label: hasUnfinishedInput ? "Process saved responses" : definitionResume ? "Continue assessment" : lastJob?.kind === "scan" ? "Continue project scan" : "Continue Design", onClick: resume }
+    : undefined);
   const pauseCurrent = () => {
     // Pause the owner of the actual work, not whichever tab is currently open.
     if (workflow?.active && configureWorkflow) configureWorkflow("pause");

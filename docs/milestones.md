@@ -1,5 +1,17 @@
 # Milestone backlog
 
+The 2026-11-15 follow-up schedules eligible growing-feature checks within new explicit
+Continue permission and the existing request allowance, preserving manual mode and
+older grants. Unchanged outcomes and reviewed child maps suppress churn; all splits
+still need human review. Live boundary quality and real-project threshold calibration
+remain unqualified; no milestone exit is implied. See
+[automatic organization](browser-workspace.md#automatic-feature-organization-checks-2026-11-15).
+
+The 2026-11-14 explicit feature-organization slice adds bounded keep/split checks,
+saved continuation and before/after split review under RW-018. That original slice did
+not include automatic scheduling (added above) or live semantic qualification, and does not change
+the milestone exit status below. See [feature organization](browser-workspace.md#explicit-feature-organization-checks-2026-11-14).
+
 Shared-answer Play now has progress-based correction beyond the legacy two-repair cap,
 with distinct current human-evidence comparisons, no-op/cycle guards and finite overall
 bounds. A read-only 113-reply checkpoint preflight passed without resetting either

@@ -41,11 +41,12 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
     continuous: z.object({ format: z.literal(1) }).strict().optional(),
     remainingMs: z.number().int().min(0).max(workflowLimits.durationMs), submissionIDs: z.array(z.string()).max(10000) }).strict()
     .refine((grant) => !!grant.continuous || grant.used <= workflowLimits.requests, "Expanded workflow spending requires continuous consent.").optional(),
-  current: z.object({ kind: z.enum(["input", "interpret", "refine", "conflicts", "discover", "definition", "definition-change", "readiness-questions"]),
+   current: z.object({ kind: z.enum(["input", "interpret", "refine", "conflicts", "discover", "definition", "definition-change", "readiness-questions", "organization"]),
     key, target: z.string().optional(), jobIDs: z.array(z.string()).max(200), completed: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ inputKey: key, jobID: z.string() }).strict().optional(),
   readiness: workflowReadinessSchema.optional(),
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  organizationPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]),
     collection: z.object({ format: z.literal(1), target: z.number().int().min(1).max(50),
@@ -64,7 +65,9 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
 }).strict().refine(state => state.questionBatch?.format !== 2 || state.questionBatchPolicy?.format === 2,
   "Continuous collection windows require their explicit policy.")
   .refine(state => !state.questionBatchPolicy?.collection || state.questionBatchPolicy.collection.startingRequests <= (state.questionBatch?.requests ?? 0),
-    "Collection consent cannot refund missing cumulative spending.");
+    "Collection consent cannot refund missing cumulative spending.")
+  .refine(state => state.current?.kind !== "organization" || !!state.organizationPolicy,
+    "Organization scheduling requires explicit versioned workflow permission.");
 export type WorkflowState = z.infer<typeof workflowSchema>;
 export const emptyWorkflow = (): WorkflowState => ({ format: 1, version: 0, settingsVersion: 0, enabled: false,
   paused: true, phase: "idle", message: "Coordinated workflow has not been started." });

@@ -101,6 +101,19 @@ export class DiscoveryQueue {
   progress(id: string) { return this.messages.get(id) ?? []; }
   refinementProgress(id: string) { return this.refinementRuns.get(id) ?? null; }
 
+  async checkOrganization(id: string, revision: number, epicID: string) {
+    if (this.coordinator || this.closing || this.isActive(id)) throw new OperationConflictError("Wait for active work before checking feature organization.");
+    const controller = new AbortController(), progress: string[] = [];
+    let jobID: string | undefined;
+    const operation = this.service.checkOrganization(id, revision, epicID, { signal: controller.signal,
+      onJob: job => { jobID = job.id; this.messages.set(id, progress); }, onProgress: message => progress.push(message) });
+    if (!jobID) return { jobID: (await operation).id };
+    const promise = operation.then(job => { progress.push(job.status === "completed" ? "Feature organization check saved. Any proposed split needs your review." : "Check paused or stopped. Continue explicitly to reuse saved work."); })
+      .catch(() => { progress.push("Organization check could not complete. No split was applied."); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise, jobID });
+    return { jobID };
+  }
+
   /** Separate explicit one-request action. No coordinator allowance, automatic
    * continuation, submission processing or post-check discovery is authorized. */
   async reviewDefinitionCombination(id: string, request: DefinitionFindingPreviewRequest): Promise<DefinitionJointStart> {

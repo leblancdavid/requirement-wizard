@@ -473,6 +473,14 @@ test("many assessment publications fit a capped heap without retaining all full 
   assert.match(result.stdout, /96 independent 2-MiB publication snapshots/);
 });
 
+test("large continuation staging and workspace rendering fit the production heap cap with synthetic history", () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--import", "tsx", "scripts/check-portable-render-memory.ts"],
+    { cwd: resolve("."), encoding: "utf8", timeout: 90000, maxBuffer: 256000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, `Full capped-heap render failed: ${result.stderr.slice(-2000)}`);
+  assert.match(result.stdout, /Full portable staging\/render memory check passed/);
+});
+
 test("optional assessment origins are loaded once in revision order and missing required history still fails closed", () => {
   const f = fixture();
   try {

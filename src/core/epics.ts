@@ -39,6 +39,7 @@ export const organizationReviewSchema = z.object({
   id: z.string(), operations: z.array(organizationSchema), reason: text,
   status: z.enum(["pending", "accepted", "rejected"]),
   createdAtRevision: z.number().int().positive().optional(),
+  organizationBasis: z.object({ format: z.literal(1), epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
 });
 export const initialEpics = () => [
   { id: "project", title: "Project-wide", purpose: "Shared goals, scope, constraints, and cross-epic decisions.", archived: false, dependencies: [] },

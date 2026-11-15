@@ -101,7 +101,7 @@ export class ProjectWorkflow {
        ...(!active && canCollectMoreQuestions(project, submissions, state) ? { canCollectMore: true } : {}),
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
-       current: state.current && { kind: state.current.kind, target: state.current.target },
+       current: state.current && { kind: state.current.kind, target: state.current.target, completed: state.current.completed },
         ...(changeEvidence ? { changeEvidence } : {}),
        ...(changeGroup ? { changeGroup } : {}),
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
@@ -204,6 +204,9 @@ export class ProjectWorkflow {
        state.enabled = true; state.paused = false; state.phase = "working";
        delete state.stopReason;
       state.reviewPolicy = { format: 1 };
+      // New explicit continuation adopts organization suggestions. Older saved
+      // grants/startup and assessment-only Review changes gain no new authority.
+      if (action !== "review-changes") state.organizationPolicy = { format: 1 };
       // Adopt only on explicit continuous consent. Old bounded/live grants keep
       // their original wake-up behavior; startup never rewrites or arms them.
         if (action === "continue-continuous" || action === "play") {
@@ -319,7 +322,7 @@ export class ProjectWorkflow {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
         // staging uses the actual remaining allowance. Unused slots are visible.
-        const reserve = state.current?.kind === "definition-change" ? 1 : 3;
+         const reserve = state.current?.kind === "definition-change" || state.current?.kind === "organization" ? 1 : 3;
         if (state.paused || !state.enabled || !continuous && (remaining < reserve || Date.now() >= deadline)) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
         return continuous ? { requests: 32, durationMs: 900000 } : { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
       },
@@ -364,7 +367,7 @@ export class ProjectWorkflow {
       if (kind !== "discover" && state.current?.key === key && state.current.completed) throw new Error("This completed check did not advance the workflow. Its original result is retained; no automatic repeated model call.");
       state.current = state.current?.key === key && !state.current.completed ? state.current : { kind, key, target, jobIDs: [] };
       const name = project.requirements.find((r) => r.id === target)?.statement ?? project.epics.find((e) => e.id === target)?.title;
-      const label = kind === "definition-change" ? "checking the effect of new decisions" : kind === "readiness-questions" ? `clarifying ${dimensionLabels[target!.split(":").at(-1) as keyof typeof dimensionLabels] ?? "definition blockers"}` : kind;
+       const label = kind === "organization" ? "checking feature organization" : kind === "definition-change" ? "checking the effect of new decisions" : kind === "readiness-questions" ? `clarifying ${dimensionLabels[target!.split(":").at(-1) as keyof typeof dimensionLabels] ?? "definition blockers"}` : kind;
       state.phase = "working"; state.message = `Coordinating ${label}${name ? `: ${name}` : ""}. Completed checks are saved.`;
       this.store.saveWorkflow(id, state);
     };
@@ -539,7 +542,24 @@ export class ProjectWorkflow {
           if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
            const decisions = workflowDecisions(project, submissions);
-           const reviewing = state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing";
+            const reviewing = state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing";
+            if (state.organizationPolicy && !decisions.length && !(reviewing && state.reviewCheckpoint!.explicit)
+              && state.questionBatch?.state !== "collecting"
+              && (!state.current || state.current.completed || state.current.kind === "organization")
+              && ![...this.store.workflowDefinitionCheckpoints(id)].some(([epicID, saved]) => saved.inputKey === definitionInputKey(project, epicID))) {
+              const candidate = this.store.automaticOrganizationCandidate(id, state.current?.kind === "organization" && !state.current.completed ? state.current.jobIDs : []);
+              if (candidate) {
+                record("organization", project, candidate.epicID, candidate.inputKey);
+                const job = await service.checkOrganization(id, project.revision, candidate.epicID, { signal: controller.signal,
+                  onJob: job => { const latest = owned(); if (latest.current && !latest.current.jobIDs.includes(job.id)) latest.current.jobIDs.push(job.id); this.store.saveWorkflow(id, latest); } });
+                if (!check(job)) return;
+                const latest = owned(); if (latest.current) latest.current.completed = true; this.store.saveWorkflow(id, latest);
+                if (job.organizationCheck?.reviewID) {
+                  stop("needs-decision", "A growing feature could be organized into smaller features. Review the suggested split in Specification; nothing was moved or approved."); return;
+                }
+                continue;
+              }
+            }
            if (!reviewing && continuous && state.questionBatchPolicy && state.questionBatch?.state === "collecting"
              && state.questionBatch.inputKey === workflowReviewInputKey(project)) {
              if (!await collectQuestions(project)) return;

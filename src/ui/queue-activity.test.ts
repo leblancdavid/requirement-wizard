@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job, type Submission } from "../core/model.js";
-import { definitionActivityLabel, queueActivities, discoveryResumeJob, executionContinuation } from "./queue-activity.js";
+import { definitionActivityLabel, queueActivities, discoveryResumeJob, executionContinuation, savedWorkflowLabel } from "./queue-activity.js";
 import { ProjectStatus } from "./project-status.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls as ProjectWorkflowControls, LegacyWorkflowControls as WorkflowControls } from "./workflow-controls.js";
@@ -19,18 +19,18 @@ import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
 test("project status is idle without a start action and swaps saved continuation for pause", () => {
   const render = (working: boolean, resume?: () => void, pending = false) => renderToStaticMarkup(createElement(ProjectStatus, {
     working, label: "Planning implementation", pending, disabled: false,
-    pause() { assert.fail("Rendering cannot pause work"); }, resume,
+    pause() { assert.fail("Rendering cannot pause work"); }, resume: resume && { label: "Continue planning", onClick: resume },
   }));
   const idle = render(false);
   assert.match(idle, /Idle · Ready when you are/);
   assert.doesNotMatch(idle, /<button|answering questions|Questions in Design/);
   const saved = render(false, () => assert.fail("Rendering cannot resume work"));
-  assert.match(saved, />Continue<\/button>/);
+  assert.match(saved, />Continue planning<\/button>/);
   assert.doesNotMatch(saved, />Pause<\/button>/);
   const working = render(true, () => assert.fail("Rendering cannot resume work"));
   assert.match(working, /Planning implementation/);
   assert.match(working, />Pause<\/button>/);
-  assert.doesNotMatch(working, />Continue<\/button>|>Stop<\/button>|Cancel current work|answering questions/);
+  assert.doesNotMatch(working, />Continue planning<\/button>|>Stop<\/button>|Cancel current work|answering questions/);
   assert.match(render(true, undefined, true), /disabled=""/);
 });
 
@@ -72,10 +72,30 @@ test("Continue specification consistently distinguishes consent, waiting decisio
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };
   assert.equal(mayContinueProject(workflow), true);
+  assert.equal(savedWorkflowLabel(workflow), undefined);
+  const history: WorkflowView = { ...workflow, enabled: true, suspended: true, phase: "paused",
+    grant: { used: 5, remainingMs: 1000, continuous: true } };
+  assert.equal(savedWorkflowLabel(history), undefined, "Permission/history alone cannot start a new process");
+  for (const [kind, label] of [["input", "Process saved responses"], ["interpret", "Continue specification review"],
+    ["refine", "Continue refinement"], ["conflicts", "Continue refinement"], ["definition", "Continue assessment"],
+    ["definition-change", "Continue assessment"], ["discover", "Continue Design"], ["readiness-questions", "Continue Design"]] as const) {
+    const saved: WorkflowView = { ...history, current: { kind, target: "saved-scope", completed: false } };
+    assert.equal(savedWorkflowLabel(saved), label);
+    assert.equal(savedWorkflowLabel({ ...saved, current: { ...saved.current!, completed: true } }), undefined);
+    assert.equal(savedWorkflowLabel({ ...saved, active: true }), undefined);
+    assert.equal(savedWorkflowLabel({ ...saved, decisions: [{ kind: "question", id: "choice", title: "Choose behavior" }] }), undefined);
+    assert.equal(savedWorkflowLabel({ ...saved, phase: "ready-to-plan" }), undefined);
+    assert.equal(savedWorkflowLabel({ ...saved, phase: "ready-to-implement" }), undefined);
+  }
+  assert.equal(savedWorkflowLabel({ ...history, answerBatch: { savedResponses: 2, waiting: true } }), "Process saved responses");
+  assert.equal(savedWorkflowLabel({ ...history, answerBatch: { savedResponses: 0, waiting: true },
+    questionBatch: { format: 1, inputKey: "a".repeat(64), revision: 1, packages: 1, requests: 2, remainingMs: 1000,
+      state: "finished", reason: "target", limits: workflow.questionBatch?.limits ?? { target: 5, packages: 5, requests: 16, durationMs: 300000 }, questions: 5 } }), undefined);
   const packingStop: WorkflowView = { ...workflow, enabled: true, paused: false, suspended: false, phase: "needs-decision",
     packingContinuation: true, answerBatch: { savedResponses: 0, waiting: true },
     decisions: [{ kind: "input", id: "saved-group", title: "Saved shared work needs continuation" }] };
   assert.equal(mayContinueProject(packingStop), true, "A packing continuation must not be hidden behind its saved-input issue");
+  assert.equal(savedWorkflowLabel(packingStop), "Process saved responses");
   assert.equal(mayContinueProject({ ...packingStop, packingContinuation: undefined }), false, "Other saved-input issues must still require resolution");
   assert.match(renderToStaticMarkup(createElement(WorkflowControls, { workflow: packingStop, disabled: false, pending: false, configure() {} })), /recheck its exact layout/);
   const lastRun: NonNullable<WorkflowView["lastRun"]> = { format: 1, id: "00000000-0000-4000-8000-000000000001", grantID: "fixture",

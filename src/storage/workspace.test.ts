@@ -8,7 +8,9 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { PublicationObjects } from "./publication-objects.js";
 import { writePrettyJSON, stageJSON, discardStaged } from "./staged-json.js";
-import { continuationState, decodePortable } from "./portable.js";
+import { continuationState, decodePortable, portableFiles } from "./portable.js";
+import { emptyExecution } from "../core/execution.js";
+import { publicationFailureClassifier } from "./publication-failure.js";
 import { stageContinuation, discardContinuation, decodeContinuationParts } from "./continuation-parts.js";
 import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder, readPortableWorkspace } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
@@ -18,6 +20,40 @@ import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 const parent = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "private-account" } as const;
+
+test("publication failure classification recognizes fragmented V8 reports without exporting raw stderr", () => {
+  const classified = publicationFailureClassifier();
+  classified.observe(Buffer.from("private path C:/private/project and token not-for-export\nFATAL ERROR: Reached heap limit Allocation failed - Java"));
+  assert.equal(classified.description(), "cause not established");
+  classified.observe(Buffer.from("Script heap out of memory\nPrivate stack and environment"));
+  assert.equal(classified.description(), "child reported JavaScript heap exhaustion");
+  classified.observe(Buffer.from("x".repeat(100000)));
+  assert.equal(classified.description(), "child reported JavaScript heap exhaustion");
+  const unknown = publicationFailureClassifier();
+  unknown.observe(Buffer.from("exit code 134; heap near limit; JavaScript heap out of memory (quoted application text)"));
+  assert.equal(unknown.description(), "cause not established", "Exit codes and generic text are not proof of a V8 fatal marker");
+});
+
+test("precomputed portable metadata releases the staged history graph without changing any rendered bytes", () => {
+  const f = fixture();
+  try {
+    const project = generate(f.store, f.project), execution = emptyExecution();
+    const job: Job = { id: "historical-render-check", projectID: project.id, expectedRevision: f.project.revision,
+      status: "failed", model: selection, leaseUntil: null,
+      context: { revision: f.project.revision, focusEpicID: null, characters: 0, budget: 96000, includedIDs: [], omittedIDs: [], refinementOnly: true } };
+    const continuation = continuationState(project, [job], [], revision => f.store.get(project.id, revision));
+    for (const limit of [64 * 1024 * 1024, 1]) {
+      const staged = stageContinuation(f.directory, continuation, 1024, limit);
+      try {
+        const before = renderWorkspace(project, execution, continuation, staged);
+        const prepared = portableFiles(project, execution, continuation, true);
+        const after = renderWorkspace(project, execution, undefined, staged, prepared);
+        assert.deepEqual(after, before, "Exact format, order, evidence, state and hashes must survive release of history");
+        assert.equal(!!staged.parts, limit === 1);
+      } finally { discardContinuation(staged); }
+    }
+  } finally { f.cleanup(); }
+});
 
 test("bounded JSON staging preserves exact ordered Unicode bytes and rejects incomplete/oversized artifacts", () => {
   const directory = mkdtempSync(join(parent, "staged-json-"));
@@ -271,7 +307,7 @@ test("heap-capped publication failure preserves SQLite work, stops automatic ret
     await store.flushWorkspacePublication();
     assert.equal(store.workspace(project.id)!.status, "unavailable");
     assert.match(store.workspace(project.id)!.diagnostic!, /isolated portable-save process stopped/);
-    assert.match(store.workspace(project.id)!.diagnostic!, /exit code .*signal .*heap cap 16 MiB; cause not established/);
+    assert.match(store.workspace(project.id)!.diagnostic!, /exit code .*signal .*heap cap 16 MiB; (cause not established|child reported JavaScript heap exhaustion)/);
     assert.deepEqual(store.get(project.id), changed);
     assert.deepEqual(store.jobs(project.id), originalJobs);
     const db = new Database(f.database);

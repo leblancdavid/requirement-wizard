@@ -1,5 +1,24 @@
 import type { ExecutionState } from "../core/execution.js";
 import type { Job, Project } from "../core/model.js";
+import type { WorkflowView } from "../service/workflow.js";
+
+/** History/permission alone is not queued work. Waiting decisions and finished
+ * collection need an explicit next-process choice, not a generic header start. */
+export function savedWorkflowLabel(workflow: WorkflowView) {
+  if (!workflow.enabled || workflow.active) return undefined;
+  if (workflow.answerBatch?.savedResponses || workflow.packingContinuation) return "Process saved responses";
+  if (workflow.questionBatch?.state === "collecting") return "Continue Design";
+  if (workflow.decisions.length || !workflow.current || workflow.current.completed
+    || ["idle", "needs-decision", "ready-to-plan", "ready-to-implement"].includes(workflow.phase)) return undefined;
+  switch (workflow.current.kind) {
+    case "input": return "Process saved responses";
+    case "refine": case "conflicts": return "Continue refinement";
+     case "definition": case "definition-change": return "Continue assessment";
+     case "organization": return "Continue feature organization";
+    case "discover": case "readiness-questions": return "Continue Design";
+    case "interpret": return "Continue specification review";
+  }
+}
 
 export type QueueActivity = {
   id: string; title: string; status: string; active: boolean; stage?: string; detail?: string;
@@ -10,6 +29,7 @@ export type QueueActivity = {
 /** Local joint validation has a separate explicit service entry point and must
  * never turn into a generic discovery-resume permission after failure/timeout. */
 export function discoveryResumeJob(job?: Job) {
+  if (job?.kind === "organization-check" || job?.organizationCheck) return undefined;
   return job?.kind === "definition-joint-review" || job?.context?.definitionJointReview || job?.kind === "definition-scope-review" || job?.context?.definitionScopeReview
     || job?.kind === "definition-mixed-review" || job?.context?.definitionMixedReview ? undefined : job;
 }

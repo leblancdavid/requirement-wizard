@@ -1,5 +1,17 @@
 # Browser workspace, epics, and estimated completeness
 
+Saved-response processing now tells the AI exactly which supporting records are
+already present and which can still be requested. One invalid lookup can be
+corrected within the existing authorized request allowance; repeated invalid
+lookups still stop, and rejected requests remain charged. Completed work is not
+reset. Restart the backend and explicitly continue the stopped response to use
+the new guidance; reopening alone starts no model work. No model change is needed.
+Verification requests use a smaller phase-specific response schema, without
+omitting required evidence or checks. Portable folder saving also releases staged
+history before rendering other files, and reports more precise failure phases.
+The supplied production save failure is not yet qualified as fixed; see
+[compatibility and checks](migrations.md#saved-response-lookup-safety-and-publication-retention-2026-11-15).
+
 New frozen discovery checks may examine more closely related evidence first, to
 reject answered/conflicting drafts sooner. Word overlap sets only the order; all
 evidence still needs checking before a surviving question appears. Saved paid
@@ -216,7 +228,12 @@ working; separate pause/stop/cancel buttons are removed from the ordinary header
 Pause uses the existing worker's saved-progress interruption path; coordinated
 workflow pause finishes its current reply. Technical stop controls remain in Logs.
 
-**Continue** appears only for unfinished saved work, not as a general start button.
+The continuation button names its saved task: **Process saved responses**,
+**Continue Design**, **Continue refinement**, **Continue assessment**,
+**Continue planning**, or **Continue implementation** (with scan/specification-review
+labels for those tasks). It is not a general start button. Historical grants/runs,
+completed workflow steps, and optional extra exploration alone do not show it;
+an empty queue leaves the next process to the explicit footer actions.
 Planning and coding continuation keep their operation; newer execution tasks do not
 revive an older discovery run. Special code checks retain their explicit retry
 controls rather than reconstructing their scope or permissions. Discovery/refinement
@@ -230,6 +247,13 @@ gates remain. Activity and Settings have no process-start footer.
 
 This changes presentation and dispatch selection only. Saved records, paid checks,
 assessment validity and portable formats are unchanged; no data migration is needed.
+The 2026-11-14 label/eligibility follow-up exposes the existing optional workflow
+step-completion flag in the browser status projection only; legacy absent flags
+and all persisted formats remain unchanged. Focused workflow/UI/API/snapshot checks
+(114 tests), type checking, UI build, the project-assistance browser runner and the
+full `npm run test:browser` command (including posttest runners) passed. The workspace
+runner covers named saved-response/planning continuation and empty queues with old
+permission or completed steps across reload. No live model calls were made.
 Verification: type checking, 67 focused UI/continuation tests, UI build, and the
 workspace-layout, model-selection and assessment-tools browser runners passed.
 The workspace runner checks mobile footers, exact Refine scope, one header action,
@@ -4186,6 +4210,109 @@ batches, and corrected scope reuses the existing human source. Saved human input
 preserved. Direct service jobs still retain attempted manifests for oversized contexts.
 
 ## Epic organization
+
+### Automatic feature organization checks (2026-11-15)
+
+New **Continue specification / Continue** permission includes candidate feature
+organization checks. Once saved input and outstanding decisions are resolved, eligible
+large features can be checked before further discovery/definition work. The existing
+size hints (25 active requirements, 15 unresolved questions or 48,000 characters of
+non-retired organized records) invite a semantic check; they never require splitting.
+Question collection is not interrupted, and assessment-only **Review changes** does
+not authorize organization work. A split always becomes a Specification decision,
+with all existing records/choices unchanged until the user reviews and applies it.
+Already-started tasks and compatible paid definition checkpoints take priority over
+new advisory organization work. While questions are outstanding their count remains a
+manual-check hint, not permission to work past the decision boundary.
+
+These requests use the same owned workflow allowance and run receipt, not a separate
+worker or an extra spending grant. Each organization window still allows at most eight
+requests/five minutes, narrowed to the workflow's remaining allowance. A longer check
+pauses for explicit continuation; completed reads/drafts/checks are retained. Pause
+can save the current reply before stopping; Cancel aborts the owned task. No publication
+occurs after a pause or input change. Failed dispatch reservations roll back both the
+attempt and shared request charge. Other workers cannot spend or publish this work.
+
+Automatic scheduling does not repeat completed keep/blocked/rejected-verification or
+dismissed-split outcomes for unchanged feature evidence. Unrelated feature-map/model
+metadata does not automatically cause paid rechecks. The scheduling key is a separate
+local/dependency/incoming-boundary digest, **not** publication freshness authority:
+every eventual proposal still needs the full exact-input basis and original validation.
+Relevant changed records permit a new check. Accepted splits suppress immediate
+resplitting of unchanged large destinations using their original review snapshot and
+simulated map; missing originals defer automatic work instead of inventing a baseline.
+
+Only the coordinator's own interrupted matching task resumes on a later explicit
+Continue. Unrelated stopped manual checks remain available through their explicit
+controls. Missing/oversized evidence or an unfit initial request remains advisory and
+does not create a new readiness gate; other eligible work may proceed. A technical
+failure during dispatched work still pauses normally and retains its checkpoint.
+
+SQLite 81 preserves older grants and all format-1 organization checkpoints unchanged.
+Opening/upgrading a project or selecting a processing mode neither opts old grants in
+nor starts calls. Manual processing still needs an explicit action; organization policy
+is local workflow consent, not portable permission. Conditional portable 52 continues
+to carry the same task/review evidence. See [compatibility](migrations.md#coordinated-feature-organization-policy-2026-11-15).
+
+`npm run test:organization` includes automatic sequencing, shared accounting, atomic
+reservation rejection, anti-churn, Pause/Play and reader-upgrade fixtures. The automatic
+mode of `npm run test:browser:organization` checks real Continue consent, shared request
+counts, proposal review, no-spend reload and mobile width. Screenshot:
+`.reqwizit-state/browser-check-organization-automatic.png`. Live boundary quality,
+threshold calibration with real projects and editable allocations remain unqualified.
+
+### Explicit feature organization checks (2026-11-14)
+
+In **Specification → Organize features**, choose **Check feature organization** for
+an active feature. Confirm the selected AI connection's use: each action allows up
+to eight requests/five minutes. Opening a project, changing settings or seeing a
+size hint starts no work. Shared Project-wide/Unorganized ideas areas cannot be split.
+
+The check reads exact saved information in bounded batches, proposes keep/split/blocked,
+then checks a keep/split decision against every original batch. Collection summaries
+are provisional and cannot alone justify publication. Split proposals must allocate
+every source question (including retired questions), requirement, note and research
+finding exactly once into 2–10 new, nonempty, distinctly named features. IDs and human
+choices are preserved. Original source bodies, incoming dependency definitions and
+project/dependency guardrails remain authoritative; no research or coding is authorized.
+
+The preview shows proposed names/purposes, record placement and dependencies. Applying
+a split archives the original feature and redirects its incoming dependencies to the
+destinations using existing organization validation. Original dated assessments remain
+saved, but are not copied as current reviews of new features. Related definition
+reviews and implementation plans can become outdated. The preview explains this cost.
+
+All splits from this explicit action require review, even when their records are
+unconfirmed. Existing ordinary discovery still follows DEC-010's automatic organization
+rule for unconfirmed material. **Keep current** dismisses the proposal. Rechecking
+unchanged inputs reuses the completed outcome, including a dismissed proposal, without
+new calls or another pending decision. Relevant changed information permits a new check.
+New check proposals have an exact-input basis: unchanged feature evidence/organization
+survives unrelated model/review metadata revisions. Legacy proposals retain their
+strict created-revision rule. Changed relevant inputs always block application.
+
+**Continue organization check** explicitly grants another bounded window after Stop,
+interruption or failure. Matching original reads/drafts/checks survive SQLite reopen and
+portable adoption. Concurrent edits retain valid original replies before stale publication
+is blocked. Changed exact inputs require fresh work; no automatic replay or silent
+truncation is allowed. Indivisible records over 16,000 characters, more than 256 evidence
+batches, or complete request/proposal packages over 48,000 characters block safely.
+
+Advisory size hints currently use 25 active requirements, 15 unresolved questions or
+48,000 characters of non-retired organized records. These are initial heuristics, not
+proof that a split helps or a readiness gate. A cohesive large feature may stay together;
+implementation phases and technical layers alone do not justify a product split.
+Automatic scheduling was not implemented in this first slice; the dated follow-up
+above adds it. Editable split allocations, nested feature hierarchies and live semantic
+qualification remain outside the implemented scope.
+
+Verification: `npm run test:organization` exercises deterministic storage/service/API,
+upgrade and portable recovery. `npm run test:browser:organization` exercises explicit
+consent, no-spend cancellation, the before/after preview and application with a fixture
+adapter. Screenshot: `.reqwizit-state/browser-check-organization.png`. See the
+[migration ledger](migrations.md#explicit-feature-organization-checks-2026-11-14).
+
+### Existing discovery organization
 
 Epics have stable identities, purpose, dependencies, and question/requirement/note/research
 membership. **Project-wide** holds cross-cutting information. **Unorganized ideas**

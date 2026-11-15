@@ -98,6 +98,7 @@ try {
   const corrected = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: store.get(p.id).questions[0]!.sourceID!, answer: { kind: "answer", text: "Keep reports available offline" } } });
   await page.reload();
   await expect(page.getByRole("button", { name: "Needs attention 1", exact: true })).toHaveCount(0);
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Process saved responses", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Submitted 1", exact: true }).click();
   await expect(page.getByRole("heading", { name: question.text, exact: true })).toBeVisible();
   store.applyQueued(p.id);
@@ -161,7 +162,7 @@ try {
   await page.getByText("Organize features", { exact: true }).click();
   await expect(page.getByLabel("Feature for Save reports offline", { exact: true })).toBeVisible();
   await page.getByText("Organize features", { exact: true }).click();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue Design", exact: true })).toBeVisible();
   await expect(page.locator(".queue-header")).not.toContainText(/batch|checkpoint|request attempts|processing mode/i);
   await expect(page.locator(".queue-trigger")).toHaveCount(0);
   await page.getByRole("tab", { name: /^Implement/ }).click();
@@ -236,7 +237,7 @@ try {
   await page.route(stopRoute, async (route) => { stops++; running = false; await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
   await page.reload();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toHaveCount(0);
+  await expect(page.locator(".queue-header").getByRole("button", { name: /^Continue/ })).toHaveCount(0);
   await expect(page.locator(".queue-header")).not.toContainText("You can keep reading and answering questions.");
   await expect(page.locator(".queue-header")).not.toContainText("internal-stage-marker");
   await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
@@ -266,12 +267,32 @@ try {
   await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
   await expect.poll(() => executionStops).toBe(1);
   await expect(page.locator(".project-status")).toContainText("Idle");
-  await page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Continue planning", exact: true }).click();
   await expect.poll(() => continued.length).toBe(1);
   assert.equal(continued[0]!.operation, "plan");
   assert.equal(stops, 1, "Planning Pause did not cancel discovery");
   assert.deepEqual(store.get(p.id), before);
   await page.unroute(snapshotRoute); await page.unroute(executionStopRoute); await page.unroute(executionStartRoute);
+  // Old workflow permission and completed work are not a queue. Even after
+  // reopening, the user chooses the next process using the explicit footers.
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  for (const completed of [false, true]) {
+    await page.route(snapshotRoute, async route => {
+      const response = await route.fetch({ headers: { ...route.request().headers(), "if-none-match": "" } });
+      const snapshot = await response.json();
+      await route.fulfill({ response, json: { ...snapshot, jobs: [], active: false, queuePaused: true,
+        implementationActive: false, execution: emptyExecution(),
+        workflow: { ...snapshot.workflow, enabled: true, active: false, paused: true, suspended: true, phase: "paused",
+          grant: { used: 3, remainingMs: 1000, continuous: true },
+          current: completed ? { kind: "discover", completed: true } : undefined,
+          answerBatch: { savedResponses: 0, waiting: true }, questionBatch: undefined } } });
+    });
+    await page.reload();
+    await expect(page.locator(".project-status")).toContainText("Idle · Ready when you are");
+    await expect(page.locator(".queue-header").getByRole("button")).toHaveCount(0);
+    await expect(footer.getByRole("button", { name: "Discover", exact: true })).toBeVisible();
+    await page.unroute(snapshotRoute);
+  }
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");

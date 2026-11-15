@@ -1,5 +1,14 @@
 # Architecture outline
 
+Saved-response dispatch derives loaded/missing lookup permission from its existing
+exact manifest, advertises only phase-appropriate outputs and can correct one
+consecutive invalid lookup within the original charged bounds. Historical parsers,
+context keys and paid layouts remain unchanged. Publication precomputes portable
+format/state metadata after staging, then releases the continuation graph before
+rendering other artifacts; child diagnostics distinguish staging/render phases and
+classify known V8 heap failures without exporting stderr. See
+[compatibility and qualification](migrations.md#saved-response-lookup-safety-and-publication-retention-2026-11-15).
+
 New explicitly targeted no-research dense question collection may use candidate-first
 v1: one bounded exact proposal screen followed by frozen verification v3 against
 the full mandatory evidence union. Original mandatory layouts remain the evidence
@@ -1537,6 +1546,31 @@ prompt. See [implementation workflow](implementation-workspace.md#prepare-and-re
 and the [migration ledger](migrations.md).
 
 ## Epic organization, assessment, and context
+
+`src/core/organization-check.ts` adds an explicit organization-only task separate from
+ordinary discovery's partial-context permissions. Its versioned exact-input identity
+binds current feature/dependency evidence, full active feature definitions and complete
+movable membership. Deterministic exact-record batches feed provisional collection,
+a frozen keep/split decision and full-current batch verification. Only all-passing
+split decisions become ordinary organization-review operations; the task cannot alter
+requirements, answers, global interpretation or assessments. Original evidence is not
+truncated to fit. `src/service/organization-check.ts` owns bounded explicit work through
+the existing adapter; the queue owns Stop and prevents concurrent processing. Versioned
+job checkpoints persist independently of specification revisions. New split reviews
+carry exact-input bases; old organization reviews retain their created-revision rule.
+SQLite 80 and conditional portable 52 protect these reader capabilities without rewriting
+old work. Opening or upgrading a project starts no calls. Automatic scheduling was not
+included in the original 2026-11-14 slice. The 2026-11-15 follow-up adds an opt-in
+`organizationPolicy` to new coordinator continuation and an `organization` current-task
+kind (SQLite 81). Candidate selection reads only organization jobs and relevant original
+snapshots; its narrower scheduling digest cannot establish publication freshness. An
+accepted split's original map can be simulated to suppress unchanged child candidates.
+The existing task runner narrows each window to the shared allowance. Attempt reservation
+and the coordinator's `beforeRequest` charge commit atomically; owner/policy checks
+protect dispatch/publication, while valid original replies can still be retained after
+Pause or edits. Pending decisions and explicit assessment checkpoints hold organization
+work. Keep/blocked/no-fit organization outcomes do not establish a readiness gate.
+See [automatic organization](browser-workspace.md#automatic-feature-organization-checks-2026-11-15).
 
 Epics and typed memberships live in revisioned snapshots. A pure round applier
 validates temporary model aliases, IDs, dependencies, splits/merges, and assessment

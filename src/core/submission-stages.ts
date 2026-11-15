@@ -17,7 +17,40 @@ export const submissionStageResponseSchema = z.union([analysisSchema,
   z.object({ submissionKeep: z.literal(true) }).strict(),
   z.object({ submissionCheck: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict(),
   z.object({ submissionEvidence: z.object({ recordIDs: z.array(z.string().min(1)).min(1).max(8) }).strict() }).strict(),
-   z.object({ submissionBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
+    z.object({ submissionBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
+
+/** Dispatch-only constraints. Historical receipts and context keys remain exact. */
+export function submissionLookupInventory(context: ContextPack) {
+  const loaded = new Set(context.manifest.includedIDs), missing = context.manifest.omittedIDs;
+  if (loaded.size !== context.manifest.includedIDs.length || new Set(missing).size !== missing.length || missing.some(id => loaded.has(id)))
+    throw new Error("Saved-response lookup inventory is inconsistent. No lookup permission was inferred.");
+  return { loadedIDs: [...loaded], requestableIDs: [...missing] };
+}
+
+export function submissionDispatchSchema(context: ContextPack, draft: z.ZodTypeAny = submissionDraftSchema) {
+  const stage = context.manifest.submissionStage;
+  if (!stage) throw new Error("Saved-response dispatch requires an exact stage.");
+  const inventory = submissionLookupInventory(context);
+  const blocked = submissionStageResponseSchema.options[4];
+  const correction = !!(context.data as { submissionStage?: { draftRepair?: unknown } }).submissionStage?.draftRepair;
+  const responses: [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]] = stage.phase === "check"
+    ? [submissionStageResponseSchema.options[2], blocked]
+    : correction ? [draft, blocked] : [draft, submissionStageResponseSchema.options[1], blocked];
+  if (inventory.requestableIDs.length) responses.push(z.object({ submissionEvidence: z.object({
+    recordIDs: z.array(z.enum(inventory.requestableIDs as [string, ...string[]])).min(1).max(8)
+      .refine(ids => new Set(ids).size === ids.length, "Choose each missing original ID at most once.")
+      .describe("Distinct missing original string IDs only; never already detailed IDs, identifier-table indexes or new: aliases."),
+  }).strict() }).strict());
+  return z.union(responses);
+}
+
+export class SubmissionLookupError extends Error {
+  constructor(readonly issues: { unknown: number; duplicate: number; alreadyLoaded: number }) {
+    const detail = Object.entries(issues).filter(([, count]) => count).map(([kind, count]) => `${kind}=${count}`).join(", ");
+    super(`Saved-response evidence lookup rejected (${detail}). No evidence was loaded or stage completed; the spent attempt is retained.`);
+    this.name = "SubmissionLookupError";
+  }
+}
 /** Prompt-only constrained draft. The persisted legacy response parser stays
  * unchanged so upgrading never rewrites earlier wire receipts. */
 const draftAlias = z.string().regex(/^new:[\s\S]*\S[\s\S]*$/, "Use a nonempty new: alias, or omit localID.").optional();
@@ -263,7 +296,10 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
   const response = submissionStageResponseSchema.parse(raw), context = submissionStageContext(m, w, draft);
   if ("submissionEvidence" in response) {
     const ids = response.submissionEvidence.recordIDs;
-    if (new Set(ids).size !== ids.length || ids.some((id) => !m.evidenceIDs.includes(id) || context.manifest.includedIDs.includes(id))) throw new Error("Follow-up retrieval contains unknown, duplicate or already loaded evidence.");
+    const known = new Set(m.evidenceIDs), loaded = new Set(context.manifest.includedIDs);
+    const issues = { unknown: ids.filter(id => !known.has(id)).length, duplicate: ids.length - new Set(ids).size,
+      alreadyLoaded: ids.filter(id => loaded.has(id)).length };
+    if (issues.unknown || issues.duplicate || issues.alreadyLoaded) throw new SubmissionLookupError(issues);
     return { response, draft };
   }
   if ("submissionBlocked" in response) return { response, draft, blocked: response.submissionBlocked.reason };

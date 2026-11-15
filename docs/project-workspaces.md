@@ -26,6 +26,13 @@ between areas. **Pause assessment before committing/sharing the latest `.reqwizi
 state.** Pending exports recover from durable dirty state after interruption; no
 model calls restart automatically. Other projects' publication is unaffected.
 
+Portable publication now releases its already staged historical graph before
+rendering remaining workspace files. Child failures distinguish continuation
+staging from workspace rendering; recognized V8 heap-exhaustion reports are
+classified without exposing stderr. The 256 MiB heap cap and export bytes/guards
+are unchanged. A synthetic full-render check passes, but the supplied production
+abort remains unqualified. See [compatibility and recovery](migrations.md#saved-response-lookup-safety-and-publication-retention-2026-11-15).
+
 ## Share and continue a project (DEC-029)
 
 Commit the entire `.reqwizit/` directory alongside the code. In another checkout,

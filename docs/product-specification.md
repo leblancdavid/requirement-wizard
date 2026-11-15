@@ -373,6 +373,13 @@ records, split/merge areas, and identify dependencies.
 - Changes affecting confirmed information require review; stale proposals are rejected.
 - Splits/merges preserve records and identities, reject cycles, and invalidate inherited assessments.
 - Restoring an earlier map preserves current answers and requirement decisions.
+- An explicit feature-organization check can suggest keep/split/blocked outcomes;
+  size hints are advisory, not mandatory splits. Its bounded exact-evidence checks
+  are resumable and every resulting split needs a placement preview and review.
+  New explicit coordinator permission can schedule eligible candidates automatically
+  within the same allowance, after input/decisions and before further area reviews.
+  Unchanged/dismissed outcomes and newly split unchanged destinations must not churn;
+  existing grants are not silently opted in during upgrade. Splits still need review.
 
 **RW-019 — Estimated completeness.** Assess applicable coverage areas per epic and
 show a deterministic project aggregate with explanations and evidence.

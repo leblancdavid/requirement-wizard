@@ -319,7 +319,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
-        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, answerGroupWork, refinementWork, ...job }) => ({ ...job,
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, answerGroupWork, refinementWork, organizationCheck, ...job }) => ({ ...job,
+          ...(organizationCheck ? { diagnostic: job.diagnostic ?? organizationCheck.checks.find(c => !c.valid)?.reason ?? organizationCheck.decision?.reason } : {}),
           ...(answerGroupWork ? { answerGroupProgress: { answers: answerGroupWork.submissionIDs.length, ...answerGroupProgress(answerGroupWork) }, submissionProgress: answerGroupProgress(answerGroupWork) } : {}),
           ...(answerGroupWork ? { answerGroupClarification: answerGroupClarificationView(project, { ...job, answerGroupWork }) } : {}),
           ...(refinementWork ? { refinementStageProgress: refinementStageProgress(refinementWork) } : {}),
@@ -614,6 +615,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "organize") {
         const input = z.object({ revision, operations: z.array(organizationSchema).max(40) }).strict().parse(raw);
         json(res, 200, options.store.organize(id, input.revision, input.operations)); return;
+      }
+      if (action === "organization-check") {
+        const input = z.object({ revision, epicID: z.string().min(1).max(200), confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        json(res, 202, await queue.checkOrganization(id, input.revision, input.epicID)); return;
       }
       if (action === "organization-review") {
         const input = z.object({ revision, reviewID: z.string(), accept: z.boolean() }).strict().parse(raw);

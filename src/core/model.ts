@@ -305,7 +305,7 @@ export type Job = {
   /** Recorded lifecycle times, optional for older/portable saved jobs. */
   createdAt?: string; startedAt?: string; finishedAt?: string;
   id: string; projectID: string; expectedRevision: number;
-  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review" | "definition-change-review" | "definition-change-group";
+  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review" | "definition-change-review" | "definition-change-group" | "organization-check";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   /** Portable completed-check ledger, not a full runtime/navigation transcript. */
@@ -313,10 +313,12 @@ export type Job = {
   /** Local metadata measurements only; absence means not measured by this version. */
   discoveryMetrics?: import("./discovery-diagnostics.js").DiscoveryMetrics;
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
+  organizationCheck?: import("./organization-check.js").OrganizationCheck;
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
     partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;
     epicContextBudget?: import("./epic-review-types.js").EpicContextBudget;
     isolatedTask?: boolean;
+    organizationCheck?: { format: 1; inputKey: string; phase: "read" | "decide" | "check"; index: number };
     gapExploration?: { targetRecordID: string; check?: z.infer<typeof gapCheckSchema> };
     gapRetrieval?: boolean;
     epicReview?: import("./epic-review-types.js").EpicReview;

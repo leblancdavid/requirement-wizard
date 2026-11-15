@@ -6,7 +6,7 @@ import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
-import { packSubmissionVerification } from "../core/submission-stages.js";
+import { packSubmissionVerification, SubmissionLookupError } from "../core/submission-stages.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -48,6 +48,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   local("validation", () => store.assertSubmissionDraftRepair(project, item, w));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
+  let lookupCorrection: SubmissionLookupError["issues"] | undefined;
   const bookkeeping = <T>(phase: Parameters<DiscoveryMeasurement["bookkeeping"]>[0], run: () => T): T => options.measurement ? options.measurement.bookkeeping(phase, run) : run();
   const progress = (message: string) => bookkeeping("progress", () => options.onProgress?.(message));
   const current = () => bookkeeping("revisionChecks", () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); });
@@ -89,6 +90,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       }
     }
     const context = local("context", () => done ? submissionStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft) : submissionStageContext(m, w, draft));
+    if (lookupCorrection) context.submissionLookupCorrection = lookupCorrection;
     context.manifest.reviewSourceIDs = item.input.type === "review" ? [item.appliedSourceID!] : [];
     context.manifest.scopedAnswerSourceIDs = item.answerScope ? [item.appliedSourceID!] : [];
     context.manifest.reviewChangeSourceIDs = item.input.type === "review" && item.input.action !== "changes-requested" && item.input.note.trim() ? [item.appliedSourceID!] : [];
@@ -125,9 +127,15 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       const raw = await Promise.race([options.measurement ? options.measurement.request(request, context, signal) : request(), interrupted]);
       signal.throwIfAborted();
       const next = local("validation", () => acceptSubmissionStage(m, w, draft, raw, job)); draft = next.draft; blocked = next.blocked;
+      lookupCorrection = undefined;
       local("checkpoint", () => store.checkpointSubmission(job.id, w, context.manifest));
     } catch (error) {
       if (timeout.aborted && !options.signal.aborted) return store.pauseSubmission(job.id, "Saved-response follow-up timed out. Continue explicitly; completed steps and the spent request are retained.");
+      if (error instanceof SubmissionLookupError && !lookupCorrection && w.attempts < submissionRequestLimit(w)) {
+        current(); lookupCorrection = error.issues;
+        progress(`${error.message} Correcting this lookup once within the existing request allowance; no extra requests were granted.`);
+        continue;
+      }
       throw error;
     } finally { signal.removeEventListener("abort", abort); }
   }

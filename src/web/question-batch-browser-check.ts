@@ -117,7 +117,7 @@ try {
     assert.equal(topics.length, originalCalls, "Editing a queued answer never starts its review");
   }
   releaseRefresh(); await clearRoutes();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Process saved responses", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
     console.log("Question collection browser passed: unified target, no-spend selection/reload, bounded cross-window collection, owned Pause/reload/resume without renewed consent, retained charged attempts, mobile, five durable save-only answers during a held refresh and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }

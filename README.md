@@ -16,6 +16,21 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Saved-response evidence lookups now use exact missing-record schemas and bounded
+protocol correction within the original allowance. Verification schemas are smaller,
+and portable publication releases staged history before rendering other artifacts.
+Old paid work and output formats are preserved. Synthetic capped-heap checks pass;
+the supplied production save failure and live speed remain unqualified. See
+[compatibility and checks](docs/migrations.md#saved-response-lookup-safety-and-publication-retention-2026-11-15).
+
+**Feature organization checks** are available in **Specification → Organize features**.
+Check whether a growing feature would benefit from smaller, cohesive features; review
+the exact proposed moves before applying a split. New **Continue specification**
+permission also checks eligible growing features automatically within the same
+allowance, without silently applying splits or repeating unchanged outcomes. Large
+checks retain completed steps and can be continued explicitly. Size alone does not
+require splitting; see [automatic feature organization](docs/browser-workspace.md#automatic-feature-organization-checks-2026-11-15).
+
 Fresh dense discovery now looks for independent decision frontiers and can pack
 wholly unstarted verification against the frozen draft, retaining every mandatory
 record and paid read. After a smaller batch, **Find more before processing answers**

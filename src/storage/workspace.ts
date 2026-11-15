@@ -14,7 +14,7 @@ export { requirementFingerprint } from "../core/implementation.js";
 export const workspaceFolder = ".reqwizit";
 export const legacyWorkspaceFolder = ".requirement-wizard";
 const legacyArtifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"];
-export type PublicationProgress = { projectID: string; revision: number; phase: "history" | "continuation" | "render" | "files"; heapUsedBytes: number };
+export type PublicationProgress = { projectID: string; revision: number; phase: "history" | "continuation" | "continuation-staging" | "workspace-render" | "files"; heapUsedBytes: number };
 export type Workspace = {
   bindingID?: string;
   path: string; status: "saved" | "pending" | "conflict" | "unavailable";
@@ -131,7 +131,8 @@ export function renderCombinedSpecification(project: Project) {
     summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }) };
 }
-export function renderWorkspace(project: Project, execution?: ExecutionState, continuation?: Continuation, stagedContinuation?: StagedContinuation): Record<string, string> {
+export function renderWorkspace(project: Project, execution?: ExecutionState, continuation?: Continuation, stagedContinuation?: StagedContinuation,
+  preparedPortableFiles?: ReturnType<typeof portableFiles>): Record<string, string> {
   const score = coverage(project);
   const progress = project.requirements.map((requirement) => {
     const item = project.implementation.find((entry) => entry.requirementID === requirement.id);
@@ -193,7 +194,9 @@ export function renderWorkspace(project: Project, execution?: ExecutionState, co
          const requirement = project.requirements.find((entry) => entry.id === item.requirementID)!;
          return `### [${item.requirementID}](${featurePath(requirement.epicID)}.md) — ${item.status}${item.needsReview ? " · NEEDS REVIEW" : ""}\n\nRequirements review: ${item.reviewStatus}\n\nNotes: ${item.notes || "—"}\n\nVerification evidence: ${item.evidence || "—"}`;
        })].join("\n\n") + "\n";
-  Object.assign(files, portableFiles(project, execution ?? emptyExecution(), continuation, !!stagedContinuation));
+  // Publication can prepare these small format/state files before releasing its
+  // large, already staged continuation graph. Ordinary callers keep the old path.
+  Object.assign(files, preparedPortableFiles ?? portableFiles(project, execution ?? emptyExecution(), continuation, !!stagedContinuation));
   if (stagedContinuation?.parts) {
     const state = JSON.parse(files["state.json"]!);
     state.formatVersion = Math.max(state.formatVersion, 48);

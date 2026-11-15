@@ -62,7 +62,7 @@ try {
   await page.goto(app.origin);
   const permission = page.getByRole("region", { name: "Additional review permission", exact: true });
   await expect(permission).toBeVisible(); await expect(permission).toContainText("additional AI usage");
-  await page.locator(".queue-header").getByRole("button", { name: "Continue", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Review saved responses", exact: true }).click();
   assert.equal(allowances, 0, "Ordinary Continue cannot renew exhausted usage");
   await expect(permission).toBeVisible();
   await expect(permission.getByText("Details", { exact: true })).toBeVisible();

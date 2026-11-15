@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { decodeContinuationParts } from "./continuation-parts.js";
 import { validateEpicStages } from "../core/epic-stages.js";
 import { z } from "zod";
+import { organizationCheckSchema, organizationCheckMarkerSchema, validateOrganizationJob } from "../core/organization-check.js";
 import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, projectFields, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { definitionChangeGroupWorkSchema, definitionChangeGroupMarkerSchema } from "../core/definition-change-group.js";
@@ -190,13 +191,13 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       try { if (!refinementCurrent(current, job, () => refinementSnapshot(job.expectedRevision))) continue; }
       catch { /* An unavailable/unreadable legacy origin does not prove staleness. */ }
     }
-    const useful = job.gapReport || job.epicReviewReport || context?.refinementOnly || context?.gapExploration || context?.epicReview
+    const useful = job.organizationCheck || job.gapReport || job.epicReviewReport || context?.refinementOnly || context?.gapExploration || context?.epicReview
       || context?.readinessQuestions && context.readinessQuestions.inputKey === currentDefinitionKey(context.readinessQuestions.epicID)
          || job.definitionChangeGroupWork || job.definitionChangeWork || job.retrievalWork || job.definitionWork || job.submissionWork || job.answerGroupWork && job.status !== "completed" || job.scanWork && job.status !== "completed" || linked.has(job.id)
       || ["pending", "running"].includes(job.status);
     if (!useful) continue;
     const key = linked.has(job.id) ? job.id : JSON.stringify([job.kind, context?.refinementPair ?? context?.refinementTarget ?? context?.gapExploration?.check
-         ?? context?.epicReview ?? context?.readinessQuestions ?? job.definitionChangeGroupWork?.groupKey ?? job.definitionChangeWork?.taskKey ?? job.answerGroupWork?.submissionIDs ?? job.submissionWork?.submissionID ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
+          ?? context?.epicReview ?? context?.readinessQuestions ?? job.organizationCheck?.inputKey ?? job.definitionChangeGroupWork?.groupKey ?? job.definitionChangeWork?.taskKey ?? job.answerGroupWork?.submissionIDs ?? job.submissionWork?.submissionID ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
     selected.set(key, job);
   }
   // Some receipts explicitly refer to an earlier job (continuations and follow-up).
@@ -387,6 +388,8 @@ export function portableExecution(state: ExecutionState): ExecutionState {
 
 const markedAssessments = (value: unknown, field: "combinedReview" | "mixedReview"): boolean => Array.isArray(value) ? value.some((item) => markedAssessments(item, field))
   : !!value && typeof value === "object" && Object.hasOwn(value, field);
+const markedOrganization = (value: unknown): boolean => Array.isArray(value) ? value.some(markedOrganization)
+  : !!value && typeof value === "object" && Object.hasOwn(value, "organizationBasis");
 function requiresChangeReviewState(project: Project, continuation?: Continuation) {
   return project.definitionChangeReviews !== undefined || continuation?.jobs.some((job) => !!job.definitionChangeWork || !!job.definitionChangeGroupWork)
     || Object.values(continuation?.snapshots ?? {}).some((delta) => Object.hasOwn(delta, "definitionChangeReviews"));
@@ -440,7 +443,8 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3") ? 51
+  const sharedFormat = project.organizationReviews.some(r => r.organizationBasis) || Object.values(continuation?.objects ?? {}).some(markedOrganization) || continuation?.jobs.some(j => j.organizationCheck) ? 52
+    : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3") ? 51
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification?.policy === "relevance-first-epic-verification-v2") ? 50
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification || j.retrievalWork?.epicStages?.proposalPolicy) ? 49
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.collectionBaseline) ? 47
@@ -503,12 +507,14 @@ const executionSchema = z.object({ schemaVersion: z.union([z.literal(1), z.liter
 const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string().min(1), expectedRevision: z.number().int().positive(),
   createdAt: z.string().optional(), startedAt: z.string().optional(), finishedAt: z.string().optional(),
   status: z.enum(["completed", "failed", "cancelled", "interrupted", "stale"]), model: modelSelection.omit({ connectionID: true }).strict(), leaseUntil: z.null(),
-  kind: z.enum(["scan", "definition-change-review", "definition-change-group"]).optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
+  kind: z.enum(["scan", "definition-change-review", "definition-change-group", "organization-check"]).optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
+  organizationCheck: organizationCheckSchema.optional(),
   portableReceipt: z.literal(1).optional(),
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
     includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional(),
     definitionChangeReview: definitionChangeMarkerSchema.optional(),
     definitionChangeGroupReview: definitionChangeGroupMarkerSchema.optional(),
+    organizationCheck: organizationCheckMarkerSchema.optional(),
     readinessQuestions: readinessQuestionTaskSchema.optional(),
     refinementPair: z.object({ requirementIDs: z.tuple([z.string(), z.string()]), contextKey: z.string(), includeUnapproved: z.boolean().optional(), triggerSourceIDs: z.array(z.string()).optional() }).strict().optional(),
     refinementStage: refinementStageSchema.optional(),
@@ -531,7 +537,12 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
     depth: z.number().int().min(0).max(4), attempts: z.number().int().min(0), timedOut: z.boolean().optional(), output: scanAnalysisSchema.optional(),
   }).strict()) }).strict().optional(),
   scanProgress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(), capturedAt: z.string(), resumable: z.boolean() }).strict().optional(),
-}).strict().refine(job => (!job.answerGroupWork && !job.context?.answerGroupStage) || !!job.answerGroupWork && !!job.context?.answerGroupStage
+}).strict().superRefine((job, context) => {
+  if (job.organizationCheck || job.kind === "organization-check" || job.context?.organizationCheck) {
+    try { validateOrganizationJob(job as unknown as Job); }
+    catch { context.addIssue({ code: z.ZodIssueCode.custom, message: "Organization checks require their exclusive supported task." }); }
+  }
+}).refine(job => (!job.answerGroupWork && !job.context?.answerGroupStage) || !!job.answerGroupWork && !!job.context?.answerGroupStage
   && !job.kind && !job.submissionWork && !job.readinessWork && !job.definitionWork && !job.retrievalWork && !job.refinementWork && !job.scanWork
   && !job.context.submissionStage && !job.context.refinementOnly && !job.context.readinessQuestions && !job.context.definitionAssessment
   && !job.context.readinessStage && !job.context.refinementStage && !job.context.refinementTarget && !job.context.refinementPair
@@ -572,8 +583,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(51), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–51 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(52), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–52 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -614,6 +625,9 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(decodeContinuationParts(files, rawContinuation)) as Continuation;
+  if (state.formatVersion < 52 && (project.organizationReviews.some(r => r.organizationBasis) || Object.values(continuation.objects).some(markedOrganization)
+    || continuation.jobs.some(j => j.organizationCheck || j.kind === "organization-check" || j.context?.organizationCheck)))
+    throw new Error("Feature organization checks require portable state format 52. Saved work was not overwritten.");
   if (state.formatVersion < 51 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3"))
     throw new Error("Candidate-first discovery requires portable state format 51. Saved work was not overwritten.");
   if (state.formatVersion < 50 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.verification?.policy === "relevance-first-epic-verification-v2"))
