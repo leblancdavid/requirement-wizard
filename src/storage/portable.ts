@@ -440,7 +440,9 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification || j.retrievalWork?.epicStages?.proposalPolicy) ? 49
+  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3") ? 51
+    : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification?.policy === "relevance-first-epic-verification-v2") ? 50
+    : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification || j.retrievalWork?.epicStages?.proposalPolicy) ? 49
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.collectionBaseline) ? 47
     : continuation?.jobs.some(j => j.submissionWork?.verification) ? 46
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.citationCorrections) ? 45
@@ -570,8 +572,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(49), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–49 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(51), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–51 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -612,6 +614,10 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(decodeContinuationParts(files, rawContinuation)) as Continuation;
+  if (state.formatVersion < 51 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3"))
+    throw new Error("Candidate-first discovery requires portable state format 51. Saved work was not overwritten.");
+  if (state.formatVersion < 50 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.verification?.policy === "relevance-first-epic-verification-v2"))
+    throw new Error("Relevance-first verification requires portable state format 50. Saved work was not overwritten.");
   if (state.formatVersion < 49 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.verification || j.retrievalWork?.epicStages?.proposalPolicy))
     throw new Error("Independent-frontier discovery and frozen verification require portable state format 49. Saved work was not overwritten.");
   if (state.formatVersion < 47 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.collectionBaseline))
@@ -800,7 +806,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     if (job.projectID !== project.id) throw new Error("Portable job belongs to another project.");
     if (job.expectedRevision > project.revision) throw new Error("Portable job references a future project revision.");
     if (needsOriginalRevision(job) && !revisions.has(job.expectedRevision)) throw new Error("Portable checkpoint is missing its original revision.");
-    if (job.retrievalWork?.epicStages?.collectionBaseline || job.retrievalWork?.epicStages?.verification) {
+    if (job.retrievalWork?.epicStages?.collectionBaseline || job.retrievalWork?.epicStages?.verification || job.retrievalWork?.epicStages?.discoveryPolicy) {
       if (!job.context?.epicReview) throw new Error("Incremental collection is missing its exact scope.");
       // Validate historical paid work using its recorded model, not the account
       // selection used to open the clone. This grants no new-model currentness.

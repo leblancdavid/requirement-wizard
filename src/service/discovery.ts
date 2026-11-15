@@ -26,7 +26,7 @@ import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserv
 import { runReadinessStages } from "./readiness-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages, epicCitationCorrectionContext, epicCitationPrefixKey } from "../core/epic-stages.js";
 import { planEpicCollectionBaseline, type EpicCollectionSource } from "../core/epic-collection-baseline.js";
-import { planEpicVerification, epicVerificationContexts, epicCheckBatches, epicTotalStages } from "../core/epic-verification.js";
+import { planEpicVerification, epicVerificationContexts, epicCheckBatches, epicReadBatches, epicTotalStages } from "../core/epic-verification.js";
 import { planLinkedEvidenceRecovery, linkedEvidenceStageBase } from "../core/epic-linked-evidence.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -387,11 +387,18 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; candidateFirst?: boolean; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
     readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean; answerIntegration?: AnswerIntegrationDiagnostic;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.candidateFirst !== undefined) {
+      z.boolean().parse(options.candidateFirst);
+      if (options.candidateFirst && (options.gapMode !== "epic" || options.research || options.helpRequest || options.refinementOnly
+        || options.definitionEpicID || options.readinessQuestions || options.answerGroup || options.recordIDs || options.submissionIDs
+        || options.isolatedTask || options.requiredEpicIDs || options.continueGapJobID || options.savedEvidencePolicy || options.savedOverlapSubmissionID))
+        throw new Error("Candidate-first discovery requires separate no-research epic question exploration.");
+    }
     if (options.answerIntegration) {
       answerIntegrationSchema.parse(options.answerIntegration);
       if (!options.submissionIDs?.length) throw new Error("Answer integration diagnostics require a saved response task.");
@@ -751,7 +758,7 @@ export class DiscoveryService {
           context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
             if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length + (work.epicStages.collectionBaseline?.reads ?? 0),
-             batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
+              batches: work.epicStages.batches, ...(work.epicStages.discoveryPolicy ? { readBatches: 1 as const, candidateOnly: true as const } : {}), totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
              ...(work.epicStages.verification ? { verificationBatches: epicCheckBatches(work.epicStages) } : {}),
             ...(work.epicStages.emptyCompletion ? { emptyCompletion: work.epicStages.emptyCompletion } : {}) };
           if (measurement && work.epicStages) measurement.value.epicProposals = {
@@ -780,13 +787,14 @@ export class DiscoveryService {
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
             ...(!prior && review.contextPolicy === "staged-dense-records-v5" ? { proposalPolicy: "independent-frontier-v1" as const } : {}),
+            ...(!prior && options.candidateFirst && review.contextPolicy === "staged-dense-records-v5" ? { discoveryPolicy: "candidate-first-v1" as const } : {}),
             completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           const readCollectionSource: EpicCollectionSource = sourceID => {
             const source = this.store.getJob(sourceID);
             if (source.projectID !== project.id) throw new Error("Incremental collection source belongs to another project.");
             return { project: this.store.get(project.id, source.expectedRevision), job: source };
           };
-          if (!prior && !staged.collectionBaseline && review.contextPolicy === "staged-dense-records-v5") {
+          if (!prior && !staged.discoveryPolicy && !staged.collectionBaseline && review.contextPolicy === "staged-dense-records-v5") {
             const sources = epicHistory.slice().reverse().filter(source => source.status === "completed" && source.result
               && source.expectedRevision < project.revision && source.context?.epicReview?.packageID === review.packageID
               && !source.retrievalWork?.epicStages?.collectionBaseline).slice(0, 4);
@@ -803,16 +811,19 @@ export class DiscoveryService {
           const prepareChecks = () => {
             if (staged.phase !== "validate" || staged.nextBatch || work.attempts || staged.verification || staged.linkedEvidence?.length
               || staged.receipts.some(receipt => receipt.phase === "validate") || !staged.candidates.questions.length && !staged.candidates.requirements.length) return;
-            const verification = planEpicVerification(project, batches, staged.candidates, staged.proposalPolicy);
+            const verification = planEpicVerification(project, batches, staged.candidates, staged.proposalPolicy,
+              staged.discoveryPolicy ? "candidate-first-verification-v3" : "relevance-first-epic-verification-v2");
             if (!verification) return;
             staged.verification = verification; checkBatches = epicVerificationContexts(project, batches, staged);
             report(`Frozen-draft discovery verification uses ${checkBatches.length} exact-evidence batches instead of ${batches.length}. All mandatory records and original paid reads remain; no check attempts were replaced or refunded.`);
+            if (verification.policy === "relevance-first-epic-verification-v2")
+              report("Checking more closely related evidence first to catch answered or conflicting drafts sooner. Word overlap only sets the order; the model still checks every batch before a surviving question publishes.");
           };
           prepareChecks();
           const activeBatch = () => (staged.phase === "discover" ? batches : checkBatches)[staged.nextBatch]!;
           // Carry the validated paid ledger before progress callbacks/cancellation
           // can leave a newer matching job without its original saved stages.
-          context = staged.phase === "complete" ? epicStagePublicationContext(batches, staged)
+          context = staged.phase === "complete" && (!staged.discoveryPolicy || staged.candidates.questions.length) ? epicStagePublicationContext(batches, staged)
             : epicStageContext(linkedEvidenceStageBase(project, staged, activeBatch(), staged.receipts.length, staged.candidates), staged);
           checkpoint();
           if (epicPlan.task.recoverLinkedEvidence) {
@@ -840,14 +851,15 @@ export class DiscoveryService {
                 && !!prior?.diagnostic?.startsWith("Gap proposals require evidence in the current detailed working context"));
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
-            if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
+            if (staged.discoveryPolicy) report("Candidate-first discovery: one bounded proposal pass, then checks against every mandatory evidence batch for surviving questions. Unrequested discovery reads are not credited; rejected candidates do not complete the scope review.");
+            else if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
             checkpoint();
             if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
             if (!this.navigation.workflow?.continuous && (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs)) {
               const reason = callsThisRun >= limits.requests ? "request-limit" : "time-limit";
               return completeMeasurement(this.store.pauseEpicReview(job.id, reason));
             }
-            report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.phase === "discover" ? staged.batches : epicCheckBatches(staged)}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
+            report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.phase === "discover" ? epicReadBatches(staged) : epicCheckBatches(staged)}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
             work.attempts++; callsThisRun++; checkpoint();
             const raw = await requestModel(context);
             controller.signal.throwIfAborted();
@@ -878,15 +890,19 @@ export class DiscoveryService {
               response: phase === "discover" ? response as import("../core/model.js").Analysis : guardrailVerdictSchema.parse(response) });
             work.attempts = 0;
             staged.nextBatch++;
-            if (staged.nextBatch === (phase === "discover" ? staged.batches : epicCheckBatches(staged))) {
+            if (staged.nextBatch === (phase === "discover" ? epicReadBatches(staged) : epicCheckBatches(staged))) {
               if (phase === "discover") { staged.phase = "validate"; staged.nextBatch = 0; }
               else staged.phase = "complete";
             }
             prepareChecks();
-            if (completeEmptyEpicStages(staged)) report("All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
+            if (completeEmptyEpicStages(staged)) report(staged.discoveryPolicy
+              ? "No candidates survived this bounded screen. Unrequested reads/checks are not credited and the scope remains unreviewed."
+              : "All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
             checkpoint();
           }
           validateEpicStages(project, review, staged, batches, proposalCounts, readCollectionSource);
+          if (staged.discoveryPolicy && !staged.candidates.questions.length)
+            return block("Candidate screening found no surviving questions in this frontier. This is not a completed scope review or proof that no gaps remain; try an independent frontier or resolve existing choices. No unrequested reads/checks were credited.", true);
           context = epicStagePublicationContext(batches, staged);
           validateEpicReviewFinal(project, context, staged.candidates);
           work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: staged.candidates };

@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, workflowRequirements, workflowAreas,
-   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, canCollectMoreQuestions, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
+   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, targetedCollectionLimits, canCollectMoreQuestions, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
@@ -111,7 +111,8 @@ export class ProjectWorkflow {
          waiting: state.phase === "needs-decision" && !active,
         } } : {}),
        ...(state.questionBatchPolicy && state.questionBatch ? { questionBatch: {
-         ...state.questionBatch, limits: questionBatchLimits,
+          ...state.questionBatch, limits: { ...questionBatchLimits, target: state.questionBatchPolicy.collection?.target ?? questionBatchLimits.target },
+          ...(state.questionBatchPolicy.collection ? { collectionLimits: state.questionBatchPolicy.collection } : {}),
          questions: project.questions.filter(q => q.status === "pending" && project.epics.some(e => e.id === q.epicID && !e.archived)).length,
        } } : {}),
       definitionReviews: definitions.map((area) => ({ ...area,
@@ -121,8 +122,10 @@ export class ProjectWorkflow {
         ...(state.stopReason === "scheduler-yield" && state.phase === "working" && !state.paused ? { continuingWindow: true } : {}),
         lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "collect-more" | "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable", ruleConsent?: AnswerGroupRuleRepairConsent) {
+  configure(id: string, revision: number, version: number, action: "collect-more" | "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable", ruleConsent?: AnswerGroupRuleRepairConsent, questionTarget?: number) {
     let state = this.store.workflow(id);
+    if (questionTarget !== undefined && (!Number.isInteger(questionTarget) || questionTarget < 1 || questionTarget > 50 || !["play", "continue-continuous", "collect-more"].includes(action)))
+      throw new OperationConflictError("An explicit question target from 1 to 50 is allowed only when authorizing collection.");
     if ((action === "allow-shared-rule-repair") !== !!ruleConsent) throw new OperationConflictError("Rule-repair permission requires its exact preview and separate consent action.");
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
     if (action === "collect-more") {
@@ -137,7 +140,10 @@ export class ProjectWorkflow {
         remainingMs: questionBatchLimits.durationMs, window: { number: batch.format === 2 ? batch.window.number + 1 : 2, packages: 0, requests: 0 } };
       delete state.questionBatch.activeSince;
       state.enabled = true; state.paused = false; state.phase = "working";
-      state.questionBatchPolicy = { format: 2 }; state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
+      state.questionBatchPolicy = { format: 2, ...(questionTarget !== undefined || state.questionBatchPolicy?.collection ? { collection: {
+        format: 1 as const, target: questionTarget ?? state.questionBatchPolicy!.collection!.target, startingRequests: batch.requests,
+        startingWindow: state.questionBatch.window.number, requests: questionBatchLimits.requests, windows: 1,
+      } } : {}) }; state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
       state.message = "Finding more independent questions in one additional work window. Existing questions and charged attempts are retained; no answers, assessments or approvals are processed.";
       state.grant = { id: randomUUID(), used: 0, continuous: { format: 1 }, remainingMs: workflowLimits.durationMs, submissionIDs: [] };
       delete state.reviewCheckpoint; delete state.waitKey; delete state.stopReason; delete state.owner; delete state.leaseUntil;
@@ -202,7 +208,14 @@ export class ProjectWorkflow {
       // their original wake-up behavior; startup never rewrites or arms them.
         if (action === "continue-continuous" || action === "play") {
          state.inputBatchPolicy = { format: 1 };
-         state.questionBatchPolicy = { format: 2 };
+          const previousCollection = state.questionBatchPolicy?.collection;
+          const retaining = state.questionBatch?.state === "collecting" && state.questionBatch.inputKey === workflowReviewInputKey(project);
+           state.questionBatchPolicy = { format: 2, ...(previousCollection && (questionTarget === undefined || questionTarget === previousCollection.target)
+             ? { collection: previousCollection } : questionTarget !== undefined ? { collection: {
+            format: 1 as const, target: questionTarget, startingRequests: state.questionBatch?.requests ?? 0,
+            startingWindow: state.questionBatch?.format === 2 ? state.questionBatch.window.number + (retaining ? 0 : 1) : 1,
+            requests: targetedCollectionLimits.requests, windows: targetedCollectionLimits.windows,
+           } } : {}) };
          if (state.questionBatch?.format === 1) {
            const previous = state.questionBatch;
            state.questionBatch = { ...previous, format: 2, window: { number: 1, packages: previous.packages, requests: previous.requests } };
@@ -318,7 +331,10 @@ export class ProjectWorkflow {
           const batch = state.questionBatch!;
           batch.remainingMs = Math.max(0, batchRemainingMs - Math.max(0, Date.now() - batchStarted));
           batch.activeSince = Date.now();
-          if ((batch.format === 2 ? batch.window.requests : batch.requests) >= questionBatchLimits.requests || batch.format === 1 && !batch.remainingMs) throw new WorkflowBudgetPause("Question collection allowance reached. Saved questions and package steps are retained.");
+          const collection = state.questionBatchPolicy?.collection;
+          if (collection && (batch.requests - collection.startingRequests >= collection.requests
+              || batch.format === 2 && batch.window.number - collection.startingWindow >= collection.windows)
+            || (batch.format === 2 ? batch.window.requests : batch.requests) >= questionBatchLimits.requests || batch.format === 1 && !batch.remainingMs) throw new WorkflowBudgetPause("Question collection allowance reached. Saved questions and package steps are retained.");
           batch.requests++; if (batch.format === 2) batch.window.requests++;
         }
         state.leaseUntil = Date.now() + 360000;
@@ -333,10 +349,12 @@ export class ProjectWorkflow {
       cooperativeWindow: initial.questionBatchPolicy?.format === 2,
       beforeJob: () => {
         navigation.beforeJob(); checkpointBatchTime();
-        const batch = owned().questionBatch!;
+        const state = owned(), batch = state.questionBatch!, collection = state.questionBatchPolicy?.collection;
+        const remaining = collection ? collection.requests - (batch.requests - collection.startingRequests) : questionBatchLimits.requests;
+        if (remaining < 3) throw new WorkflowBudgetPause("Targeted collection reached its aggregate request bound.");
         if ((batch.format === 2 ? batch.window.requests : batch.requests) > questionBatchLimits.requests - 3 || !batch.remainingMs)
           throw new WorkflowBudgetPause("Question collection allowance reached; completed package work is saved.");
-        return { requests: questionBatchLimits.requests - (batch.format === 2 ? batch.window.requests : batch.requests), durationMs: batch.remainingMs };
+        return { requests: Math.min(remaining, questionBatchLimits.requests - (batch.format === 2 ? batch.window.requests : batch.requests)), durationMs: batch.remainingMs };
       },
     } });
     const queue = new DiscoveryQueue(service, { manualOnly: true, owner });
@@ -377,8 +395,11 @@ export class ProjectWorkflow {
       // and paid task attempts are still selected/validated by the existing engine.
       if (!previous || previous.state !== "collecting" || previous.inputKey !== workflowReviewInputKey(project)) {
         current.questionBatch = { format: 1, inputKey: workflowReviewInputKey(project), revision: project.revision,
-          packages: 0, requests: 0, remainingMs: questionBatchLimits.durationMs, state: "collecting" };
-        if (current.questionBatchPolicy?.format === 2) current.questionBatch = { ...current.questionBatch, format: 2, window: { number: 1, packages: 0, requests: 0 } };
+          packages: current.questionBatchPolicy?.collection ? previous?.packages ?? 0 : 0,
+          requests: current.questionBatchPolicy?.collection ? previous?.requests ?? 0 : 0,
+          remainingMs: questionBatchLimits.durationMs, state: "collecting" };
+        if (current.questionBatchPolicy?.format === 2) current.questionBatch = { ...current.questionBatch, format: 2,
+          window: { number: current.questionBatchPolicy.collection && previous?.format === 2 ? previous.window.number + 1 : 1, packages: 0, requests: 0 } };
         this.store.saveWorkflow(id, current);
       }
       collecting = true; batchStarted = Date.now(); batchRemainingMs = owned().questionBatch!.remainingMs;
@@ -399,9 +420,11 @@ export class ProjectWorkflow {
           stop("paused", "Inputs changed at a work-window boundary. Saved steps and spent attempts are retained; continue explicitly for the new input.", true); return false;
         }
         if (state.questionBatchPolicy?.format !== 2 || batch.format !== 2) return finish("budget", "Bounded question collection stopped. Saved work is retained; continue explicitly for more work.");
-        const snapshot = this.project(id);
+        const snapshot = this.project(id), collection = state.questionBatchPolicy.collection;
         const ready = snapshot.questions.filter(q => q.status === "pending" && snapshot.epics.some(e => e.id === q.epicID && !e.archived)).length;
-        if (ready > 0) return finish("budget", `${ready} useful questions are ready. Offering this smaller batch at the work-window boundary instead of waiting for five. Answer them when ready; unfinished package steps and charged attempts remain saved.`);
+        if (collection && (batch.requests - collection.startingRequests >= collection.requests - 2 || batch.window.number - collection.startingWindow + 1 >= collection.windows))
+          return finish("budget", `${ready} questions are ready; the selected target is ${collection.target}. The authorized ${collection.requests}-request/${collection.windows}-window collection bound was reached. Saved work and attempts remain; fewer questions is not a completeness claim.`);
+        if (!collection && ready > 0) return finish("budget", `${ready} useful questions are ready. Offering this smaller batch at the work-window boundary instead of waiting for five. Answer them when ready; unfinished package steps and charged attempts remain saved.`);
         batch.window = { number: batch.window.number + 1, packages: 0, requests: 0 };
         batch.remainingMs = questionBatchLimits.durationMs;
         // Yield/release the worker, not the user's existing continuous consent.
@@ -424,17 +447,21 @@ export class ProjectWorkflow {
           const decisions = workflowDecisions(snapshot, submissions);
           if (decisions.some(d => d.kind !== "question")) return finish("decision", "Proposed choices need your review. Question collection stopped without approving them or starting area assessments.");
           const pending = snapshot.questions.filter(q => q.status === "pending" && snapshot.epics.some(e => e.id === q.epicID && !e.archived)).length;
-          if (pending >= questionBatchLimits.target) return finish("target", `${pending} questions are ready. Collection reached its soft target of ${questionBatchLimits.target}; all useful questions from the last package were kept. Save your answers, then Submit saved responses.`);
+          const collection = state.questionBatchPolicy?.collection, target = collection?.target ?? questionBatchLimits.target;
+          if (pending >= target) return finish("target", `${pending} questions are ready. Collection reached its soft target of ${target}; all useful questions from the last package were kept. Save your answers, then Submit saved responses.`);
+           if (collection && (batch.requests - collection.startingRequests >= collection.requests - 2
+             || batch.format === 2 && batch.window.number - collection.startingWindow >= collection.windows))
+            return finish("budget", `${pending} questions are ready (target ${target}). The authorized collection request bound was reached; saved evidence and unfinished steps remain retained.`);
           const window = batch.format === 2 ? batch.window : batch;
           if (window.packages >= questionBatchLimits.packages || window.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
             return nextWindow();
           record("discover", snapshot);
           const started = owned(); started.questionBatch!.packages++;
           if (started.questionBatch!.format === 2) started.questionBatch!.window.packages++;
-          started.message = `Collecting questions · ${pending} ready / soft target ${questionBatchLimits.target} · ${started.questionBatch!.packages} package passes saved. Eligible packages only; no area assessments.`;
+          started.message = `Collecting questions · ${pending} ready / soft target ${target} · ${started.questionBatch!.packages} package passes saved. Eligible packages only; no area assessments.`;
           this.store.saveWorkflow(id, started);
           let job: Job;
-          try { job = await batchService.analyze(id, snapshot.revision, { gapMode: "epic", questionTarget: questionBatchLimits.target, signal, research: false }); }
+          try { job = await batchService.analyze(id, snapshot.revision, { gapMode: "epic", questionTarget: target, candidateFirst: !!collection, signal, research: false }); }
           catch (error) {
             const saved = owned().questionBatch!, spent = saved.format === 2 ? saved.window : saved;
             if (cooperative && error instanceof WorkflowBudgetPause && !controller.signal.aborted
@@ -445,6 +472,9 @@ export class ProjectWorkflow {
           if (controller.signal.aborted) { check(job); return false; }
           if (!cooperative && timeout.aborted) return finish("budget", "Question collection reached its active-time limit. Saved questions, completed package steps and charged attempts are retained. Continue explicitly when ready.");
           const savedBatch = owned().questionBatch!;
+          if (job.status === "interrupted" && job.retrievalWork?.stagedRun?.paused && collection
+            && savedBatch.requests - collection.startingRequests >= collection.requests)
+            return finish("budget", `${pending} questions were ready before this package; target ${target}. The collection request bound was reached. Unfinished candidates, original evidence and charged attempts are saved.`);
           if (job.status === "interrupted" && job.retrievalWork?.stagedRun?.paused === "request-limit"
             && (savedBatch.format === 2 ? savedBatch.window.requests : savedBatch.requests) >= questionBatchLimits.requests)
             return nextWindow();

@@ -47,7 +47,7 @@ export function recordStageEvidenceKey(contexts: ContextPack[]): string | undefi
  * fully published, independently replayable original may suppress a new check. */
 export function completedRecordStagesEquivalent(previous: Project, current: Project, job: Job, review: EpicReview, contexts: ContextPack[]): boolean {
   const old = job.context?.epicReview, work = job.retrievalWork?.epicStages, final = job.retrievalWork?.final;
-  if (job.status !== "completed" || !job.result || !old || !work || !final || work.phase !== "complete"
+  if (job.status !== "completed" || !job.result || !old || !work || !final || work.phase !== "complete" || work.discoveryPolicy
     || job.projectID !== current.id || previous.id !== current.id || previous.revision !== job.expectedRevision
     || final.revision !== undefined && final.revision !== job.expectedRevision
     || !recordStagePolicy(old.contextPolicy) || old.contextPolicy !== review.contextPolicy

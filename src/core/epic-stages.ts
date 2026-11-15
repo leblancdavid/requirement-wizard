@@ -7,7 +7,7 @@ import { retrievalEvidenceBasis, epicStagesSchema, validateGapFinal, GapCitation
 import { emptyEpicDraft, epicStageContext, epicDraftLimit } from "./epic-stage-context.js";
 import { linkedEvidenceStageBase } from "./epic-linked-evidence.js";
 import { replayEpicCollectionBaseline, type EpicCollectionSource } from "./epic-collection-baseline.js";
-import { epicCheckBatches, epicTotalStages, epicVerificationContexts } from "./epic-verification.js";
+import { epicCheckBatches, epicReadBatches, epicTotalStages, epicVerificationContexts } from "./epic-verification.js";
 export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
 
 const key = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -52,7 +52,7 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
 export function completeEmptyEpicStages(work: EpicStages): boolean {
   const completed = work.receipts.length + (work.collectionBaseline?.reads ?? 0);
   if (work.completionPolicy !== "empty-proposals-v1" || work.phase !== "validate"
-    || completed < work.batches || completed >= epicTotalStages(work)
+    || completed < epicReadBatches(work) || completed >= epicTotalStages(work)
     || work.candidates.questions.length || work.candidates.requirements.length) return false;
   work.emptyCompletion = "no-surviving-proposals";
   work.phase = "complete"; work.nextBatch = epicCheckBatches(work);
@@ -114,7 +114,7 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
       counts.removedQuestions += Math.max(0, before.questions.length - draft.questions.length);
       counts.removedRequirements += Math.max(0, before.requirements.length - draft.requirements.length);
     }
-    if (work.completionPolicy && index + reused + 1 >= work.batches && index + reused + 1 < epicTotalStages(work)
+    if (work.completionPolicy && index + reused + 1 >= epicReadBatches(work) && index + reused + 1 < epicTotalStages(work)
       && !draft.questions.length && !draft.requirements.length
       && (index !== work.receipts.length - 1 || !work.emptyCompletion || work.phase !== "complete"))
       throw new Error("Empty staged completion must stop at its exact empty receipt boundary.");
@@ -164,12 +164,15 @@ export function epicCitationCorrectionContext(project: Project, context: Context
 /** Publication authority is the explicit union of completed exact batches, never a single-stage claim. */
 export function epicStagePublicationContext(contexts: ContextPack[], work: EpicStages): ContextPack {
   epicStagesSchema.parse(work);
+  if (work.discoveryPolicy && (!work.candidates.questions.length || work.emptyCompletion)) throw new Error("Candidate screening without survivors cannot publish a completed scope review.");
   if (work.phase !== "complete" || work.batches !== contexts.length || !work.emptyCompletion && work.receipts.length + (work.collectionBaseline?.reads ?? 0) !== epicTotalStages(work)) throw new Error("Partial staged review cannot publish proposals.");
   const context = epicStageContext(contexts.at(-1)!, work);
   context.manifest.includedIDs = [...new Set([...contexts.flatMap((c) => c.manifest.includedIDs),
     ...(work.linkedEvidence?.flatMap(s => s.addedIDs) ?? [])])];
   context.manifest.omittedIDs = context.manifest.omittedIDs.filter((id) => !context.manifest.includedIDs.includes(id));
-  context.manifest.selectionReason = work.emptyCompletion
+  context.manifest.selectionReason = work.discoveryPolicy
+    ? "Candidate-only discovery. Every surviving question passed checks against the exact complete mandatory evidence union; omitted candidate-generation reads are not credited. This does not establish a complete scope search or readiness."
+    : work.emptyCompletion
     ? "All discovery batches were read; no proposals survived. Remaining proposal checks were not requested or credited. This empty outcome establishes no completeness, readiness or implementation approval."
     : "Publication scope is the union of separately checkpointed exact batches; these records were not all present in one model request. All draft proposals passed every guardrail batch; this is not exhaustive cross-record coverage.";
   return context;

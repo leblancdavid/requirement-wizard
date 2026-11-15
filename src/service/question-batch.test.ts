@@ -46,6 +46,75 @@ async function run(workflow: ProjectWorkflow, store: ProjectStore, p: Project) {
   assert.fail("Fixture did not settle within its bounded test window count");
 }
 
+for (const target of [5, 10]) test(`explicit target ${target} crosses cooperative windows without offering an unintended smaller batch`, async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {
+    calls++; assert.equal(context.manifest.questionTarget, target); return questions(p, context.manifest.epicReview!.epicID);
+  } });
+  try {
+    const p = fixture(store, 10); arm(store, p, 13);
+    workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous", undefined, target);
+    for (let window = 0; window < 8; window++) {
+      await workflow.wait(p.id);
+      if (store.workflow(p.id).stopReason !== "scheduler-yield") break;
+      workflow.tick(p.id);
+    }
+    const state = store.workflow(p.id);
+    assert.equal(calls, target); assert.equal(store.get(p.id).questions.length, target);
+    assert.equal(state.questionBatch!.reason, "target");
+    assert.equal(state.questionBatch!.requests, 13 + target);
+    assert.equal(state.questionBatchPolicy!.collection!.startingRequests, 13);
+    assert.equal(state.questionBatchPolicy!.collection!.requests, 64);
+    if (target === 10) assert.ok(state.questionBatch!.format === 2 && state.questionBatch!.window.number > 1);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("explicit Find more captures only one additional window and the selected target", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) { calls++; return questions(p, context.manifest.epicReview!.epicID); } });
+  try {
+    const p = fixture(store, 10); arm(store, p, 13); await run(workflow, store, p);
+    assert.equal(store.get(p.id).questions.length, 1);
+    const before = store.workflow(p.id), originals = structuredClone(store.get(p.id).questions);
+    workflow.configure(p.id, store.projectRevision(p.id), before.settingsVersion, "collect-more", undefined, 10);
+    await workflow.wait(p.id);
+    const state = store.workflow(p.id), consent = state.questionBatchPolicy!.collection!;
+    assert.equal(consent.target, 10); assert.equal(consent.requests, 16); assert.equal(consent.windows, 1);
+    assert.equal(consent.startingRequests, before.questionBatch!.requests);
+    assert.equal(state.questionBatch!.reason, "budget");
+    assert.equal(state.questionBatch!.format === 2 && state.questionBatch!.window.number, 2);
+    assert.equal(calls, 6); assert.equal(store.get(p.id).questions.length, 6);
+    assert.deepEqual(store.get(p.id).questions.slice(0, 1), originals);
+  } finally { await workflow.close(); store.close(); }
+});
+
+for (const exhausted of ["requests", "windows", "new-input"] as const) test(`same-target Play retains aggregate consent after ${exhausted} exhaustion`, async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(_p, { context }) {
+    calls++; assert.equal(exhausted, "new-input"); assert.equal(context.manifest.refinementOnly, true);
+    return empty();
+  } });
+  try {
+    const p = fixture(store); arm(store, p);
+    const state = store.workflow(p.id);
+    state.questionBatchPolicy = { format: 2, collection: { format: 1, target: 10, startingRequests: 0, startingWindow: 1, requests: 64, windows: 4 } };
+    const requests = exhausted === "requests" ? 64 : 8;
+    state.questionBatch = { ...state.questionBatch!, format: 2, requests, packages: 4,
+      window: { number: exhausted === "windows" ? 5 : 4, packages: 1, requests: exhausted === "requests" ? 16 : 2 } };
+    if (exhausted === "new-input") {
+      state.questionBatch.state = "finished"; state.questionBatch.reason = "input";
+      state.questionBatch.inputKey = "a".repeat(64); // Curated earlier batch, no unrelated answer-processing work.
+    }
+    state.paused = true; store.saveWorkflow(p.id, state);
+    const consent = structuredClone(state.questionBatchPolicy.collection);
+    workflow.configure(p.id, store.projectRevision(p.id), store.workflow(p.id).settingsVersion, "play", undefined, 10);
+    await workflow.wait(p.id);
+    assert.equal(calls, exhausted === "new-input" ? 1 : 0); assert.deepEqual(store.workflow(p.id).questionBatchPolicy!.collection, consent);
+    assert.equal(store.workflow(p.id).questionBatch!.requests, requests);
+    assert.equal(store.workflow(p.id).questionBatch!.reason, exhausted === "new-input" ? "input" : "budget");
+  } finally { await workflow.close(); store.close(); }
+});
+
 test("a continuous collection visits five eligible topics before asking for answers, without assessments or approvals", async () => {
   const store = new ProjectStore(":memory:"); const topics: string[] = [];
   const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {
@@ -343,6 +412,34 @@ test("a product edit immediately after a committed package is not silently adopt
     assert.notEqual(store.workflow(p.id).questionBatch!.inputKey, workflowReviewInputKey(store.get(p.id)));
     assert.equal(store.jobs(p.id).at(-1)!.status, "completed"); assert.equal(store.workflow(p.id).questionBatch!.requests, 1);
   } finally { await workflow.close(); store.close(); }
+});
+
+test("78 to 79 retains captured collection baselines across rollback, repair and repeated startup without arming work", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "targeted-collection-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = fixture(store); arm(store, p);
+    const state = store.workflow(p.id);
+    state.questionBatchPolicy = { format: 2, collection: { format: 1, target: 10, startingRequests: 13, startingWindow: 2, requests: 64, windows: 4 } };
+    state.questionBatch = { ...state.questionBatch!, format: 2, packages: 8, requests: 35, window: { number: 3, packages: 3, requests: 6 } };
+    store.saveWorkflow(p.id, state); const original = store.workflow(p.id), jobs = store.jobs(p.id); store.close();
+    const future = structuredClone(original);
+    (future.questionBatchPolicy!.collection as { format: number }).format = 2;
+    const db = new Database(path); db.exec("DELETE FROM migration_history WHERE version>=79; PRAGMA user_version=78");
+    db.prepare("UPDATE workflow_state SET payload=? WHERE project_id=?").run(JSON.stringify(future), p.id); db.close();
+    assert.throws(() => new ProjectStore(path));
+    const repair = new Database(path); assert.equal(repair.pragma("user_version", { simple: true }), 78);
+    assert.equal((repair.prepare("SELECT payload FROM workflow_state WHERE project_id=?").get(p.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE workflow_state SET payload=? WHERE project_id=?").run(JSON.stringify(original), p.id); repair.close();
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), original); assert.deepEqual(store.jobs(p.id), jobs);
+      const workflow = new ProjectWorkflow(store, { async analyze() { assert.fail("Startup cannot arm collection"); } });
+      try { workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(store.workflow(p.id), original); }
+      finally { await workflow.close(); }
+      store.close();
+    }
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("32 to 33 preserves old grants and paid work, retains scan counters across reopen, rejects future data transactionally", async () => {

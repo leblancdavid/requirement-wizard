@@ -8,6 +8,7 @@ import { questionAnswerUnitIDs } from "./epic-linked-evidence.js";
 import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } from "./working-set.js";
 
 type Verification = NonNullable<EpicStages["verification"]>;
+type VerificationPolicy = Verification["policy"];
 const fields = ["sources", "questions", "requirements", "research"] as const;
 function inventory(contexts: ContextPack[]) {
   const first = expandedEvidence(contexts[0]!.data), common = (data: Record<string, unknown>) =>
@@ -52,9 +53,16 @@ function renderer(project: Project, contexts: ContextPack[]) {
 
 /** Exact mandatory evidence, packed against the actual frozen draft. No semantic
  * skip, extra evidence or paid-layout replacement. Failed probes start no calls. */
-export function planEpicVerification(project: Project, contexts: ContextPack[], draft: Analysis, proposalPolicy?: EpicStages["proposalPolicy"]): Verification | undefined {
-  if (contexts.length < 2 || contexts.some(context => context.manifest.epicReview?.contextPolicy !== "staged-dense-records-v5")) return;
+export function planEpicVerification(project: Project, contexts: ContextPack[], draft: Analysis, proposalPolicy?: EpicStages["proposalPolicy"],
+  policy: VerificationPolicy = "relevance-first-epic-verification-v2"): Verification | undefined {
+  if (contexts.length < (policy === "candidate-first-verification-v3" ? 1 : 2) || contexts.some(context => context.manifest.epicReview?.contextPolicy !== "staged-dense-records-v5")) return;
   const { render, ordered } = renderer(project, contexts), groups: string[][] = [];
+  const plan = (groups: string[][]): Verification | undefined => {
+    const value: Verification = { format: 1, policy, draft,
+      groups: policy === "frozen-epic-verification-v1" ? groups : relevanceFirstGroups(contexts, draft, groups) };
+    return Buffer.byteLength(JSON.stringify(value), "utf8") <= 4 * 1024 * 1024 ? value : undefined;
+  };
+  const fallback = () => policy === "candidate-first-verification-v3" ? plan(contexts.map(context => context.manifest.includedIDs)) : undefined;
   let offset = 0;
   while (offset < ordered.length || !groups.length) {
     let low = offset + 1, high = ordered.length, best: ContextPack | undefined, end = offset;
@@ -65,20 +73,49 @@ export function planEpicVerification(project: Project, contexts: ContextPack[], 
         best = context; end = middle; low = middle + 1;
       } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; high = middle - 1; }
     }
-    if (!best) return; // Keep the original fitting schedule, never truncate.
+    if (!best) return fallback(); // Keep the original fitting schedule, never truncate.
     groups.push(best.manifest.includedIDs); offset = end;
-    if (groups.length >= contexts.length) return;
+    if (groups.length >= contexts.length) return fallback();
   }
-  const plan: Verification = { format: 1, policy: "frozen-epic-verification-v1", draft, groups };
-  return Buffer.byteLength(JSON.stringify(plan), "utf8") <= 4 * 1024 * 1024 ? plan : undefined;
+  return plan(groups);
 }
 
 export function epicVerificationContexts(project: Project, contexts: ContextPack[], work: EpicStages): ContextPack[] {
   if (!work.verification) return contexts;
-  const expected = planEpicVerification(project, contexts, work.verification.draft, work.proposalPolicy);
+  const expected = planEpicVerification(project, contexts, work.verification.draft, work.proposalPolicy, work.verification.policy);
   if (!expected || canonicalJSON(expected) !== canonicalJSON(work.verification)) throw new Error("Discovery verification differs from its frozen draft or exact mandatory evidence.");
   const { render } = renderer(project, contexts);
   return work.verification.groups.map(ids => render(ids));
 }
 export const epicCheckBatches = (work: EpicStages) => work.verification?.groups.length ?? work.batches;
-export const epicTotalStages = (work: EpicStages) => work.batches + epicCheckBatches(work);
+export const epicReadBatches = (work: EpicStages) => work.discoveryPolicy ? 1 : work.batches;
+export const epicTotalStages = (work: EpicStages) => epicReadBatches(work) + epicCheckBatches(work);
+
+// Frozen v2 replay semantics: changing tokenization, weights or tie-breaking
+// requires a new policy, never a reinterpretation of an existing paid layout.
+const proseFields = new Set(["text", "statement", "rationale", "acceptance", "label", "consequence", "whyItMatters", "answer"]);
+const commonWords = new Set("the and for that this with from when then into should would could must does have has are was were will not only other existing question questions requirement requirements option options".split(" "));
+function proseTokens(value: unknown): Set<string> {
+  const tokens = new Set<string>();
+  const visit = (item: unknown, prose = false) => {
+    if (typeof item === "string" && prose) {
+      for (const word of item.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+        if (word.length >= 3 && !commonWords.has(word)) tokens.add(word);
+    } else if (Array.isArray(item)) for (const child of item) visit(child, prose);
+    else if (item && typeof item === "object") for (const [key, child] of Object.entries(item)) visit(child, prose || proseFields.has(key));
+  };
+  visit(value); return tokens;
+}
+/** Lexical relevance is a scheduling hint only, never a conflict verdict. Keep
+ * the same fitting groups and every exact record; reorder only wholly unstarted
+ * verification. A surviving proposal still needs all groups to pass. */
+function relevanceFirstGroups(contexts: ContextPack[], draft: Analysis, groups: string[][]): string[][] {
+  const { records, pins } = inventory(contexts), pinned = new Set(pins);
+  const wanted = proseTokens({ questions: draft.questions, requirements: draft.requirements });
+  const recordTokens = new Map([...records].filter(([id]) => !pinned.has(id)).map(([id, record]) => [id, proseTokens(record.value)]));
+  const matches = groups.map(ids => new Set(ids.flatMap(id => [...recordTokens.get(id) ?? []]).filter(token => wanted.has(token))));
+  const frequency = new Map<string, number>();
+  for (const match of matches) for (const token of match) frequency.set(token, (frequency.get(token) ?? 0) + 1);
+  return groups.map((ids, index) => ({ ids, index, score: [...matches[index]!].reduce((sum, token) => sum + groups.length + 1 - frequency.get(token)!, 0) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index).map(group => group.ids);
+}

@@ -1814,6 +1814,7 @@ export class ProjectStore {
        json_array_length(payload, '$.submissionWork.verification.batches') AS savedVerificationBatches,
        json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline.reads') AS reusedCollectionBatches,
        json_array_length(payload, '$.retrievalWork.epicStages.verification.groups') AS epicVerificationBatches,
+       json_extract(payload, '$.retrievalWork.epicStages.discoveryPolicy') = 'candidate-first-v1' AS epicCandidateFirst,
        json_extract(payload, '$.retrievalWork.epicStages.emptyCompletion') = 'no-surviving-proposals' AS epicEmptyCompletion,
        json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
        COALESCE(json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests'), json_extract(payload, '$.answerGroupWork.pageRecovery.additionalRequests')) AS groupRecoveryRequests,
@@ -2091,7 +2092,7 @@ export class ProjectStore {
       if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       const work = retrievalWorkSchema.parse(input);
       const originalStages = job.retrievalWork?.epicStages;
-      if (originalStages && (originalStages.proposalPolicy !== work.epicStages?.proposalPolicy
+      if (originalStages && (originalStages.proposalPolicy !== work.epicStages?.proposalPolicy || originalStages.discoveryPolicy !== work.epicStages?.discoveryPolicy
         || (originalStages.verification || originalStages.phase === "validate" && job.retrievalWork!.attempts > 0 || originalStages.receipts.some(receipt => receipt.phase === "validate"))
           && JSON.stringify(originalStages.verification ?? null) !== JSON.stringify(work.epicStages?.verification ?? null)))
         throw new Error("Discovery verification cannot replace paid checks, frozen drafts or the original proposal policy.");

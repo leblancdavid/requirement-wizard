@@ -528,8 +528,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "workflow") {
         const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["collect-more", "play", "stop", "continue", "continue-continuous", "review-changes", "recover-shared-sources", "recover-shared-pages", "prepare-shared-verification", "allow-shared-rule-repair", "pause", "disable"]),
           ruleConsent: z.object({ jobID: z.string().uuid(), requirementID: z.string().uuid(), previewKey: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
+          questionTarget: z.number().int().min(1).max(50).optional(),
         }).strict().refine(v => (v.action === "allow-shared-rule-repair") === !!v.ruleConsent, "Exact rule-repair consent is required only for its separate action.").parse(raw);
-        json(res, 200, workflow.configure(id, input.revision, input.version, input.action, input.ruleConsent)); return;
+        json(res, 200, workflow.configure(id, input.revision, input.version, input.action, input.ruleConsent, input.questionTarget)); return;
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

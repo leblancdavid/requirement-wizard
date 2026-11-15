@@ -783,7 +783,7 @@ export class DiscoveryQueue {
         && (!options.collectQuestionBatch || !options.focusEpicID || q.epicID === options.focusEpicID)).length;
       if (pending >= target) { report(`Question target reached: ${pending} pending (target ${target}). All questions from the last package were kept.`); return; }
       report(`Finding gaps · ${pending} pending / target ${target} · package ${index + 1} of at most 10. The target is not a quota or hard cap.`);
-      const job = await this.service.analyze(id, project.revision, { ...options, signal: batchSignal, onProgress: report });
+      const job = await this.service.analyze(id, project.revision, { ...options, candidateFirst: !!options.collectQuestionBatch && !options.research, signal: batchSignal, onProgress: report });
       if (options.collectQuestionBatch && job.status === "interrupted" && !batchSignal.aborted
         && job.retrievalWork?.stagedRun?.paused && job.retrievalWork.epicStages
         && job.retrievalWork.attempts === 0 && this.service.store.projectRevision(id) === job.expectedRevision) {

@@ -120,7 +120,7 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
   return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
-type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext"> & { projectKeys?: WeakMap<Project, string> };
+type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext" | "cache"> & { projectKeys?: WeakMap<Project, string> };
 export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): ContextPack {
   if (review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5") {
     if (extraIDs.length) throw new Error("Record-staged question review does not authorize extra loads.");
@@ -332,6 +332,20 @@ export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?:
  * union, but do not re-close each decision seed back into an indivisible chain.
  * Every exact record is read and every surviving proposal checked in all batches. */
 function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
+  if (!memo?.cache) return computeRecordStagedReview(project, base, onPrepare, preparation, memo);
+  const projectKey = memo.projectKeys?.get(project) ?? epicPlanningProjectKey(project);
+  memo.projectKeys?.set(project, projectKey);
+  // Invocation-local exact computation only. Keep the actual revision as well
+  // as all material; returning a layout must never rebase model-visible bytes.
+  const key = hash(["record-staged-layout-v1", projectKey, project.revision, base]);
+  const cached = memo.cache.get(key);
+  if (cached?.batches) return { review: structuredClone(cached.review), contexts: structuredClone(cached.batches) };
+  const planned = computeRecordStagedReview(project, base, onPrepare, preparation, memo);
+  rememberCandidate(memo.cache, key, structuredClone({ review: planned.review, batches: planned.contexts }));
+  return planned;
+}
+
+function computeRecordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
   const plain = { ...base, contextPolicy: "current-spec-v1" as const }; delete plain.guardrailBatches;
   delete plain.recordGrouping;
   let original: ContextPack["manifest"];
@@ -453,7 +467,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   // This index lives only for this synchronous plan, never across project mutations.
   const graph = evidenceGraph(project);
   const preparation = contextPreparationIndex(project, graph, options.onClosure);
-  const contextMemo: ContextMemo = { contexts: options.contexts, onContext: options.onContext, projectKeys: new WeakMap() };
+  const contextMemo: ContextMemo = { contexts: options.contexts, onContext: options.onContext, cache: options.cache, projectKeys: new WeakMap() };
   const currentProjectKey = options.contexts ? epicPlanningProjectKey(project) : undefined;
   if (currentProjectKey) contextMemo.projectKeys!.set(project, currentProjectKey);
   const evidence = gapEvidence(project, graph);
@@ -774,16 +788,18 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       }
     }
     const matching = during("saved-policy", () => jobs.filter((j) => matches(j, candidate!)));
-    const completed = matching.some((j) => j.status === "completed" && !!j.result);
+    const screened = matching.filter(j => j.status === "completed" && !!j.retrievalWork?.epicStages?.discoveryPolicy).at(-1);
+    const completed = matching.some((j) => j.status === "completed" && !!j.result && !j.retrievalWork?.epicStages?.discoveryPolicy);
     const prior = matching.filter((j) => (["failed", "cancelled", "interrupted", "stale"].includes(j.status)
-      || j.status === "completed" && !j.result && (j.retrievalWork?.epicStages || j.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)))
+      || j.status === "completed" && (!j.result || j.retrievalWork?.epicStages?.discoveryPolicy) && (j.retrievalWork?.epicStages || j.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)))
       && j.model.providerID === project.model.providerID && j.model.modelID === project.model.modelID
       && j.model.connectionID === project.model.connectionID).at(-1);
     const recoverLinkedEvidence = !!prior?.retrievalWork?.epicStages && !!candidate.batches
       && !!planLinkedEvidenceRecovery(project, review, prior.retrievalWork.epicStages, prior.retrievalWork.attempts,
         prior.epicReviewReport?.blockers.find(blocker => blocker.packageID === review.packageID)?.reason, candidate.batches);
-    const blocked = !recoverLinkedEvidence && !!prior && !prior.retrievalWork?.final && (prior.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)
+    const blocked = !!screened || !recoverLinkedEvidence && !!prior && !prior.retrievalWork?.final && (prior.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)
       || (prior.retrievalWork?.attempts ?? 0) >= 3);
+    if (screened) reason = "Candidate screening is finished for this exact frontier, not a complete scope review. Resolve ready choices or explore an independent frontier; unchanged candidate work is not repeated automatically.";
     const availability = decisionAvailability(project, records.filter((r) => "statement" in r).map((r) => r.id), submissions);
     // Approval is deliberately conservative about shared source citations. A gap
     // question citing the original idea AND another workflow's requirements must

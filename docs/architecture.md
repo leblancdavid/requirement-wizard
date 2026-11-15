@@ -1,5 +1,27 @@
 # Architecture outline
 
+New explicitly targeted no-research dense question collection may use candidate-first
+v1: one bounded exact proposal screen followed by frozen verification v3 against
+the full mandatory evidence union. Original mandatory layouts remain the evidence
+authority; fewer discovery reads confer no scope-review or readiness credit.
+Empty/rejected screens retain blocked dated work and cannot supply negative/full-
+scope reuse. Existing paid all-read checkpoints and verification policies stay
+unchanged. The coordinator captures separate cumulative collection consent (64
+attempts/four windows; extra collection 16/one), preserving baselines through Pause,
+restart and input changes. SQLite 79 and conditional portable 51 are reader
+boundaries, not evidence rewrites. See
+[migration rules](migrations.md#candidate-first-discovery-and-captured-collection-targets-2026-11-14).
+
+New dense frozen verification plans can use a relevance-first v2 policy: the exact
+v1 fitting groups are reordered by a deterministic lexical hint to catch potentially
+answered/conflicting drafts earlier. All original reads remain and a survivor still
+needs every check. Saved v1/v2 layouts replay under their own immutable policy;
+SQLite 78 / conditional portable 50 protect the new reader boundary.
+`prepareEpicReview()` now computes historical cache keys only on demand, and exact
+record-staged layouts share the bounded invocation-local candidate cache without
+changing inputs, output bytes or durable CPU keys. See
+[compatibility and qualification](migrations.md#relevance-first-verification-and-exact-planning-reuse-2026-11-14).
+
 Portable rendering now traverses arrays/objects without a second entry graph and
 encodes large text in bounded Unicode-safe slices. After continuation selection,
 `ProjectStore.syncWorkspace()` releases its publication-private historical arrays

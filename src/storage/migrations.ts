@@ -30,7 +30,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 77;
+export const databaseSchemaVersion = 79;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -416,6 +416,10 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 77, name: "frozen-epic-verification-and-independent-frontiers", apply() {
   // Reader capability only. No historical prompt policy, paid check layout,
   // attempts or completed outputs are rewritten at startup.
+} }, { version: 78, name: "relevance-first-unstarted-epic-verification", apply() {
+  // Reader capability only. Never reorder old plans/receipts or repeat paid work.
+} }, { version: 79, name: "candidate-first-discovery-and-targeted-collection", apply() {
+  // Reader boundary only. Preserve all old jobs, layouts, paid attempts and grants.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

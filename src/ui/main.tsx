@@ -207,7 +207,8 @@ function App() {
     if (project && data) await api(`projects/${project.id}/maintenance`, { revision: project.revision, version: data.maintenance.version, action });
   }, "Updating automatic maintenance…");
   const configureWorkflow: WorkflowConfigure = (action, ruleConsent) => void act(async () => {
-    if (project && data?.workflow) await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action, ...(ruleConsent ? { ruleConsent } : {}) });
+    if (project && data?.workflow) await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action,
+      ...(["play", "continue-continuous", "collect-more"].includes(action) ? { questionTarget } : {}), ...(ruleConsent ? { ruleConsent } : {}) });
   }, "Updating project workflow…");
   const openWorkflowDecision = (decision: WorkflowDecision) => {
     if (!project) return;
@@ -820,7 +821,7 @@ function App() {
       {!showSettings && !creating && project && summary && data && (tab === "discover" || tab === "review") && <footer className="design-footer" role="contentinfo" aria-label={tab === "discover" ? "Discovery controls" : "Refinement controls"}>
         <div className="design-footer-inner gap-controls">
           <label className="area-filter">Epic<select aria-label={tab === "discover" ? "Filter by feature" : "Refinement scope"} value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
-          {tab === "discover" && <label className="area-filter" title="Soft target for pending questions in the selected scope. Discover uses your AI plan for up to ten work windows or 15 minutes; fewer questions may be returned when evidence or decisions block progress.">Questions<select aria-label="Question batch target" value={questionTarget} disabled={busy} onChange={event => {
+          {tab === "discover" && <label className="area-filter" title="Soft target for Discover and the next Continue specification action. Discover respects the selected epic. Coordinated collection covers all epics, up to 64 requests/four work windows; Find more grants only one additional window. Selecting a target starts no work. Blockers may yield fewer questions.">Questions<select aria-label="Question batch target" value={questionTarget} disabled={busy} onChange={event => {
             const value = Number(event.target.value); setQuestionTarget(value); localStorage.setItem(`reqwizit-question-target:${project.id}`, String(value));
           }}>{[...new Set([1, 5, 10, questionTarget])].sort((a, b) => a - b).map(value => <option key={value} value={value}>{value}</option>)}</select></label>}
           {tab === "discover" ? <ActionButton className="primary" reason={discoveryReason} tooltip={`Find missing decisions for ${selectedEpic ? areaTitle(selectedEpic) : "all epics"}. Uses your AI plan. Soft target: ${questionTarget} pending questions; up to ten work windows or 15 minutes. Blockers can yield fewer questions.`} tooltipDelay={2000} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Finding questions…")}>Discover</ActionButton>

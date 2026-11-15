@@ -30,7 +30,7 @@ export function planEpicCollectionBaseline(current: Project, review: EpicReview,
   if (!old || !work || old.contextPolicy !== "staged-dense-records-v5" || review.contextPolicy !== old.contextPolicy
     || job.status !== "completed" || !job.result || previous.revision !== job.expectedRevision || previous.revision >= current.revision
     || previous.id !== current.id || job.projectID !== current.id || job.model.providerID !== current.model.providerID
-    || job.model.modelID !== current.model.modelID || work.collectionBaseline || work.linkedEvidence?.length || work.citationCorrections?.length
+    || job.model.modelID !== current.model.modelID || work.discoveryPolicy || work.collectionBaseline || work.linkedEvidence?.length || work.citationCorrections?.length
     || job.retrievalWork?.research || hash(scope(old)) !== hash(scope(review)) || work.batches !== contexts.length || work.proposalPolicy !== proposalPolicy
     || hash(previous.scans.at(-1) ?? null) !== hash(current.scans.at(-1) ?? null)) return;
   let oldContexts: ContextPack[];

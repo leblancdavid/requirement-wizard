@@ -1,5 +1,107 @@
 # Data migrations and upgrade compatibility
 
+## Candidate-first discovery and captured collection targets (2026-11-14)
+
+**SQLite 78 → 79; conditional portable 51.** Migration 79 is a reader boundary,
+not a data rewrite. Existing jobs, original answers, decisions, drafts, receipts,
+spent attempts, history and older workflow grants remain unchanged. Startup makes
+no model calls. Unsupported future discovery markers reject transactionally;
+repair/reopen preserves original payloads.
+
+Only newly started no-research dense epic question exploration with explicit batch
+collection uses `candidate-first-v1`. One exact bounded batch proposes candidates;
+`candidate-first-verification-v3` freezes the draft and deterministically packs/
+orders the full mandatory evidence union, falling back to the original fitting
+groups if packing saves nothing. Every survivor needs every check. No negative
+full-scope baseline or completed-review reuse is granted by candidate-only work.
+Empty/rejected screens finish blocked without a result, final publication, project
+revision advance or scope-review/readiness credit. Exact unchanged screens cannot
+automatically spend again. Existing paid all-read modes and verification layouts
+remain immutable; cancellation and malformed output retain spent attempts.
+
+Portable 51 is emitted only when retained candidate work requires it; downgrading
+the envelope rejects adoption. Independent replay authenticates its screen, frozen
+draft and full check schedule before resume/publication/adoption. Older exports
+retain their applicable format. Local workflow consent is not portable execution
+state: `questionBatchPolicy.collection` records target and cumulative request/window
+baselines, bounded to 64 attempts/four windows. Find more grants only 16 attempts/
+one window. Same-target Pause/Play/restart and later input batches preserve the
+baselines instead of renewing them; old grants keep their previous behavior until
+explicit target consent. Changing the selector alone starts no work.
+
+Deterministic targeted checks cover success, empty/rejected screens, full evidence
+union, no repeated empty screen, stale/malformed output, cancellation, repeated
+reopen, portable clone, downgrade rejection and transactional future-marker
+rollback. Target 5/10, one-window extra consent, exhausted request/window resume
+and captured-grant startup fixtures pass. The full `npm test` chain passed 2,144
+tests (993 pretest, 837 main, 314 posttest), and the full browser chain including
+postchecks passed. The browser collection fixture verifies no-spend target
+selection/reload, cross-window target completion, Pause/reload/resume without
+baseline renewal, saved attempts, mobile and save-only answers. Type checking,
+UI build and desktop TypeScript emission passed. A final 146-test planning,
+collection, diagnostics, linked-evidence and resume suite also passed, including
+stronger exhaustion, candidate diagnostics and non-saving fallback fixtures added
+after the full-suite snapshot. No live inference,
+connection switch, latency guarantee or fix qualification for the portable heap abort.
+
+## Relevance-first verification and exact planning reuse (2026-11-14)
+
+**SQLite 77 → 78; conditional portable 50.** Migration 78 is an additive reader
+capability boundary. Startup rewrites no original jobs, drafts, receipts, attempts,
+completed results or grants and performs no model calls. Both frozen verification
+v1 and `relevance-first-epic-verification-v2` are supported. Unsupported future
+verification policies reject transactionally without advancing the version; repair
+and repeated reopen retain the original bytes. Existing v1 plans remain v1,
+including wholly unstarted plans and cancelled/failed checks with paid attempts.
+
+Only a newly created, wholly unstarted dense frozen verification plan can use v2.
+It first uses the identical v1 fitting groups, then orders those groups by
+deterministic lexical relevance to the exact frozen questions/requirements and
+their options. Common words and repeated pinned evidence do not determine order;
+less common shared prose terms receive higher weight, with the original index as
+the tie-breaker. This is a scheduling hint, **not a conflict/duplicate verdict or
+semantic unaffected proof**. No group, record body, source, linked unit, read
+receipt, prompt allowance or proposal is removed or rewritten. Each surviving
+proposal still needs every mandatory group checked. Existing empty-proposal
+completion can stop unrequested checks when all drafts have been rejected; it
+does not claim those checks ran or establish completeness/readiness.
+
+Replay reconstructs the groups and ordering from original exact evidence and the
+frozen draft using the saved policy, before resume/publication or portable adoption.
+Changing v2 tokenization/weights/order later requires another policy. Portable 50
+is emitted only when this new policy is retained; unchanged v1 exports stay 49
+(or their older applicable format). Old/downgraded envelopes cannot adopt v2 data.
+
+Planning optimizations do not change cache identities, paid plans or wire bytes:
+historical CPU-cache keys are now evaluated lazily only if their namespace is
+needed. Modern cache hits do not hash the legacy raw job archive; exact owned
+continuations do not hash/project unrelated history at all. One material digest
+and one projected job array are shared per preparation call. Older CPU receipts
+still adopt through their unchanged exact keys when needed; none are discarded.
+
+Record-staged canonical layouts also reuse the existing invocation-local bounded
+candidate cache. Keys include all planner material, the actual revision and exact
+review. Cloned entries/returns isolate caller mutations. The existing 8 MiB/64-entry
+bound applies; changed evidence (including same-revision replacement), scope or
+review inputs recompute. This adds no persistent format, cross-input skip authority
+or startup processing. Cold planning remains authoritative after cache eviction.
+
+Qualification: all 93 planning/linked-evidence/resume tests passed together after
+the final stronger cache and service-run fixtures.
+A curated layout needed 12 cold preparations and zero on its identical second
+request, with byte-identical output. The relevance fixture moved a rejecting group
+from second to first and completed the actual service run with one check, all
+original reads retained and nothing published. Surviving drafts still require both
+groups. SQLite-77 v1 work survived future-policy rollback/repair, repeated reopen,
+portable clone adoption and explicit resume retaining its charged cancelled attempt.
+V2 cancellation, stale output, malformed/exhausted attempts, tampering and downgrade
+checks passed. Full browser regression including postchecks, UI build, type checking
+and desktop TypeScript emission passed. The full `npm test` chain passed 2,131
+tests (985 pretest, 837 main, 309 posttest); the final 93-test run additionally
+covers the later modern-cache fixture and actual early-rejection service run.
+No live model calls or model change were made; the supplied project's
+actual latency and portable render abort remain unqualified.
+
 ## Lower-allocation portable rendering (2026-11-13)
 
 **No SQLite/portable format or freshness change.** The serializer emits exactly

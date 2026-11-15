@@ -1,14 +1,32 @@
 # Browser workspace, epics, and estimated completeness
 
+New frozen discovery checks may examine more closely related evidence first, to
+reject answered/conflicting drafts sooner. Word overlap sets only the order; all
+evidence still needs checking before a surviving question appears. Saved paid
+layouts retain their original order. Exact local planning can reuse an identical
+record layout without another packing pass. Neither optimization changes your
+model or starts work on reload. See
+[preservation and limits](migrations.md#relevance-first-verification-and-exact-planning-reuse-2026-11-14).
+
 The Design footer exposes a project-local **Questions** soft target (1, 5 or 10;
 existing custom targets remain selectable). Changing it starts no work. **Discover**
 uses that target in the selected epic, or project-wide under All epics. It may
 continue saved staged scheduling checkpoints within at most ten passes and fifteen
 minutes. Failures, cancellation, saved input and exhausted stage attempts still
 stop work; no partially checked draft publishes. Smaller batches remain possible
-when eligible independent gaps run out. This footer target applies to Discover,
-not the separate Continue specification workflow, which retains its five-question
-cooperative collection policy.
+when eligible independent gaps run out. The same target is captured by the next
+explicit Continue/Play or continuous-collection action. Coordinated collection
+covers all epics and may continue across at most four work windows/64 request
+attempts, rather than offering two questions merely because one window ended.
+Pause, restart and new input batches do not replenish captured consent. Existing
+grants without explicit target consent retain their old smaller-batch behavior.
+
+New no-research dense question exploration uses candidate-first screening: one
+bounded exact-evidence proposal request, then every mandatory evidence check for
+surviving questions. Empty/rejected screens remain unreviewed, make no readiness
+claim, and are not repeated automatically for an unchanged frontier. Paid older
+all-read checkpoints retain their original protocol and attempts. No model or
+connection changes. Live latency and question-quality improvements are unqualified.
 
 After a useful smaller question batch stops at its work-window boundary, Design
 offers **Find more before processing answers** under All epics. It explicitly

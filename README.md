@@ -25,6 +25,20 @@ instead of failing solely at the single-file limit. SQLite 77 / conditional port
 48–49 preserve old jobs and attempts. Live speed/question quality and faster models
 remain unqualified. See [upgrade rules and verification](docs/migrations.md#question-yield-frozen-discovery-checks-and-segmented-continuation-2026-11-13).
 
+SQLite 78 / conditional portable 50 now add relevance-first ordering for newly
+created frozen discovery checks, retaining every mandatory group and all old paid
+layouts. Local planning also reuses exact staged layouts and lazily computes legacy
+cache keys. Deterministic checks passed; production latency is not yet qualified.
+See [preservation and qualification](docs/migrations.md#relevance-first-verification-and-exact-planning-reuse-2026-11-14).
+
+SQLite 79 / conditional portable 51 add candidate-first screening for new dense
+question collection: one proposal pass, then all mandatory evidence checks for
+survivors. Empty screens do not complete scope reviews. The footer target also
+applies to explicitly authorized coordinated collection (64 attempts/four windows;
+Find more adds only one window). Paid older modes and attempts are preserved;
+Pause/restart does not renew captured limits. No model/connection switch or live
+latency qualification. See [compatibility](docs/migrations.md#candidate-first-discovery-and-captured-collection-targets-2026-11-14).
+
 New answer groups now compare estimated complete-evidence request costs with
 individual processing before any shared work starts. Clearly costlier shared plans
 stay individual; paid work retains its original path. SQLite 75 preserves additive

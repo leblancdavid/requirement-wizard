@@ -48,36 +48,42 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   const reason = epicResumeReason(project, options.resumeJob, submissions, focusEpicID);
   const resumeJob = reason === "eligible" ? options.resumeJob : undefined;
   const continuation = { mode: resumeJob ? "direct" as const : "catalog" as const, reason };
-  const inputKey = epicPlanningInputKey(project, jobs, focusEpicID, submissions);
-  const contextInputKey = epicPlanningContextInputKey(project);
+  let materialKey: string | undefined, currentKey: string | undefined, packingKey: string | undefined, projectedJobs: Job[] | undefined;
+  const material = () => materialKey ??= epicPlanningProjectKey(project);
+  const projected = () => projectedJobs ??= planningJobs(jobs);
+  const inputKey = () => currentKey ??= digestJSONArray(["resolved-prefix-v6", material(), projected(), focusEpicID, submissions]);
+  const contextInputKey = () => packingKey ??= digestJSONArray(["context-computation-generation-v1", material()]);
   // Lazy adoption of the previous exact-input cache only when its original full
   // inputs still match. These are disposable CPU receipts, never model evidence.
-  const legacyKey = digestJSONArray(["resolved-prefix-v1", project, jobs, focusEpicID, submissions]);
-  const previousKey = digestJSONArray(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
-  const v3Key = digestJSONArray(["resolved-prefix-v3", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
-  const v4Key = digestJSONArray(["resolved-prefix-v4", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
-  const v5Key = digestJSONArray(["resolved-prefix-v5", epicPlanningProjectKey(project), jobs, focusEpicID, submissions]);
-  const resolved = !resumeJob && options.loadReceipts?.(inputKey) || new Map<string, EpicPlanningCheckpoint>();
-  const contexts = !resumeJob && options.loadContexts?.(contextInputKey) || new Map<string, EpicContextCheckpoint>();
-  for (const generation of [v5Key, v4Key, v3Key, previousKey, legacyKey]) {
+  const historicalKeys = [5, 4, 3, 2, 1].map(version => {
+    let key: string | undefined;
+    return () => key ??= digestJSONArray([`resolved-prefix-v${version}`, version === 1 ? project : material(), jobs, focusEpicID, submissions]);
+  });
+  const resolved = !resumeJob && options.loadReceipts?.(inputKey()) || new Map<string, EpicPlanningCheckpoint>();
+  const contexts = !resumeJob && options.loadContexts?.(contextInputKey()) || new Map<string, EpicContextCheckpoint>();
+  for (const generation of historicalKeys) {
     if (resumeJob) break;
     if (resolved.size) break;
-    for (const [key, value] of options.loadReceipts?.(generation) ?? []) {
+    if (!options.loadReceipts) break;
+    options.signal.throwIfAborted();
+    for (const [key, value] of options.loadReceipts(generation()) ?? []) {
       if (value.tasks.some(task => task.state !== "reviewed")) continue;
       options.signal.throwIfAborted();
-      options.saveReceipt?.(inputKey, key, value); resolved.set(key, value);
+      options.saveReceipt?.(inputKey(), key, value); resolved.set(key, value);
     }
   }
-  for (const generation of [inputKey, v5Key, v4Key, v3Key, previousKey, legacyKey]) {
+  for (const generation of [inputKey, ...historicalKeys]) {
     if (resumeJob) break;
     if (contexts.size) break;
-    for (const [key, value] of options.loadContexts?.(generation) ?? []) {
+    if (!options.loadContexts) break;
+    options.signal.throwIfAborted();
+    for (const [key, value] of options.loadContexts(generation()) ?? []) {
       options.signal.throwIfAborted();
-      options.saveContext?.(contextInputKey, key, value); contexts.set(key, value);
+      options.saveContext?.(contextInputKey(), key, value); contexts.set(key, value);
     }
   }
   options.signal.throwIfAborted();
-  const data = { project, jobs: resumeJob ? [] : planningJobs(jobs), focusEpicID, submissions, resolved, contexts,
+  const data = { project, jobs: resumeJob ? [] : projected(), focusEpicID, submissions, resolved, contexts,
     resumeJob: resumeJob ? planningJobs([resumeJob])[0] : undefined, continuation };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use
@@ -111,13 +117,13 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
           else if (message.type === "resolved") {
             if (!message.key || !/^[a-f0-9]{64}$/.test(message.key)) throw new Error("Invalid local planning receipt key.");
             options.signal.throwIfAborted();
-            options.saveReceipt?.(inputKey, message.key, epicPlanningCheckpointSchema.parse(message.value));
+            options.saveReceipt?.(inputKey(), message.key, epicPlanningCheckpointSchema.parse(message.value));
             report();
           }
           else if (message.type === "context-checkpoint") {
             if (!message.key || !/^[a-f0-9]{64}$/.test(message.key)) throw new Error("Invalid intermediate planning context key.");
             options.signal.throwIfAborted();
-            options.saveContext?.(contextInputKey, message.key, epicContextCheckpointSchema.parse(message.value) as EpicContextCheckpoint);
+            options.saveContext?.(contextInputKey(), message.key, epicContextCheckpointSchema.parse(message.value) as EpicContextCheckpoint);
           }
           else if (message.type === "result") { report(); if (!settled) { settled = true; resolve(message.value as EpicPlan); } }
           else if (message.type === "revision") {

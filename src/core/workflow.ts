@@ -14,6 +14,7 @@ export const workflowLimits = { requests: 8, durationMs: 300000, steps: 20 } as 
 export const playRunRequestLimit = 256;
 /** Scheduling budget only; original package evidence, checks and retry limits stay authoritative. */
 export const questionBatchLimits = { target: 5, packages: 5, requests: 16, durationMs: 300000 } as const;
+export const targetedCollectionLimits = { requests: 64, windows: 4 } as const;
 const hash = (value: unknown) => bytesToHex(sha256(JSON.stringify(value)));
 const key = z.string().regex(/^[a-f0-9]{64}$/);
 const questionBatchSchema = z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
@@ -46,7 +47,12 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   readiness: workflowReadinessSchema.optional(),
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
-  questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]) }).strict().optional(),
+  questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]),
+    collection: z.object({ format: z.literal(1), target: z.number().int().min(1).max(50),
+      startingRequests: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), startingWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      requests: z.number().int().positive().max(targetedCollectionLimits.requests), windows: z.number().int().positive().max(targetedCollectionLimits.windows),
+    }).strict().optional(),
+  }).strict().refine(policy => !policy.collection || policy.format === 2, "Targeted collection requires cooperative windows.").optional(),
   playPolicy: z.object({ format: z.literal(1), stopped: z.boolean() }).strict().optional(),
   questionBatch: z.discriminatedUnion("format", [questionBatchSchema, continuousQuestionBatchSchema])
     .refine(batch => (batch.state === "finished") === !!batch.reason, "Finished collection requires an explicit stopping reason.")
@@ -56,7 +62,9 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
     state: z.enum(["reviewing", "complete"]), explicit: z.boolean() }).strict().optional(),
   decisionSchedule: workflowScheduleSchema.optional(),
 }).strict().refine(state => state.questionBatch?.format !== 2 || state.questionBatchPolicy?.format === 2,
-  "Continuous collection windows require their explicit policy.");
+  "Continuous collection windows require their explicit policy.")
+  .refine(state => !state.questionBatchPolicy?.collection || state.questionBatchPolicy.collection.startingRequests <= (state.questionBatch?.requests ?? 0),
+    "Collection consent cannot refund missing cumulative spending.");
 export type WorkflowState = z.infer<typeof workflowSchema>;
 export const emptyWorkflow = (): WorkflowState => ({ format: 1, version: 0, settingsVersion: 0, enabled: false,
   paused: true, phase: "idle", message: "Coordinated workflow has not been started." });
@@ -104,7 +112,7 @@ export function canCollectMoreQuestions(project: Project, submissions: Submissio
     || state.questionBatch.inputKey !== workflowReviewInputKey(project)) return false;
   const decisions = workflowDecisions(project, submissions);
   const resolved = resolvedReviewAttempts(project, submissions);
-  return decisions.length > 0 && decisions.length < questionBatchLimits.target && decisions.every(d => d.kind === "question")
+  return decisions.length > 0 && decisions.length < (state.questionBatchPolicy?.collection?.target ?? questionBatchLimits.target) && decisions.every(d => d.kind === "question")
     && !submissions.some(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
 }
 export function workflowRequirements(project: Project) {
