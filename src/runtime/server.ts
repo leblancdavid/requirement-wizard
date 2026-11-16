@@ -7,7 +7,10 @@ import { runtimeExecutable } from "./executable.js";
 import { executionAgentPrompt } from "../core/execution-context.js";
 import { stageExecutionSkill, executionPermissions } from "./skills.js";
 
-export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false, assessment = false, planning = false) {
+export type OwnedRuntime = { client: ReturnType<typeof createRuntimeClient>; directory: string; close: () => Promise<void>;
+  skillPath?: string; isAlive?: () => boolean };
+
+export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false, assessment = false, planning = false): Promise<OwnedRuntime> {
   signal?.throwIfAborted();
   const executable = await runtimeExecutable();
   signal?.throwIfAborted();
@@ -97,7 +100,8 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
     // V2 starts listening before its location/provider/config catalogs finish loading.
     // The model endpoint awaits that initialization; no session or inference is created.
     await client.native.model.list({ location: { directory } }, { signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(90000)]) });
-    return { client, directory, close, skillPath: stagedSkill?.path };
+    return { client, directory, close, skillPath: stagedSkill?.path,
+      isAlive: () => !closing && child.exitCode === null && child.signalCode === null };
   } catch (error) {
     await close();
     throw error;

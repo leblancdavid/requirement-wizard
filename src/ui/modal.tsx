@@ -29,7 +29,7 @@ export function Modal({ id, className = "", titleID, title, description, close, 
       if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, []);
-  return createPortal(<dialog ref={dialog} id={id} className={`modal ${className}`} aria-labelledby={titleID} onCancel={close}
+  return createPortal(<dialog ref={dialog} id={id} className={`modal ${className}`} aria-labelledby={titleID} onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close(); }}
     onKeyDown={(event) => {
       if (event.key !== "Tab" || !event.currentTarget.contains(document.activeElement)) return;
       const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, summary, [tabindex], [contenteditable="true"]'))

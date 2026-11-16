@@ -5,6 +5,27 @@ import type { JobLogEntry } from "../core/log-history.js";
 import { emptyExecution } from "../core/execution.js";
 import type { Job } from "../core/model.js";
 
+test("completed empty candidate screens are not presented as missing evidence or scope completeness", () => {
+  const job: Job = { id: "screen", projectID: "project", expectedRevision: 1, status: "completed", leaseUntil: null,
+    model: { providerID: "openai", modelID: "fixture" }, context: { revision: 1, focusEpicID: "area", characters: 100, budget: 96000,
+      includedIDs: ["target"], omittedIDs: ["unread"], epicReview: { format: 1, epicID: "area", kind: "workflow", recordIDs: ["target"], epicIDs: ["area"], packageID: "package", inputKey: "0".repeat(64) } },
+    epicReviewReport: { format: 1, total: 1, reviewed: 0, pending: 0, waiting: 0, blocked: 1, modelCalls: 0, explanation: "Bounded attempt, not completeness",
+      blockers: [{ packageID: "package", epicID: "area", reason: "No surviving questions in this screen" }],
+      stagedProgress: { phase: "complete", completed: 1, batches: 8, readBatches: 1, candidateOnly: true, totalCalls: 1, emptyCompletion: "no-surviving-proposals" } } };
+  const original = structuredClone(job), screen = projectLogs([job], [])[0]!;
+  assert.equal(screen.status, "completed"); assert.match(screen.summary!, /no questions found.*not a complete scope review/);
+  assert.doesNotMatch(screen.summary!, /supporting evidence needed/);
+  const blocked = structuredClone(job); delete blocked.epicReviewReport!.stagedProgress!.emptyCompletion;
+  assert.equal(projectLogs([blocked], [])[0]!.status, "blocked", "Real evidence blockers remain distinct");
+  const failed = { ...job, status: "failed" as const };
+  assert.equal(projectLogs([failed], [])[0]!.status, "failed");
+  const entry: JobLogEntry = { id: job.id, projectID: job.projectID, epicID: "area", revision: 1, status: "completed", source: "Discovery", title: "Gap discovery",
+    createdAt: null, startedAt: null, finishedAt: null, recordedAt: null, durationMs: null, diagnostic: null, blockReason: null, detailLimited: false,
+    savedSteps: null, batches: null, attempts: null, requests: 1, interruptionCause: null, explorationOutcome: "empty-screen" };
+  assert.match(jobHistoryLog(entry).summary!, /no questions found.*not a complete scope review/);
+  assert.deepEqual(job, original);
+});
+
 test("diagnostic redaction covers headers, JSON tokens and query credentials", () => {
   for (const text of ['Bearer private-secret', '"access_token": "private-secret"', "refresh_token=private-secret&next=ok", "api-key: private-secret", "password=private-secret"]) {
     assert.ok(!redactLog(text).includes("private-secret"));

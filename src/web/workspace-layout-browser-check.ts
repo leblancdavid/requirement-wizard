@@ -40,7 +40,7 @@ try {
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Workspace layout fixture", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Project map", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tab")).toHaveCount(4);
+  await expect(page.getByRole("tab")).toHaveCount(5);
   let before = structuredClone(store.get(p.id));
   const footer = page.getByRole("contentinfo", { name: "Discovery controls", exact: true });
   await expect(footer).toBeInViewport();
@@ -190,7 +190,12 @@ try {
   store.finishEpicReviewBlocked(evidenceBlocked.id, { format: 1, total: 1, reviewed: 0, pending: 0, waiting: 0, blocked: 1, modelCalls: 1,
     explanation: "Saved bounded evidence review", blockers: [{ packageID: "fixture-evidence-block", epicID: "inbox", reason: "Original linked evidence is unavailable" }] });
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
-  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const logs = page.getByRole("region", { name: "Logs", exact: true });
+  await expect(page.getByRole("dialog", { name: "Logs", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Activity & logs", exact: true })).toHaveAttribute("aria-selected", "true");
+  const activityViews = page.getByRole("tablist", { name: "Activity & logs views", exact: true });
+  await expect(activityViews.getByRole("tab", { name: "Logs", exact: true })).toHaveAttribute("aria-selected", "true");
+  assert.notEqual(await page.evaluate(() => document.body.style.overflow), "hidden", "Logs is a page, not a modal scroll lock");
   const diagnostics = logs.locator("summary").filter({ hasText: /^Export discovery diagnostics$/ });
   await expect(diagnostics).toBeInViewport();
   assert.equal(await diagnostics.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("#logs .log-filters")!) & Node.DOCUMENT_POSITION_FOLLOWING)), true, "Diagnostics precede the log filters and entries");
@@ -218,13 +223,33 @@ try {
   assert.equal(store.getJob(evidenceBlocked.id).status, "completed", "Logs must not rewrite the original worker receipt");
   await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");
   await page.setViewportSize({ width: 390, height: 844 });
-  await logs.locator(".logs-panel").evaluate((element) => { element.scrollTop = 0; });
+  await page.locator(".tab-content").evaluate((element) => { element.scrollTop = 0; });
   await expect(diagnostics).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workspace-logs-mobile.png", fullPage: true });
-  await diagnostics.focus(); // Native search inputs consume Escape to clear their value.
-  await page.keyboard.press("Escape"); await expect(logs).toHaveCount(0);
+  await diagnostics.focus();
+  await page.keyboard.press("Escape"); await expect(logs).toBeVisible();
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
+  await expect(logs).toHaveCount(0);
   assert.deepEqual(store.get(p.id), before);
+  // Task-backed Activity links select the existing diagnostic rather than
+  // manufacturing a duplicate browser-session record from its summary.
+  const savedJobs = structuredClone(store.jobs(p.id));
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
+  const activity = page.getByRole("region", { name: "Project activity feed", exact: true });
+  await activity.getByLabel("Activity view", { exact: true }).selectOption("all");
+  await activity.getByLabel("Activity type", { exact: true }).selectOption("problems");
+  const failedActivity = activity.locator(".activity-entry").filter({ has: page.getByRole("heading", { name: "Discovery failed", exact: true }) });
+  await failedActivity.getByText("View changes & details", { exact: true }).click();
+  await failedActivity.getByRole("button", { name: "View logs", exact: true }).click();
+  await expect(logs.locator(".log-record")).toHaveCount(1);
+  await expect(logs).toContainText(failed.id);
+  await expect(logs.locator("pre")).toContainText("Original review diagnostic");
+  await expect(logs).not.toContainText("Activity record");
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
+  await expect(activity.getByLabel("Activity type", { exact: true })).toHaveValue("problems");
+  await expect(failedActivity.getByRole("button", { name: "View logs", exact: true })).toBeVisible();
+  assert.deepEqual(store.jobs(p.id), savedJobs);
   // Deterministic live snapshot: keep mechanics out of the queue, swap to Pause,
   // and expose the exact current messages in the same Logs viewer.
   let running = true, stops = 0;
@@ -246,7 +271,7 @@ try {
   await logs.getByLabel("Source", { exact: true }).selectOption("Live status");
   await logs.getByText("Log details", { exact: true }).click();
   await expect(logs.locator("pre")).toContainText("internal-stage-marker");
-  await logs.getByRole("button", { name: "Close logs", exact: true }).click();
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await page.unroute(snapshotRoute); await page.unroute(stopRoute);
   // A saved plan remains a plan even after browsing Specification or Design.
   // Pausing must target execution, and Continue must never start coding/discovery.
@@ -297,12 +322,15 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");
   await expect(logs.locator(".log-record")).toHaveCount(1);
-  await logs.getByRole("button", { name: "Close logs", exact: true }).focus();
-  await page.keyboard.press("Shift+Tab");
-  assert.ok(await logs.evaluate(element => element.contains(document.activeElement)), "Reverse tab wraps inside Logs, excluding controls in collapsed details");
-  await page.keyboard.press("Tab");
-  await expect(logs.getByRole("button", { name: "Close logs", exact: true })).toBeFocused();
-  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).focus();
+  await expect(page.getByRole("tab", { name: "Activity & logs", exact: true })).toBeFocused();
+  await activityViews.getByRole("tab", { name: "Activity", exact: true }).click();
+  await expect(logs).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Project activity feed", exact: true })).toBeVisible();
+  await activityViews.getByRole("tab", { name: "Logs", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(logs).toBeVisible();
+  await page.reload();
   await expect(logs).toHaveCount(0);
   // App errors remain accessible even while creating a project, without a project scope.
   await (await workspaceMenu(page)).getByRole("button", { name: "New project", exact: true }).click();
@@ -317,8 +345,10 @@ try {
   await logs.getByLabel("Scope", { exact: true }).selectOption("app");
   await logs.getByLabel("Search logs", { exact: true }).fill("Connection fixture failure");
   await expect(logs.locator(".log-record")).not.toHaveCount(0);
-  await logs.getByRole("button", { name: "Close logs", exact: true }).focus();
-  await page.keyboard.press("Escape"); await expect(detailLink).toBeFocused();
+  await expect(activityViews.getByRole("tab", { name: "Activity", exact: true })).toBeDisabled();
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
+  await expect(detailLink).toBeFocused();
+  await expect(page.getByRole("region", { name: "Settings", exact: true })).toBeVisible();
   assert.equal(calls, 0); assert.deepEqual(errors, []);
   console.log("Workspace layout browser checks passed: canonical specification, unfinished queue, consolidated/redacted logs, reload, keyboard, app errors without a project, mobile. No inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-workspace-layout-failure"); throw error; }

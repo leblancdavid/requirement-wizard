@@ -211,6 +211,33 @@ test("segmented continuation preserves paid originals and exact snapshots across
   } finally { f.cleanup(); }
 });
 
+test("private continuation transfer releases staged graphs and preserves exact decoded evidence and failure cleanup", () => {
+  const directory = mkdtempSync(join(parent, "transfer-parts-"));
+  try {
+    const state = { formatVersion: 1 as const, jobs: [], submissions: [], snapshots: {}, objects: {
+      first: { receipts: Array.from({ length: 30 }, (_, i) => ({ batch: i, nested: { evidence: ["original", "é😀"], response: { keep: true } } })) },
+      second: { exact: "Original human input" },
+    } };
+    const original = structuredClone(state);
+    const staged = stageContinuation(directory, state, 1024, undefined, true);
+    try {
+      assert.deepEqual(state.objects, {}, "Only the private supplied graph is consumed");
+      const files = Object.fromEntries(Object.entries(staged.parts!).map(([key, part]) => [key, readFileSync(part.path, "utf8")]));
+      assert.deepEqual(decodeContinuationParts(files, JSON.parse(readFileSync(staged.path, "utf8"))), original);
+    } finally { discardContinuation(staged); }
+    const invalid = structuredClone(original); (invalid.objects.second as any).cycle = invalid.objects.second;
+    assert.throws(() => stageContinuation(directory, invalid, 1024, undefined, true), /cyclic/);
+    assert.deepEqual(readdirSync(directory), [], "Failed private staging cannot leave parts or managed output");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("structured paid-history continuation stages progressively under the production heap cap", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--import", "tsx", "scripts/check-structured-continuation-memory.ts"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim()); assert.equal(report.jobs, 695); assert.ok(report.bytes > 64 * 1024 * 1024);
+});
+
 test("continuation above the 64 MiB single-file limit stages bounded parts without dropping evidence", { timeout: 60000 }, () => {
   const directory = mkdtempSync(join(parent, "large-parts-"));
   try {

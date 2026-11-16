@@ -25,8 +25,8 @@ const browser = await chromium.launch(); let diagnose: ReturnType<typeof browser
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true }); await dialog.getByText("Definition coverage", { exact: true }).click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const dialog = page.getByRole("region", { name: "Project progress", exact: true }); await dialog.getByText("Definition coverage", { exact: true }).click();
   const assessment = dialog.locator(".definition-assessment"); await assessment.getByText("See what is defined and what needs attention", { exact: true }).click();
   await expect(assessment).toContainText("Mixed-source assessment wrapper: version 4");
   await expect(assessment).toContainText("Confidence is conservatively low"); await expect(assessment).toContainText("2026-10-30T12:00:00.000Z");
@@ -44,7 +44,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 }); await scoped.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-mixed-assessment-reader-mobile.png", fullPage: true });
-  await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
+  await page.reload();
   assert.deepEqual(store.get(p.id).assessments, before.assessments); assert.equal(store.jobs(p.id).length, 0); assert.equal(calls, 0);
   console.log("Mixed assessment reader browser passed with a curated declaration only: ordinary/scoped/original/recovery/wrapper dates, complete concerns, escaped text, conservative freshness/confidence, reload/mobile and no model calls or publication. This does not authenticate consistency or source workers.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-mixed-assessment-reader-failure"); throw error; }

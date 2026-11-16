@@ -1,13 +1,13 @@
 import React, { createContext, useContext, useSyncExternalStore } from "react";
 import { retainLog, type LogRecord } from "./log-records.js";
 
-type LogState = { open: boolean; target?: string; records: LogRecord[] };
-let state: LogState = { open: false, records: [] };
+type LogState = { open: boolean; request: number; target?: string; records: LogRecord[] };
+let state: LogState = { open: false, request: 0, records: [] };
 const listeners = new Set<() => void>();
 export const LogProject = createContext<string | undefined>(undefined);
 function publish(next: LogState) { state = next; for (const listener of listeners) listener(); }
 export function recordLog(record: LogRecord) { publish({ ...state, records: retainLog(state.records, { ...record, at: record.at ?? new Date().toISOString(), atLabel: record.atLabel ?? "Recorded" }) }); }
-export function openLogs(target?: string) { publish({ ...state, open: true, target }); }
+export function openLogs(target?: string) { publish({ ...state, open: true, request: state.request + 1, target }); }
 export function closeLogs() { publish({ ...state, open: false, target: undefined }); }
 export function useLogs() {
   return useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => state, () => state);

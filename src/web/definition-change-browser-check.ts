@@ -52,10 +52,10 @@ try {
   await legacyWorkflowDetails(page);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const progress = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const progress = page.getByRole("region", { name: "Project progress", exact: true });
   await expect(progress).toContainText("100% saved · validity pending");
-  await progress.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await processingQueue(page);
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
   await expect(flow).toContainText("change check pending"); assert.equal(calls, 0);

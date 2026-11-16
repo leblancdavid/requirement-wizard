@@ -31,6 +31,8 @@ import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { emptyExecution } from "./execution.js";
 import type { EpicPlanningCheckpoint, EpicContextCheckpoint } from "./epic-planning-checkpoint.js";
+import { explorationProgress, type ExplorationRecord } from "./exploration.js";
+import { ExplorationProgressPanel } from "../ui/exploration-progress.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore, count = 8) {
@@ -52,6 +54,118 @@ function seed(store: ProjectStore, count = 8) {
 }
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+test("exploration progress counts stable targets, excludes failed/incomplete work and keeps completeness separate", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 2), task = planEpicReview(p, [], "orders").task!;
+    const record: ExplorationRecord = { jobID: "original", revision: p.revision, status: "completed", at: null,
+      review: task.review, empty: true, completed: true, questionTexts: [], detailedIDs: task.context!.manifest.includedIDs };
+    const view = (project = p, records = [record]) => explorationProgress(project, records, () => p);
+    assert.equal(view().total, 3); assert.equal(view().explored, 2); assert.equal(view().percent, 67);
+    assert.deepEqual(view().skippedPackageIDs, [task.review.packageID]);
+    assert.equal(view(p, []).counts["not-explored"], 3);
+    assert.equal(view(p, [{ ...record, completed: false, status: "failed" }]).counts.blocked, 2);
+    const unfinished = { ...record, jobID: "unfinished", completed: false, status: "failed" as const,
+      review: { ...record.review, packageID: "unfinished-package", recordIDs: [record.review.recordIDs[0]!] } };
+    const later = view(p, [record, unfinished]);
+    assert.equal(later.counts.blocked, 1); assert.deepEqual(later.skippedPackageIDs, [], "An older larger completion must not hide newer unfinished work");
+    assert.equal(view(p, [{ ...record, detailedIDs: [] }]).counts["needs-look"], 2, "Unseen targets earn no exploration credit");
+    const unrelated = structuredClone(p); unrelated.revision++; unrelated.requirements.find(r => r.epicID === "billing")!.statement += " unrelated edit";
+    unrelated.epics.find(e => e.id === "billing")!.title += " renamed";
+    // Only if it was actually omitted: detailed foreign evidence remains a freshness dependency.
+    const local = { ...record, detailedIDs: task.review.recordIDs };
+    assert.equal(view(unrelated, [local]).explored, 2);
+    const changed = structuredClone(p); changed.revision++; changed.requirements[0]!.statement += " changed behavior";
+    assert.equal(view(changed).counts["needs-look"], 2);
+    const global = structuredClone(p); global.revision++; global.sources[0]!.text += " new global constraint";
+    assert.equal(view(global).counts["needs-look"], 2);
+    const dependency = structuredClone(p); dependency.revision++; dependency.epics.find(e => e.id === "orders")!.dependencies = ["billing"];
+    assert.equal(view(dependency).counts["needs-look"], 2);
+    const ready = structuredClone(p); ready.revision++;
+    ready.questions.push({ id: "ready-question", epicID: "orders", text: "Choose recovery", whyItMatters: "Decide recovery", status: "pending", evidenceIDs: task.review.recordIDs,
+      options: [{ label: "Retry", consequence: "Try again" }, { label: "Stop", consequence: "Keep the failure visible" }] });
+    assert.equal(view(ready, [{ ...record, questionTexts: ["Choose recovery"], empty: false }]).counts["questions-ready"], 2);
+    const added = structuredClone(p); added.revision++; added.requirements.push({ ...added.requirements[0]!, id: "new-target" });
+    assert.equal(view(added).total, 4); assert.equal(view(added).counts["not-explored"], 2);
+    const missing = explorationProgress(p, [record], () => { throw new Error("Unavailable historical evidence"); }, () => { throw new Error("Missing original"); });
+    assert.equal(missing.explored, 0);
+    const html = renderToStaticMarkup(createElement(ExplorationProgressPanel, { project: p, progress: view(), disabled: false, revisit: () => {} }));
+    assert.doesNotMatch(html, /Definition coverage:/); assert.match(html, /Discovery explored: 67%/);
+    assert.match(html, /not completeness/); assert.match(html, /Explore again/);
+  } finally { store.close(); }
+});
+
+test("existing saved exploration projects reopen unchanged, suppress unchanged scope without a call, and revisit only on explicit consent", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "exploration-view-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    let p = seed(store, 2); p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "billing", title: "Billing", purpose: "Settle accepted orders", dependencies: [] }]); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() { calls++; return empty(); } });
+    const done = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(calls, 1);
+    const original = store.getJob(done.id), originalProject = store.get(p.id);
+    const progress = store.exploration(p.id); assert.equal(progress.counts["explored-empty"], 2);
+    const external = new Database(file);
+    try {
+      const payload = (external.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(p.id, done.expectedRevision) as { payload: string }).payload;
+      const altered = JSON.parse(payload); altered.sources[0].text += " changed original evidence";
+      external.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(altered), p.id, done.expectedRevision);
+      assert.equal(store.exploration(p.id).counts["needs-look"], 2, "External replacement cannot inherit an in-memory historical proof");
+      external.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(payload, p.id, done.expectedRevision);
+      assert.deepEqual(store.exploration(p.id), progress);
+    } finally { external.close(); }
+    const clonePath = join(directory, "clone"); mkdirSync(clonePath);
+    store.connectWorkspace(p.id, originalProject.revision, clonePath);
+    const consumer = new ProjectStore(":memory:");
+    try {
+      const imported = consumer.openWorkspace(clonePath, p.model);
+      assert.equal(consumer.exploration(imported.id).counts["explored-empty"], 2, "Portable original snapshots retain exploration without inference");
+    } finally { consumer.close(); }
+    for (let open = 0; open < 2; open++) {
+      store.close(); store = new ProjectStore(file);
+      assert.deepEqual(store.exploration(p.id), progress); assert.deepEqual(store.getJob(done.id), original);
+      assert.deepEqual(store.get(p.id), originalProject);
+    }
+    const after = new DiscoveryService(store, { async analyze() { calls++; return empty(); } });
+    const skipped = await after.analyze(p.id, originalProject.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(skipped.status, "completed"); assert.equal(calls, 1, "Automatic discovery skips unchanged explored scope");
+    const revisited = await after.analyze(p.id, store.get(p.id).revision, { gapMode: "epic", revisitJobID: done.id });
+    assert.equal(revisited.status, "completed", revisited.diagnostic); assert.equal(calls, 2);
+    assert.deepEqual(store.getJob(done.id), original, "Original paid work and allowances are not reset or rewritten");
+    const changed = store.note(p.id, store.get(p.id).revision, "New orders recovery rule", "orders");
+    assert.ok(store.exploration(p.id).counts["needs-look"] > 0);
+    await assert.rejects(after.analyze(p.id, changed.revision, { gapMode: "epic", revisitJobID: revisited.id }), /unchanged explored scope/);
+    assert.equal(calls, 2);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("exploration API requires current revision, exact scope and explicit AI consent", async () => {
+  const store = new ProjectStore(":memory:"); let app: Awaited<ReturnType<typeof startApp>> | undefined;
+  try {
+    const p = seed(store, 2); let calls = 0;
+    const adapter = { async analyze() { calls++; return empty(); } };
+    const done = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    app = await startApp({ store, port: 0, adapter });
+    const url = `${app.origin}/api/projects/${p.id}`;
+    const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin, "Content-Type": "application/json" };
+    const snapshot = await (await fetch(url, { headers })).json() as { exploration: { percent: number } };
+    assert.equal(snapshot.exploration.percent, 67); assert.equal(calls, 1, "Progress reads never start work");
+    const body = { revision: store.get(p.id).revision, jobID: done.id, confirmAIUsage: true };
+    const post = (value: unknown, token = app!.token) => fetch(`${url}/revisit-exploration`, { method: "POST", headers: { ...headers, "X-Reqwizit-Token": token }, body: JSON.stringify(value) });
+    assert.equal((await post(body, "wrong")).status, 403);
+    assert.equal((await post({ ...body, confirmAIUsage: false })).status, 400);
+    assert.equal((await post({ ...body, revision: body.revision + 1 })).status, 409);
+    assert.equal(calls, 1);
+    assert.equal((await post(body)).status, 202);
+    for (let n = 0; n < 100; n++) {
+      if (!(await (await fetch(url, { headers })).json() as { active: boolean }).active) break;
+      await delay(10);
+    }
+    assert.equal(calls, 2);
+  } finally { await app?.close(); store.close(); }
+});
 
 test("workflow input diagnostics distinguish local evidence, policy and layout changes without treating revision changes as evidence", () => {
   const store = new ProjectStore(":memory:");

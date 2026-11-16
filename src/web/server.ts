@@ -335,9 +335,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review" && item.kind !== "definition-scope-review" && item.kind !== "definition-mixed-review").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
-        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
+        const snapshot = { ...current, exploration: options.store.exploration(id), workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
         if (known) {
-          const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);
+          const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage", "exploration"]);
           res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", [snapshotHeader]: JSON.stringify(encoded.tokens) });
           res.end(encoded.body);
         } else json(res, 200, snapshot);
@@ -545,6 +545,14 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         queue.resume(id, input);
         json(res, 202, { started: true }); return;
       }
+      if (action === "revisit-exploration") {
+        const input = z.object({ revision, jobID: z.string().uuid(), confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        if (queue.isActive(id) || workflow.active(id) || implementation.isActive(id)) throw new OperationConflictError("Finish or stop active work before exploring again.");
+        options.store.explorationRevisit(id, input.jobID);
+        queue.resume(id, { gapMode: "epic", research: false, revisitJobID: input.jobID });
+        json(res, 202, { started: true }); return;
+      }
       if (action === "scan") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, resumeJobID: z.string().uuid().optional() }).strict().parse(raw);
@@ -647,11 +655,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         ...[...helpWork.values()].map((work) => work.promise),
          implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(),
       ]);
+      cleanup.push(...await Promise.allSettled([options.adapter.close?.()]));
       server.closeAllConnections();
        await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
        await options.store.stopWorkspacePublication();
       // Help failures are already persisted by the service; teardown failures are actionable.
-      for (const result of cleanup.slice(-5)) if (result.status === "rejected") throw result.reason;
+      for (const result of cleanup.slice(-6)) if (result.status === "rejected") throw result.reason;
     })();
     return closePromise;
   } };

@@ -1,8 +1,91 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { OpenCode } from "@opencode/client";
+import { OpenCode, ClientError } from "@opencode/client";
 import { runtimeClient, nativePermissions } from "./client.js";
+import { DiscoveryRuntimes, discoveryTransportFailure } from "./discovery-runtime.js";
+
+for (const failure of ["process-exit", "metadata-transport"] as const) test(`idle owned server ${failure} is replaced before any session or prompt`, async () => {
+  let starts = 0, closes = 0, unhealthy = false, probes = 0;
+  const start = (async () => {
+    const number = ++starts;
+    return { directory: "fixture", isAlive: () => !(number === 1 && unhealthy && failure === "process-exit"),
+      client: { native: { server: { async info() { probes++; if (number === 1 && unhealthy) throw new ClientError("Transport", { detail: "fetch failed" }); return {}; } } },
+        session: { create() { assert.fail("Pool preflight cannot create sessions"); }, prompt() { assert.fail("Pool preflight cannot prompt"); } } },
+      async close() { closes++; } };
+  }) as unknown as ConstructorParameters<typeof DiscoveryRuntimes>[0];
+  const pool = new DiscoveryRuntimes(start, 10000), signal = new AbortController().signal;
+  try {
+    const first = await pool.acquire("openai/fixture", "owned", signal); await first.release(true);
+    unhealthy = true;
+    const recovered = await pool.acquire("openai/fixture", "owned", signal);
+    assert.notEqual(recovered.runtime, first.runtime); assert.equal(starts, 2); assert.equal(closes, 1);
+    assert.equal(probes, failure === "process-exit" ? 0 : 1);
+    await recovered.release(true);
+  } finally { await pool.close(); }
+  assert.equal(closes, 2);
+});
+
+test("cancellation during idle health admission does not restart the server or lose shutdown ownership", async () => {
+  let starts = 0, closes = 0;
+  const cancel = new AbortController();
+  const start = (async () => { starts++; return { directory: "fixture", client: { native: { server: { info() {
+    queueMicrotask(() => cancel.abort(new Error("Stop health admission"))); return new Promise(() => {});
+  } } } }, async close() { closes++; } }; }) as unknown as ConstructorParameters<typeof DiscoveryRuntimes>[0];
+  const pool = new DiscoveryRuntimes(start, 10000);
+  const first = await pool.acquire("openai/fixture", "owned", cancel.signal); await first.release(true);
+  await assert.rejects(pool.acquire("openai/fixture", "owned", cancel.signal), /Stop health admission/);
+  await pool.close(); assert.equal(starts, 1); assert.equal(closes, 1);
+});
+
+test("transport diagnostics distinguish pre-prompt failure from unknown prompt acceptance without leaking raw URLs/headers", () => {
+  const error = new ClientError("Transport", { detail: "fetch failed https://private.example/?access_token=secret Authorization: Bearer secret" });
+  const before = discoveryTransportFailure(error, "model catalog", false)!;
+  const after = discoveryTransportFailure(error, "model request", true)!;
+  assert.match(before.message, /No model prompt was sent/); assert.match(after.message, /may have been accepted/);
+  assert.match(after.message, /no automatic model retry/);
+  for (const value of [before, after]) assert.doesNotMatch(value.message, /secret|private\.example|Bearer/);
+  assert.equal(discoveryTransportFailure(new Error("Unrelated failure"), "model request", true), undefined);
+});
+
+test("owned discovery leases reuse startup only, isolate profiles/models/concurrent requests and retire failed work", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let starts = 0, closes = 0;
+  const start = (async () => { starts++; return { directory: "fixture", client: { native: { server: { async info() { return {}; } } } }, async close() { closes++; } }; }) as unknown as ConstructorParameters<typeof DiscoveryRuntimes>[0];
+  const pool = new DiscoveryRuntimes(start, 10000), signal = new AbortController().signal;
+  try {
+    for (let i = 0; i < 11; i++) { const lease = await pool.acquire("openai/fixture", "owned", signal); await lease.release(true); }
+    assert.equal(starts, 1, "Eleven sequential requests need only one owned startup; sessions remain caller-owned");
+    const first = await pool.acquire("openai/fixture", "owned", signal);
+    const concurrent = await pool.acquire("openai/fixture", "owned", signal);
+    assert.notEqual(first.runtime, concurrent.runtime, "Active processes are exclusive");
+    await first.release(true); await concurrent.release(false);
+    const research = await pool.acquire("openai/fixture", "owned", signal, true);
+    assert.notEqual(research.runtime, first.runtime); await research.release(true);
+    const other = await pool.acquire("openai/other", "owned", signal); await other.release(false);
+    const cancelled = new AbortController(), lease = await pool.acquire("openai/fixture", "owned", cancelled.signal);
+    cancelled.abort(); await lease.release(true);
+    assert.equal(closes, 3, "Failure, other model and cancellation retire their own processes");
+    t.mock.timers.tick(10001);
+    await pool.close(); await pool.close();
+    assert.equal(closes, starts);
+    await assert.rejects(pool.acquire("openai/fixture", "owned", signal), /closing/);
+    console.log(JSON.stringify({ fixtureOnly: true, sequentialRequests: 11, ownedStartups: 1, previousStartups: 11 }));
+  } finally { await pool.close(); }
+});
+
+test("owned discovery shutdown waits for startup and startup failures do not trigger fallback/retry", async () => {
+  let finish!: (value: any) => void, closes = 0, starts = 0;
+  const start = (() => { starts++; return new Promise(resolve => { finish = resolve; }); }) as unknown as ConstructorParameters<typeof DiscoveryRuntimes>[0];
+  const pool = new DiscoveryRuntimes(start, 10000), signal = new AbortController().signal;
+  const acquiring = pool.acquire("openai/fixture", "owned", signal);
+  const rejected = assert.rejects(acquiring, /closing/), closing = pool.close();
+  finish({ directory: "fixture", client: {}, async close() { closes++; } });
+  await rejected; await closing; assert.equal(closes, 1); assert.equal(starts, 1);
+  const failing = new DiscoveryRuntimes((async () => { throw new Error("startup failed"); }) as typeof start, 10000);
+  await assert.rejects(failing.acquire("openai/fixture", "owned", signal), /startup failed/);
+  await failing.close();
+});
 
 const assistant = (id = "answer") => ({ id, type: "assistant", agent: "requirements-spike", model: { providerID: "openai", id: "fixture" },
   time: { created: 2, completed: 3 }, content: [{ type: "text", text: '{"summary":"Done"}' }], tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } });

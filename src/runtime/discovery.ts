@@ -1,5 +1,6 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
+import { DiscoveryRuntimes, discoveryTransportFailure, type DiscoveryTransportPhase } from "./discovery-runtime.js";
 import { organizationPrompt } from "../core/organization-check.js";
 import { readinessBlockedSchema, readinessEvidenceSchema, readinessVerdictSchema, readinessReadSchema } from "../core/readiness-stages.js";
 import { submissionDraftSchema, submissionDispatchSchema, submissionLookupInventory } from "../core/submission-stages.js";
@@ -9,7 +10,7 @@ import { definitionBlockedSchema, definitionEvidenceSchema, definitionVerdictSch
 import { definitionChangeResponseSchema, definitionChangeTurnSchema, definitionChangeBatchResponseSchema, definitionChangeEvidenceRequestSchema, definitionChangeJointResponseSchema } from "../core/definition-change-schema.js";
 import { expandChangeCitationAuthority, withChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { analysisSchema, pendingChangesSchema, specificationUpdatesSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
-import { retrievalRequestSchema } from "../core/gap-retrieval.js";
+import { retrievalRequestSchema, expandedEvidence } from "../core/gap-retrieval.js";
 import { searchEvidenceSchema } from "../core/gap-navigation.js";
 import { epicReviewBlockedSchema, guardrailVerdictSchema } from "../core/epic-review-types.js";
 import { refinementCandidates } from "../core/refinement.js";
@@ -49,7 +50,10 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       return { response: JSON.parse(saved.text) as unknown, promptKey: saved.promptKey, messageKey: saved.messageKey };
     } finally { await runtime.close(); }
   }
-  constructor(private readonly workspace: string, private readonly runtime: typeof startRuntime = startRuntime) {}
+  private readonly runtimes: DiscoveryRuntimes;
+  constructor(private readonly workspace: string, private readonly runtime: typeof startRuntime = startRuntime,
+    idleMs = runtime === startRuntime ? 10000 : 0) { this.runtimes = new DiscoveryRuntimes(runtime, idleMs); }
+  close() { return this.runtimes.close(); }
 
   clarify(project: Project, request: QuestionHelpRequest, options: Parameters<DiscoveryAdapter["analyze"]>[1]): Promise<unknown> {
     if (options.context.manifest.answerGroupStage) throw new Error("Shared answers cannot use a question-help profile.");
@@ -70,7 +74,11 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
   private async generate(project: Project, options: Parameters<DiscoveryAdapter["analyze"]>[1], prompt: string): Promise<unknown> {
     if (options.context.manifest.organizationCheck && (options.scan || options.research)) throw new Error("Organization checks cannot use scan or research profiles.");
     options.onProgress("Connecting to your selected AI…");
-    const runtime = await this.runtime(`${project.model.providerID}/${project.model.modelID}`, this.workspace, options.signal, options.research);
+    const lease = await this.runtimes.acquire(`${project.model.providerID}/${project.model.modelID}`, this.workspace, options.signal, options.research)
+      .catch(error => { throw options.signal.aborted ? error : discoveryTransportFailure(error, "server startup", false) ?? error; });
+    const runtime = lease.runtime;
+    let healthy = false;
+    let phase: DiscoveryTransportPhase = "model catalog", promptStarted = false;
     let sessionID: string | undefined;
     let remoteAbort: Promise<unknown> | undefined;
     const streamController = new AbortController();
@@ -93,6 +101,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       if (!catalog) throw new Error("OpenCode returned no provider catalog.");
       const model = selectModel(catalog, project.model.providerID, project.model.modelID);
       if(needsJointInputAdmission(options.context)){
+        phase = "input-capacity check";
         // Fresh metadata only, before session creation or prompt dispatch. Never
         // persist model/provider settings or credentials in capacity evidence.
         const models=await runtime.client.native.model.list({location:{directory:runtime.directory}},{signal:options.signal});
@@ -100,6 +109,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
         assertJointInputAdmission(project,options.context,prompt,models.data);
       }
       options.onProgress("Preparing the project review…");
+      phase = "session creation";
       const session = (await runtime.client.session.create({
         title: "Reqwizit discovery", permission: [{ permission: "*", pattern: "*", action: "deny" },
           ...(options.research ? ["websearch", "webfetch"].map((permission) => ({ permission, pattern: "*", action: "allow" as const })) : [])],
@@ -107,6 +117,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       if (!session) throw new Error("OpenCode returned no discovery session.");
       sessionID = session.id;
       options.onSession(sessionID);
+      phase = "progress connection";
       const subscription = await runtime.client.event.subscribe({}, { signal: streamController.signal });
       let lastProgress = 0;
       streaming = (async () => {
@@ -139,6 +150,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       // Opt-in research permits only search/fetch. Coding and filesystem tools stay disabled.
       const registry = runtimeToolNames; // App-owned restriction list, not a runtime registry claim.
       options.onProgress("Request sent to the selected model; awaiting its response…");
+      phase = "model request"; promptStarted = true;
       const response = (await runtime.client.session.prompt({
         sessionID, model, agent: "requirements-spike", tools: Object.fromEntries(registry.map((id) => [id, options.research && ["websearch", "webfetch"].includes(id)])),
         parts: [{ type: "text", text: prompt }],
@@ -152,22 +164,25 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       if (response.info.modelID !== model.modelID || response.info.providerID !== model.providerID) {
         throw new Error("Runtime returned a different provider/model; output was not applied.");
       }
+      phase = "research evidence";
       const allParts = options.research ? (await runtime.client.session.messages({ sessionID }, { signal: options.signal })).data?.flatMap((message) => message.parts) ?? [] : response.parts;
       const tools = allParts.filter((part) => part.type === "tool");
       if (new Set(tools.map((part) => part.id)).size > 4 || tools.some((part) => !options.research || !["websearch", "webfetch"].includes(part.tool))) throw new Error("Unexpected tool activity or research budget exceeded; discovery output was not applied.");
       options.onResearch(retrievedEvidence(allParts));
       const text = response.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
-      try { return JSON.parse(text) as unknown; } catch { throw new Error("Discovery response was not JSON. No proposals were applied."); }
+      let output: unknown;
+      try { output = JSON.parse(text); } catch { throw new Error("Discovery response was not JSON. No proposals were applied."); }
+      options.signal.throwIfAborted(); healthy = true; return output;
     } catch (error) {
       if (budgetExceeded) throw new Error("Research exceeded its tool budget or attempted a disallowed tool. The round was stopped without applying proposals.");
-      throw error;
+      throw options.signal.aborted ? error : discoveryTransportFailure(error, phase, promptStarted) ?? error;
     } finally {
       options.signal.removeEventListener("abort", cancel);
       options.signal.removeEventListener("abort", abortRequest);
       await remoteAbort;
       streamController.abort();
       await streaming;
-      await runtime.close();
+      await lease.release(healthy);
     }
   }
 }
@@ -310,7 +325,14 @@ Working evidence batch: ${JSON.stringify(context.data)}`;
     const eligible = explicit.length ? specificationUpdateTargets(project, stage.phase === "check" ? [...available] : manifest.includedIDs, [...available], targeted ? targets : undefined) : [];
     const updateOptions = analysisSchema.shape.specificationUpdates.unwrap().shape.changes.element.options;
     const authorization = { sourceIDs: z.array(z.enum((explicit.length ? explicit : ["unavailable"]) as [string, ...string[]])).min(1) };
+    const prior = expandedEvidence(context.data).draft as { requirements?: { sourceIDs: string[] }[] } | undefined;
+    const retained = new Set(prior?.requirements?.flatMap(r => r.sourceIDs) ?? []);
+    const requirementSources = requirementEvidenceIDs(project).filter(id => detailed.has(id) || retained.has(id));
     const draft = submissionDraftSchema.extend({
+      requirements: requirementSources.length ? z.array(submissionDraftSchema.shape.requirements.element.extend({
+        sourceIDs: z.array(z.enum(requirementSources as [string, ...string[]])).min(1)
+          .refine(ids => new Set(ids).size === ids.length, "Cite each eligible source once."),
+      })).max(10) : z.tuple([]),
       ...(targeted ? { requirements: z.tuple([]), retireQuestions: z.tuple([]) } : {}),
       specificationUpdates: explicit.length ? analysisSchema.shape.specificationUpdates.unwrap().extend({
         changes: z.array(z.discriminatedUnion("type", [updateOptions[0].extend(authorization), updateOptions[1].extend(authorization)])).max(10),
@@ -322,6 +344,7 @@ Working evidence batch: ${JSON.stringify(context.data)}`;
 ${plainLanguagePolicy}
 ${requirementWritingPolicy}
 Original human input is already saved; never apply it again. Follow only the submission in the working context. goals, actors and assumptions MUST be []; organization, assessments and researchFindings MUST be absent or []; scopeAssessment and resolutionCheck MUST be omitted. Never emit pair resolutions, feature archival, global interpretation or broader changes. Do not copy forbidden fields from ordinary discovery outputs.
+NEW REQUIREMENT CITATIONS: requirements[].sourceIDs accepts eligible original SOURCE IDs only, as listed by its schema. Question, requirement, research and new: IDs are never source IDs, even when detailed. Never substitute a question for its human answer, or guess supporting citations. Already retained citations may be copied with an unchanged action; a NEW/CHANGED action still requires its exact source bodies detailed in THIS request. Load missing sources first or return a blocker.
 DECLARATION IDS: Omit localID on new questions/requirements unless another action in this draft references them. When needed, use a nonempty new: alias such as new:q-offline or new:req-offline, unique across BOTH questions and requirements in the complete draft. Never use an existing record ID, an epic ID, an empty string, or the bare new: prefix as localID. Existing records are edited through their exact target IDs, not redeclared as new records. Preserve aliases on unchanged prior actions and do not reuse them for different declarations. JSON schema patterns enforce the prefix; you must also enforce cross-array uniqueness.
 Human-input authority: concrete input source IDs ${JSON.stringify(explicit)}. Existing eligible exact IDs: ${JSON.stringify(eligible)}. Target boundaries: ${targeted ? JSON.stringify([...targets]) : "The concrete unscoped answer retains its original broad authority, not automatic authority to change unrelated behavior."} Review response source IDs: ${JSON.stringify(reviews.map((s) => s.id))}. For concrete explicit replacement intent, use specificationUpdates revise with the existing accepted/needs-review requirement ID, statement, rationale, acceptance, current input sourceIDs and reason. Preserve stable IDs and all other supported rules. activate uses an existing revised unapproved target or a declared new: requirement alias. Never create a duplicate to bypass a restriction. pendingChanges only revise unapproved items, not accepted rules. Review addenda alone do not authorize automatic specification changes; respond to each saved review and preserve its exact scope. Use a refinement or focused question if a real decision remains unresolved. Never choose precedence between conflicting human choices without explicit replacement intent.
 STAGED UPDATE PERMISSIONS (staged-target-evidence-v1): Eligible IDs are candidate targets, not proof that support is loaded. Before NEW/CHANGED specificationUpdates on an existing target, load every missing original sourceID with submissionEvidence. Detailed targets with missing support: ${JSON.stringify(missingSupport)}. Missing support is an evidence-loading task, not a missing human decision or absent revision permission. Pending replacements and actual conflicts still require review.

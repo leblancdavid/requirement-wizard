@@ -1,4 +1,4 @@
-import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { pausedClarification, processableSavedResponses, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
@@ -7,6 +7,8 @@ import type { Job, Project, Submission } from "../core/model.js";
 import type { DefinitionCombinationApplyResult } from "../core/definition-combination-apply.js";
 import { captureAnswerScope } from "../core/input-scope.js";
 import type { coverage } from "../core/coverage.js";
+import type { ExplorationProgress } from "../core/exploration.js";
+import { ExplorationProgressPanel } from "./exploration-progress.js";
 import { dimensionLabels } from "../core/epics.js";
 import { OrganizationPreview } from "./organization-preview.js";
 import { organizationSize, organizationReviewCurrent } from "../core/organization-check.js";
@@ -61,10 +63,10 @@ import { AppMenu } from "./app-menu.js";
 import { DesktopTitleBar } from "./desktop-titlebar.js";
 import { Logs } from "./logs.js";
 import { automaticInputPermission, type ProcessingPolicy } from "../core/processing-policy.js";
-import { closeLogs, LogLink, LogProject, openLogs, recordLog } from "./log-access.js";
+import { closeLogs, LogLink, LogProject, openLogs, recordLog, useLogs } from "./log-access.js";
 import { additionalReview, ProjectReviewPermission } from "./project-review-permission.js";
 
-type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; processingPolicy?: ProcessingPolicy; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
+type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; exploration?: ExplorationProgress; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; processingPolicy?: ProcessingPolicy; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string; fingerprint?: string };
 // Carry pre-rename browser preferences forward once, without replacing newer values.
@@ -111,9 +113,15 @@ function App() {
   const refresh = useRef(new SnapshotRefresh<Snapshot>());
   const [creating, setCreating] = useState(false);
   const [opening, setOpening] = useState(false);
-  const [tab, setWorkspaceTab] = useState<"discover" | "review" | "implementation" | "research" | "history">("discover");
+  const [tab, setWorkspaceTab] = useState<"discover" | "review" | "implementation" | "research" | "history" | "progress">("discover");
+  const logState = useLogs();
+  const logsReturn = useRef<{ settings: boolean; focus: HTMLElement | null; scroll: number } | null>(null);
   // Existing recovery links now lead to the single specification workspace.
-  const setTab = (next: "discover" | "review" | "implementation" | "requirements" | "research" | "history") => setWorkspaceTab(next === "requirements" ? "review" : next);
+  const setTab = (next: "discover" | "review" | "implementation" | "requirements" | "research" | "history" | "progress" | "logs") => {
+    if (next === "logs") { openLogs(); return; }
+    closeLogs();
+    setWorkspaceTab(next === "requirements" ? "review" : next);
+  };
   const [queueRequest, setQueueRequest] = useState<{ projectID: string; value: number }>();
   const [epicID, setEpicID] = useState("all");
   const [error, setError] = useState("");
@@ -162,6 +170,12 @@ function App() {
     if (window.history.state?.reqwizitSettings) window.history.back();
     else navigate("workspace", true);
   }
+  useLayoutEffect(() => {
+    if (!logState.open) { logsReturn.current = null; return; }
+    logsReturn.current ??= { settings: showSettings, focus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      scroll: document.querySelector(".tab-content")?.scrollTop ?? 0 };
+    navigate("workspace"); setIssue(undefined);
+  }, [logState.open, logState.request]);
   const [questionFilter, setQuestionFilter] = useState<"open" | "answered" | "later" | "submitted" | "attention">("open");
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [issue, setIssue] = useState<{ projectID: string; submissionID?: string; requirementID?: string; historyOnly?: boolean }>();
@@ -630,9 +644,16 @@ function App() {
       await api(`projects/${project.id}/${lastJob?.kind === "definition-scope-review" ? "definition-scope-stop" : "cancel"}`, lastJob?.kind === "definition-scope-review" ? { jobID: lastJob.id } : {});
     }, "Pausing project review…")} /> : null;
 
-  return <LogProject.Provider value={creating ? undefined : project?.id}><ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
-    <DesktopTitleBar />
-    <Logs request={api} project={creating ? undefined : project} jobs={creating ? [] : [...(data?.jobs ?? []), ...(data?.helpJobs ?? [])]} submissions={creating ? [] : data?.submissions} execution={creating ? undefined : data?.execution} progress={pending ? [actionLabel, ...(data?.progress ?? [])] : data?.progress} workflowMessage={data?.workflow?.message} workspaceDiagnostic={data?.workspace?.diagnostic ?? undefined} exportDiagnostics={project && !creating ? (jobIDs) => api(`projects/${project.id}/discovery-diagnostics`, { jobIDs }) : undefined}
+  const logsPanel = <Logs active={!showSettings && logState.open} back={() => {
+    const previous = logsReturn.current;
+    if (previous?.settings) navigate("settings");
+    closeLogs(); window.requestAnimationFrame(() => {
+      const scroller = document.querySelector(".tab-content"); if (scroller && previous) scroller.scrollTop = previous.scroll;
+      const target = previous?.focus?.isConnected && previous.focus.getClientRects().length ? previous.focus
+        : document.querySelector<HTMLElement>('.main-tabs [aria-selected="true"]') ?? document.querySelector<HTMLElement>(".app-menu-toggle");
+      target?.focus({ preventScroll: true });
+    });
+  }} request={api} project={creating ? undefined : project} jobs={creating ? [] : [...(data?.jobs ?? []), ...(data?.helpJobs ?? [])]} submissions={creating ? [] : data?.submissions} execution={creating ? undefined : data?.execution} progress={pending ? [actionLabel, ...(data?.progress ?? [])] : data?.progress} workflowMessage={data?.workflow?.message} workspaceDiagnostic={data?.workspace?.diagnostic ?? undefined} exportDiagnostics={project && !creating ? (jobIDs) => api(`projects/${project.id}/discovery-diagnostics`, { jobIDs }) : undefined}
       technicalControls={project && data && !creating ? <>{processingControls(true)}
         <ProcessingPreferences policy={data.processingPolicy} configurePolicy={async change => { let saved = false; await act(async () => { await api(`projects/${project.id}/processing-policy`, { revision: project.revision, ...change }); saved = true; }); return saved; }} workflow={data.workflow} maintenance={data.maintenance} auto={auto} setAuto={setAuto} disabled={busy || connectionChanged || needsInitialization} pending={pending} configureWorkflow={configureWorkflow} configureMaintenance={configureMaintenance} openQueue={openProcessingQueue} />
         {data.workflow && <LegacyWorkflowControls workflow={data.workflow} disabled={busy || connectionChanged || needsInitialization} pending={pending} configure={configureWorkflow} openDecision={openWorkflowDecision} />}
@@ -642,7 +663,9 @@ function App() {
         <details><summary>Saved review history and recovery</summary><p>Inspect or archive earlier unsuccessful attempts. This does not answer questions or apply requirement decisions.</p><PagedList items={attentionGroups(project, data.submissions).filter(group => group.latest.input.type === "review")} itemID={group => group.id} label="Review history tools">{group => <article><strong>{group.latest.input.type === "review" ? group.latest.input.requirementText : "Saved review"}</strong><button className="secondary" onClick={() => { closeLogs(); setIssue({ projectID: project.id, submissionID: group.latest.id, historyOnly: true }); }}>Inspect saved review attempts</button></article>}</PagedList></details>
         <label>Question discovery target<input aria-label="Questions ready" type="number" min={1} max={50} value={questionTarget} disabled={busy} onChange={event => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= 1 && value <= 50) { setQuestionTarget(value); localStorage.setItem(`reqwizit-question-target:${project.id}`, String(value)); } }} /></label>
         <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={protectedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />
-      </> : undefined} />
+      </> : undefined} />;
+  return <LogProject.Provider value={creating ? undefined : project?.id}><ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
+    <DesktopTitleBar />
     {issue && issue.projectID === project?.id && data && <IssueDialog key={project.id} close={() => setIssue(undefined)}>
       <p>{issue.historyOnly ? "Saved history and recovery only. Archiving retains original notes; it does not approve requirements or resolve product choices." : "Current saved information · Actions use the same checks as Review. Closing returns you to your previous view."}</p>
       {error && <DiagnosticNotice detail={error} alert />}
@@ -666,13 +689,28 @@ function App() {
     </IssueDialog>}
     <main>
       <header className="topbar"><div className="app-header-leading"><AppMenu projects={projects} activeID={id}
-        newProject={() => { setOpening(false); setCreating(true); navigate("workspace"); }}
-        openProject={() => { setOpening(true); setCreating(true); setInitializeFolder(false); setCreateDirectory(false); navigate("workspace"); }}
-        selectProject={(projectID) => { setID(projectID); setCreating(false); navigate("workspace"); }}
+        newProject={() => { setTab("discover"); setOpening(false); setCreating(true); navigate("workspace"); }}
+        openProject={() => { setTab("discover"); setOpening(true); setCreating(true); setInitializeFolder(false); setCreateDirectory(false); navigate("workspace"); }}
+        selectProject={(projectID) => { setTab("discover"); setID(projectID); setCreating(false); navigate("workspace"); }}
         settings={() => navigate("settings")} logs={() => openLogs()} reportError={setError} />
         <div className="app-header-title"><div className="app-header-title-row"><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><HeaderActivity /></div><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div></div>
         {processingControls()}
-        {project && summary && data && !creating && <ProjectProgress hideTrigger={showSettings} key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} jobs={data.jobs} disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason || (connectionChanged ? "Save your connection and model selection first." : undefined)}
+        {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Specification"], ["implementation", "Implement"], ["progress", `Progress (${mapProgress!.percent}%)`], ["history", "Activity & logs"] ] as const).map(([key, label]) => {
+          const active = logState.open ? key === "history" : tab === key || key === "history" && tab === "research";
+          return <button key={key} role="tab" aria-selected={active} className={active ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span title="Questions and reviews needing attention">{designItems.size}</span>}{key === "review" && <span title="Requirements and conflicts needing a decision">{specificationAttention}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>;
+        })}</div>}
+      </header>
+      <div className="tab-content">
+      <div className="workspace-content">
+      {!showSettings && (tab === "history" || tab === "research" || logState.open) && <div className="activity-workspace">
+        <h2>Activity &amp; logs</h2><p>Project history and troubleshooting in one place.</p>
+        <div className="tabs activity-tabs" role="tablist" aria-label="Activity & logs views">
+          <button role="tab" aria-selected={!logState.open} className={!logState.open ? "active" : ""} disabled={!project || creating} onClick={() => setTab("history")}>Activity</button>
+          <button role="tab" aria-selected={logState.open} className={logState.open ? "active" : ""} onClick={() => setTab("logs")}>Logs</button>
+        </div>
+      </div>}
+      {logsPanel}
+      {project && summary && data && !creating && <ProjectProgress visible={!showSettings && !logState.open && tab === "progress"} key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} jobs={data.jobs} disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason || (connectionChanged ? "Save your connection and model selection first." : undefined)}
            inspectDefinitionImpact={(epicID, revision) => api(`projects/${project.id}/definition-impact`, { revision, epicID })}
            definitionScope={{ start: (request) => api(`projects/${project.id}/definition-scope-start`, { request, confirmAIUsage: true }),
              inspect: (query) => api(`projects/${project.id}/definition-scope-status`, query), stop: (jobID) => api(`projects/${project.id}/definition-scope-stop`, { jobID }) }}
@@ -697,16 +735,17 @@ function App() {
               publication: { preview: (query) => api(`projects/${project.id}/definition-combination-apply-preview`, query),
                 apply: async (query) => { const result = await api<DefinitionCombinationApplyResult>(`projects/${project.id}/definition-combination-apply`, query); await load(); return result; } } } }}
           assessmentHistory={{ preview: (epicID, beforeRevision) => api(`projects/${project.id}/assessment-recovery?${new URLSearchParams({ epicID, ...(beforeRevision === undefined ? {} : { beforeRevision: String(beforeRevision) }) })}`), restore: async (revision, selection) => { await api(`projects/${project.id}/restore-assessment`, { revision, ...selection }); await load(); } }}
-          refreshDefinition={(focusEpicID, additionalRequests) => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision, ...(focusEpicID ? { focusEpicID } : {}), ...(additionalRequests?.length ? { additionalRequests, confirmAdditionalRequests: true } : {}) }); }, "Refreshing definition coverage…")} />}
-        {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Specification"], ["implementation", "Implement"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span title="Questions and reviews needing attention">{designItems.size}</span>}{key === "review" && <span title="Requirements and conflicts needing a decision">{specificationAttention}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>}
-      </header>
-      <div className="tab-content">
-      <div className="workspace-content">
+           refreshDefinition={(focusEpicID, additionalRequests) => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision, ...(focusEpicID ? { focusEpicID } : {}), ...(additionalRequests?.length ? { additionalRequests, confirmAdditionalRequests: true } : {}) }); }, "Refreshing definition coverage…")} >
+        {data.exploration && <ExplorationProgressPanel key={project.id} project={project} progress={data.exploration}
+          disabled={busy || connectionChanged || needsInitialization} revisit={jobID => void act(async () => {
+            await api(`projects/${project.id}/revisit-exploration`, { revision: project.revision, jobID, confirmAIUsage: true });
+          }, "Exploring this scope again…")} />}
+      </ProjectProgress>}
       {!showSettings && !creating && project && data && tab !== "review" && <SharedConflictNotice conflicts={currentSharedConflicts(project, data.jobs, data.submissions)} open={openIssue} />}
       {pending && <ActivityFeedback label="Working on your project…" />}
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
-      {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
+      {(showSettings || logState.open && logsReturn.current?.settings) && <section hidden={!showSettings} id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
         {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}>
           {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !providerID || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
@@ -718,7 +757,7 @@ function App() {
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
         {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={busy} run={act} />}
       </section>}
-      <div hidden={showSettings}>
+      <div hidden={showSettings || logState.open}>
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
       {(creating || projectsLoaded && !id && !project && !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
@@ -752,7 +791,7 @@ function App() {
           })}
           {reviewPermission && tab === (reviewPermission.item.input.type === "review" ? "review" : "discover") && <ProjectReviewPermission key={`${project.id}:${reviewPermission.job.id}`} {...reviewPermission} disabled={busy || connectionChanged} allow={extendSavedResponse} />}
           {tab === "review" && project.organizationReviews.filter(item => item.status === "pending").map(review => <section key={review.id} className="save-notice" aria-label="Feature organization decision"><h3>Review the suggested feature organization</h3><p>{review.reason}</p><OrganizationPreview project={project} operations={review.operations} /><div className="button-row"><button className="primary" disabled={busy || !organizationReviewCurrent(project, review)} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: true }))}>Use suggested organization</button><button className="secondary" disabled={busy} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: false }))}>Keep current</button></div>{!organizationReviewCurrent(project, review) && <p>This suggestion predates newer feature information. Keep the current organization, then check again for a fresh suggestion.</p>}</section>)}
-           {tab !== "discover" && <div className="work-heading"><div><h2>{tab === "review" ? "Your specification, kept current" : tab === "implementation" ? "Build one requirement at a time" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div></div>}
+           {tab !== "discover" && tab !== "progress" && <div className="work-heading"><div><h2>{tab === "review" ? "Your specification, kept current" : tab === "implementation" ? "Build one requirement at a time" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div></div>}
             {lastJob && tab === "discover" && <GapContinuation key={lastJob.id} job={lastJob} available={!!lastJob.gapContinuationAvailable} disabled={busy || connectionChanged || needsInitialization}
               continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} />}
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
@@ -789,7 +828,7 @@ function App() {
             </>}
               <div hidden={tab !== "review"}><SpecificationChanges project={project} inspect={() => setTab("review")} />{renderReview()}</div>
              {tab === "review" && <details className="project-overview"><summary>Organize features</summary>
-              <p>Manage feature names, purposes and requirement placement. Read and review requirements in the specification above; progress estimates are in Overall progress.</p>
+              <p>Manage feature names, purposes and requirement placement. Read and review requirements in the specification above; progress estimates are in Progress.</p>
               <details className="project-overview"><summary>Project overview</summary><p>{project.summary || "Your answers will help clarify the project scope."}</p>{project.analysisRevision !== project.revision && <small>New information has been saved since this overview was generated.</small>}</details>
               <button className="secondary" onClick={() => setNewEpic(!newEpic)}>{newEpic ? "Cancel" : "+ Add feature"}</button>
               {newEpic && <EpicForm disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { title, purpose }); setNewEpic(false); })} />}
@@ -822,7 +861,7 @@ function App() {
       </div>
       </div>
       </div>
-      {!showSettings && !creating && project && summary && data && (tab === "discover" || tab === "review") && <footer className="design-footer" role="contentinfo" aria-label={tab === "discover" ? "Discovery controls" : "Refinement controls"}>
+      {!showSettings && !logState.open && !creating && project && summary && data && (tab === "discover" || tab === "review") && <footer className="design-footer" role="contentinfo" aria-label={tab === "discover" ? "Discovery controls" : "Refinement controls"}>
         <div className="design-footer-inner gap-controls">
           <label className="area-filter">Epic<select aria-label={tab === "discover" ? "Filter by feature" : "Refinement scope"} value={epicID} onChange={event => setEpicID(event.target.value)}><option value="all">All epics</option>{epics.map(epic => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label>
           {tab === "discover" && <label className="area-filter" title="Soft target for Discover and the next Continue specification action. Discover respects the selected epic. Coordinated collection covers all epics, up to 64 requests/four work windows; Find more grants only one additional window. Selecting a target starts no work. Blockers may yield fewer questions.">Questions<select aria-label="Question batch target" value={questionTarget} disabled={busy} onChange={event => {
@@ -835,7 +874,7 @@ function App() {
             onClick={() => configureWorkflow("collect-more")}>Find more before processing answers</ActionButton>}
         </div>
       </footer>}
-      {!showSettings && !creating && project && summary && data && tab === "implementation" && <footer className="design-footer" role="contentinfo" aria-label="Planning and implementation controls"><div className="design-footer-inner gap-controls" ref={setImplementationFooter} /></footer>}
+      {!showSettings && !logState.open && !creating && project && summary && data && tab === "implementation" && <footer className="design-footer" role="contentinfo" aria-label="Planning and implementation controls"><div className="design-footer-inner gap-controls" ref={setImplementationFooter} /></footer>}
     </main>
   </div></ActionScope></LogProject.Provider>;
 }

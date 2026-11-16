@@ -1,8 +1,13 @@
-.progress-trigger { text-align: left; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; background: var(--surface); }
-.progress-trigger:hover { background: var(--soft); border-color: var(--accent); }
-.topbar .progress-trigger { min-width: 0; min-height: 5.5rem; border-radius: 8px; padding: 8px 12px; }
-.topbar .header-progress-label strong { font-size: 1.429rem; line-height: 1.2; }
-.topbar .progress-trigger > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-panel { min-width: 0; padding: 20px 0; }
+.progress-overview h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.progress-overview h2 strong { font-variant-numeric: tabular-nums; color: var(--accent); }
+.progress-overview > .meter { margin: 12px 0; }
+.progress-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.progress-stages .progress-stage { min-width: 0; overflow-wrap: anywhere; }
+.progress-stages > details[open] { grid-column: 1 / -1; }
+.progress-indicators { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.progress-indicators > section { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .progress-stages, .progress-indicators { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .progress-dialog p, .progress-dialog small { color: var(--muted); }
 .progress-stage { margin: 12px 0; border: 1px solid var(--border); border-radius: 9px; padding: 14px; }
 .progress-stage > summary { display: flex; align-items: center; gap: 12px; list-style: none; min-height: 44px; }

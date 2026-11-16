@@ -36,7 +36,7 @@ try {
   });
   await page.getByRole("button", { name: "Application menu", exact: true }).click();
   await page.getByRole("button", { name: "Logs", exact: true }).click();
-  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const logs = page.getByRole("region", { name: "Logs", exact: true });
   const failure = logs.locator(".log-record").filter({ hasText: failed.id });
   await failure.getByText("Log details", { exact: true }).click();
   await failure.getByRole("button", { name: "Copy details", exact: true }).click();
@@ -48,7 +48,7 @@ try {
   assert.equal(await page.evaluate(async () => {
     try { await window.reqwizitDesktop!.copyText("x".repeat(4_000_001)); return false; } catch { return true; }
   }), true);
-  await page.keyboard.press("Escape");
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
   assert.equal(await page.evaluate(() => typeof (window as unknown as { process?: unknown }).process), "undefined");
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/reqwizit.svg");
   assert.equal((await page.request.get(new URL("/reqwizit.svg", page.url()).href)).status(), 200);

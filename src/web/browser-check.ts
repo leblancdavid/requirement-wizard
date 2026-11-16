@@ -454,8 +454,8 @@ try {
   const connectionDetails = connectionPanel.getByRole("button", { name: "View logs", exact: true });
   await connectionDetails.focus();
   await connectionDetails.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Logs", exact: true })).toContainText("could not complete");
-  await page.keyboard.press("Escape");
+  await expect(page.getByRole("region", { name: "Logs", exact: true })).toContainText("could not complete");
+  await page.getByRole("region", { name: "Logs", exact: true }).getByRole("button", { name: "Back to workspace", exact: true }).click();
   await expect(connectionDetails).toBeFocused();
   blockTest = false;
   await connectionPanel.getByRole("button", { name: "Test connection", exact: true }).click();
@@ -500,20 +500,19 @@ try {
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
   await page.unroute("**/api/projects", holdCreate);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const headerProgress = page.locator(".topbar .header-progress");
-  await expect(headerProgress).toContainText("Overall progress");
-  await expect(headerProgress).toContainText("View breakdown");
-  const projectCoverage = await headerProgress.getByRole("meter", { name: "Overall progress" }).getAttribute("aria-valuenow");
-  await expect(headerProgress.locator("strong")).toHaveText(`${projectCoverage}%`);
+  const headerProgress = page.getByRole("tab", { name: /^Progress \(\d+%\)$/ });
+  await expect(page.locator(".topbar .header-progress")).toHaveCount(0);
   await headerProgress.click();
-  const progressDialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const progressDialog = page.getByRole("region", { name: "Project progress", exact: true });
+  const projectCoverage = await progressDialog.getByRole("meter", { name: "Overall progress", exact: true }).getAttribute("aria-valuenow");
+  await expect(headerProgress).toHaveText(`Progress (${projectCoverage}%)`);
   await expect(progressDialog).toBeVisible();
    await expect(progressDialog.locator(".progress-stage")).toHaveCount(7);
    await expect(progressDialog.getByText("Inspect original finding sources", { exact: true })).toHaveCount(0);
    await expect(progressDialog.getByText("Inspect changes since a definition review", { exact: true })).toHaveCount(0);
    await expect(progressDialog.getByText("Recover missing saved assessments", { exact: true })).toHaveCount(0);
   await expect(progressDialog.getByRole("region", { name: "Definition assessment refresh", exact: true })).toBeVisible();
-  await expect(progressDialog.getByRole("region", { name: "Discovery review status", exact: true })).toBeVisible();
+  await expect(progressDialog.getByText("Last discovery review", { exact: true })).toBeVisible();
   await expect(progressDialog.getByRole("region", { name: "Questions answered", exact: true })).toContainText("0 / 3 (0%)");
   await expect(progressDialog.getByRole("region", { name: "Local implementation", exact: true })).toBeVisible();
   for (const stage of ["Definition coverage", "Specification decisions", "Verified delivery to main"]) {
@@ -531,16 +530,15 @@ try {
   await permissionCheck.locator(":scope > summary").click();
   await expect(permissionCheck).toContainText("Choose who can use the first release.");
   await expect(permissionCheck.locator(".evidence")).toContainText("Who will use the first release?");
-  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(progressDialog).toHaveCount(0);
-  await expect(headerProgress).toBeFocused();
   await page.setViewportSize({ width: 390, height: 700 });
   await headerProgress.click();
   await expect(progressDialog).toBeVisible();
   await progressDialog.locator(".progress-stage summary").first().click();
   assert.equal(await progressDialog.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Progress breakdown fits mobile width");
   await page.screenshot({ path: resolve(".reqwizit-state/project-progress-mobile.png") });
-  await page.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(progressDialog).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1000 });
   assert.equal(store.list().length, 1);
@@ -581,7 +579,7 @@ try {
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
   await expect(page.locator(".question-card.expanded")).toHaveCount(1);
   await page.getByLabel("Filter by feature").selectOption({ label: "Job tracking" });
-  await expect(headerProgress.getByRole("meter")).toHaveAttribute("aria-valuenow", projectCoverage!);
+  await expect(headerProgress).toHaveText(`Progress (${projectCoverage}%)`);
   const card = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) });
   await expect(card.locator(".question-meta")).toContainText("Job tracking");
   await expect(card.locator(".question-meta")).toContainText("Permissions");
@@ -752,9 +750,9 @@ try {
   await expandReviewEpics();
   await expect(recoveryReview.getByRole("region", { name: "Current review recovery" })).toContainText("earlier blocker is no longer active");
   await recoveryReview.getByRole("button", { name: "View logs", exact: true }).last().click();
-  const reviewLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const reviewLogs = page.getByRole("region", { name: "Logs", exact: true });
   await expect(reviewLogs).toContainText("pending human input");
-  await reviewLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+  await reviewLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await recoveryReview.getByRole("button", { name: "Review current requirement with saved note" }).click();
   await expect(recoveryReview.getByLabel("Anything to add? (optional)")).toHaveValue("Saving jobs is essential.");
   assert.equal(store.get(safetyProjectID).requirements[0]!.status, "proposed", "Opening recovery must not apply the retained review");
@@ -767,9 +765,8 @@ try {
   await expect.poll(() => store.get(safetyProjectID).requirements[0]!.status).toBe("accepted");
   await expect.poll(() => store.submissions(safetyProjectID).some((s) => s.input.type === "review" && s.status === "completed")).toBe(true);
   await headerProgress.click();
-  const deliveryProgress = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const deliveryProgress = page.getByRole("region", { name: "Project progress", exact: true });
   await expect(deliveryProgress).toContainText("0 / 1 delivered to main");
-  await deliveryProgress.getByRole("button", { name: "Close progress", exact: true }).click();
   await page.getByRole("tab", { name: /^Implement/ }).click();
   await page.getByText("Manual implementation records", { exact: true }).click();
   await page.locator(".implementation-progress > summary").click();
@@ -783,7 +780,7 @@ try {
   await expect.poll(async () => JSON.parse(await readFile(progressFile, "utf8")).implementation[0].status).toBe("verified");
   await headerProgress.click();
   await expect(deliveryProgress).toContainText("0 / 1 delivered to main");
-  await deliveryProgress.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Implement/ }).click();
   await page.getByText("Manual implementation records", { exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Manual implementation records must fit mobile width");
@@ -938,9 +935,9 @@ try {
   const workspaceConflict = page.getByRole("region", { name: "Project workspace", exact: true });
   await expect(workspaceConflict).toContainText("Neither version will be overwritten automatically");
   await workspaceConflict.getByRole("button", { name: "View logs", exact: true }).click();
-  const workspaceLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const workspaceLogs = page.getByRole("region", { name: "Logs", exact: true });
   await expect(workspaceLogs).toContainText("changed outside the app");
-  await workspaceLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+  await workspaceLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await writeFile(requirementsFile, generatedRequirements);
   await page.getByRole("button", { name: "Retry sync", exact: true }).click();
   await expect(page.getByRole("region", { name: "Project workspace", exact: true })).toContainText("Saved");
@@ -1000,13 +997,10 @@ try {
     const processingBounds = await page.locator(".queue-header").boundingBox();
     const progressBounds = await headerProgress.boundingBox();
     assert.ok(processingBounds && progressBounds);
-    assert.ok(Math.abs(processingBounds.height - progressBounds.height) < 2, "Processing and progress panels have matching heights");
     if (width > 1100) {
-      assert.ok(Math.abs(processingBounds.y - progressBounds.y) < 2, "Status panels align vertically on desktop");
-      assert.ok((await header.boundingBox())!.height < 150, "Active desktop header stays compact");
-    } else {
-      assert.ok(processingBounds.y >= progressBounds.y + progressBounds.height, "Processing moves below identity and progress on narrower screens");
+       assert.ok((await header.boundingBox())!.height < 150, "Active desktop header stays compact");
     }
+    assert.ok(progressBounds.y >= processingBounds.y + processingBounds.height, "Progress is a tab below the header controls");
     await expect(headerStatus.locator("small")).toHaveCount(0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Compact header fits the viewport");
     const content = page.locator(".tab-content");
@@ -1046,15 +1040,14 @@ try {
     const headerInk = await header.evaluate((element) => getComputedStyle(element).color);
     const surfaceHex = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--surface").trim());
     const surfaceColor = `rgb(${[1, 3, 5].map((start) => parseInt(surfaceHex.slice(start, start + 2), 16)).join(", ")})`;
-    for (const control of [headerStatus, header.locator(".progress-trigger"), ...await header.locator(".queue-header-action").all()]) {
+    for (const control of [headerStatus, ...await header.locator(".queue-header-action").all()]) {
       await expect(control).toHaveCSS("color", headerInk);
       await expect(control).not.toHaveCSS("background-color", surfaceColor);
     }
     await expect(headerStatus.locator("strong")).toHaveCSS("color", headerInk);
     await expect(headerStatus.locator("strong")).toHaveCSS("color", headerInk);
     await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("color", headerInk);
-    await expect(header.locator(".header-progress small").first()).toHaveCSS("color", headerInk);
-    await expect(header.locator(".meter > span")).toHaveCSS("background-color", headerInk);
+    await expect(header.locator(".activity-bar > span")).toHaveCSS("background-color", headerInk);
     await expect(workspaceTabs.getByRole("tab", { selected: true })).toHaveCSS("border-bottom-color", headerInk);
     for (const name of ["Design", "Specification", "Implement", "Activity"]) {
       await expect(workspaceTabs.getByRole("tab", { name: new RegExp(name) })).toBeInViewport({ ratio: 1 });
@@ -1066,23 +1059,17 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });
     await (await applicationMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
-    const drawer = page.getByRole("dialog", { name: "Logs", exact: true });
+    const drawer = page.getByRole("region", { name: "Logs", exact: true });
     await expect(drawer).toBeVisible();
     const modalBounds = (await drawer.boundingBox())!;
     assert.ok(modalBounds.x >= 0 && modalBounds.x + modalBounds.width <= width, "Wide modals stay within the viewport");
-    assert.ok(Math.abs(modalBounds.width - (width <= 540 ? width : width * 0.6)) < 1, "Modals use 60% of the viewport width, or full-screen on phones");
-    const viewportHeight = page.viewportSize()!.height;
-    assert.ok(Math.abs(modalBounds.height - (width <= 540 ? viewportHeight : viewportHeight * 0.6)) < 1, "Modals use 60% of the viewport height, or full-screen on phones");
-    await expect(drawer.getByRole("button", { name: "Close logs" })).toBeFocused();
-    await page.keyboard.press("Shift+Tab");
-    assert.ok(await drawer.evaluate((element) => element.contains(document.activeElement)), "Keyboard focus stays inside the modal queue");
-    await page.keyboard.press("Tab");
-    await expect(drawer.getByRole("button", { name: "Close logs" })).toBeFocused();
+    await expect(drawer.getByRole("heading", { name: "Logs", exact: true })).toBeFocused();
+    await workspaceTabs.getByRole("tab", { name: "Activity & logs", exact: true }).focus();
+    await expect(workspaceTabs.getByRole("tab", { name: "Activity & logs", exact: true })).toBeFocused();
     assert.equal(await drawer.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Queue fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/queue-${width}.png`) });
-    await page.keyboard.press("Escape");
+    await drawer.getByRole("button", { name: "Back to workspace", exact: true }).click();
     await expect(drawer).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Application menu", exact: true })).toBeFocused();
     assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "running", "Closing queue leaves processing running");
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -1114,7 +1101,7 @@ try {
   await details.fill("Corrected job details");
   await detailsCard.getByRole("button", { name: "Save changes" }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
   await processingQueue(page);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 1 waiting");
   await expect(page.getByRole("region", { name: "Waiting next · submission order", exact: true })).toContainText("What job details should be saved?");
@@ -1139,11 +1126,11 @@ try {
   await expect(offline).toHaveValue("An unfinished offline draft");
   await offline.fill("Keep offline work locally");
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What should happen offline?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
   await expect(headerStatus).toContainText("Reviewing saved responses");
   await page.reload();
   await expect(page.getByRole("heading", { name: "Your responses are in the queue.", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
   await processingQueue(page);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 1 waiting");
   await expect(page.getByRole("region", { name: "Waiting next · submission order", exact: true })).toContainText("What should happen offline?");
@@ -1425,9 +1412,9 @@ try {
             const failedPairQueue = await processingQueue(page);
              await expect(failedPairQueue).toContainText("The last review couldn’t finish");
              await failedPairQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
-            const pairLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+            const pairLogs = page.getByRole("region", { name: "Logs", exact: true });
             await expect(pairLogs).toContainText("Fixture targeted check failure");
-            await pairLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+            await pairLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
             await runQueueAction(page, "Process saved responses only");
          }
          await expect.poll(() => store.submissions(automatic.id)[0]?.status).toBe("completed");
@@ -1731,9 +1718,9 @@ try {
      await reviewPanel.getByRole("button", { name: "Keep current wording", exact: true }).click();
      await expect(page.getByRole("alert")).toContainText("The app couldn’t finish this step");
       await page.locator(".error").getByRole("button", { name: "View logs", exact: true }).click();
-      const refinementLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+      const refinementLogs = page.getByRole("region", { name: "Logs", exact: true });
       await expect(refinementLogs).toContainText("Fixture review conflict; retry the current item.");
-      await refinementLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+      await refinementLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
      await expect(reviewPanel.locator(".refinement-card .review-card-heading")).toHaveAttribute("aria-expanded", "true");
      assert.equal(store.get(cleanup.id).refinements.filter((p) => p.status === "dismissed").length, 0);
      await reviewPanel.getByRole("button", { name: "Keep current wording", exact: true }).click();
@@ -1859,16 +1846,16 @@ try {
        await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
       await expect(listPanel.locator('[aria-label="Assessment outcome"]')).toContainText("Code check: Couldn’t finish");
        await listPanel.locator('[aria-label="Assessment outcome"]').getByRole("button", { name: "View logs", exact: true }).click();
-       const assessmentLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+       const assessmentLogs = page.getByRole("region", { name: "Logs", exact: true });
        await expect(assessmentLogs).toContainText("0/4 requirements assessed");
-       await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+       await assessmentLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
       const assessmentRun = listPanel.getByRole("region", { name: "Assessment run" });
       await expect(assessmentRun).toContainText("No requirements were assessed in this run. This is not a finding");
        await assessmentRun.getByRole("button", { name: "View logs", exact: true }).click();
        await assessmentLogs.getByText("Log details", { exact: true }).click();
        await expect(assessmentLogs.locator("pre")).toContainText("VERIFY_FIXTURE_FAILURE: executable unavailable");
        await expect(assessmentLogs.locator("pre")).toContainText('"exitCode": 3');
-       await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+       await assessmentLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
        await listPanel.getByRole("button", { name: "All approved", exact: true }).click(); await search.fill("Download signed receipts");
        await expectImplementationRows(1);
       await expect(listPanel.locator(".requirement-detail > summary")).toContainText("Download signed receipts");
@@ -1891,7 +1878,7 @@ try {
         await assessmentLogs.getByText("Log details", { exact: true }).click();
          await expect(assessmentLogs.locator("pre")).toContainText("No model calls or verification commands run");
          await expect(assessmentLogs.locator("pre")).toContainText("src/auth/reset.ts");
-        await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+        await assessmentLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Assessment queue reasons fit mobile width");
        await page.screenshot({ path: ".reqwizit-state/browser-assessment-queue.png", fullPage: true });
        const blockedState = store.execution(listing.id);
@@ -1910,7 +1897,7 @@ try {
        for (const evidence of ['"characters": 52000', '"budget": 48000', '"characters": 37000', '"characters": 48930', "requirement-window-session", listing.requirements[1]!.id]) {
          await expect(assessmentLogs.locator("pre")).toContainText(evidence);
        }
-       await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+       await assessmentLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Per-requirement context blockers fit mobile width");
        await page.screenshot({ path: ".reqwizit-state/browser-requirement-context.png", fullPage: true });
        // Shared processing feedback uses the real snapshot endpoint with deterministic
@@ -1956,7 +1943,7 @@ try {
           await assessmentLogs.getByText("Log details", { exact: true }).click();
           await expect(assessmentLogs.locator("pre")).toContainText('"force": true');
           await expect(assessmentLogs.locator("pre")).toContainText('"freshIDs"');
-          await assessmentLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+          await assessmentLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
         await expect(listPanel.locator(".requirement-detail > summary").nth(1)).toContainText("Assessed · unknown");
          await expect(listPanel.locator(".implementation-row-status").nth(1)).toContainText("Coding: not started");
          await headerProgress.click();
@@ -1975,11 +1962,12 @@ try {
          await page.setViewportSize({ width: 390, height: 844 });
          assert.equal(await progressDialog.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Local and main progress breakdowns fit mobile width");
          await page.screenshot({ path: ".reqwizit-state/browser-local-assessment-progress.png" });
-         await progressDialog.getByRole("button", { name: "Close progress", exact: true }).click();
+         await page.getByRole("tab", { name: /^Implement/ }).click();
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 1 complete locally · 0 partial · 0 missing · 1 unknown");
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
-         await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
-         await expect(listPanel.locator(".requirement-detail > summary").filter({ hasText: liveRequirement.statement })).toContainText("unknown");
+          await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
+          await expectImplementationRows(4);
+          await expect(listPanel.locator(".requirement-detail > summary").filter({ hasText: liveRequirement.statement })).toContainText("unknown");
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 1 complete locally");
          await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
          await expectImplementationRows(4);
@@ -2018,7 +2006,7 @@ try {
         await expect(sharedQueueTrigger.locator(".activity-spinner")).toHaveCount(0);
         await expect(sharedQueue.getByText(/^Recent background work/)).toHaveCount(0);
         await sharedQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
-        const backgroundLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+        const backgroundLogs = page.getByRole("region", { name: "Logs", exact: true });
         const backgroundAssessment = backgroundLogs.locator(".log-record").filter({ hasText: "fixture-context-block" });
         await expect(backgroundAssessment).toContainText("Assessment stopped; earlier results retained.");
         queueAssessment.status = "failed"; queueAssessment.diagnostic = "Verification command failed; local assessment retained.";
@@ -2026,7 +2014,7 @@ try {
         await expect(backgroundAssessment).toContainText("Verification command failed; local assessment retained.");
         queueAssessment.status = "completed"; queueAssessment.diagnostic = "Verified main assessment finished.";
          await expect(backgroundAssessment).toContainText("Verified main assessment finished.");
-         await backgroundLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+         await backgroundLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
          await expect(page.locator(".project-status")).toContainText("Idle");
         await page.keyboard.press("Escape");
          queueHasWaiting = false;
@@ -2214,9 +2202,9 @@ try {
               });
               await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
                await reviewPanel.getByRole("region", { name: "Item processing error", exact: true }).getByRole("button", { name: "View logs", exact: true }).click();
-               const draftFailureLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+               const draftFailureLogs = page.getByRole("region", { name: "Logs", exact: true });
                await expect(draftFailureLogs).toContainText("Fixture: retain draft after submission failure");
-               await draftFailureLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+               await draftFailureLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
               await page.unroute(updatedSubmitRoute);
               await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft while stale");
             await reviewPages.getByRole("button", { name: "Next", exact: true }).click();
@@ -2264,7 +2252,7 @@ try {
           for (let index = 0; index < 61; index++) activityProject = store.note(activityProject.id, activityProject.revision, `Activity decision ${index}${index === 0 ? " unique historical needle" : ""}`, "activity-files");
           for (let index = 0; index < 1000; index++) activityProject = store.setModel(activityProject.id, activityProject.revision, activityProject.model);
           await page.evaluate((id) => localStorage.setItem("reqwizit-project", id), activityProject.id);
-          await page.reload(); await page.getByRole("tab", { name: "Activity", exact: true }).click();
+          await page.reload(); await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
           const feed = page.getByRole("region", { name: "Project activity feed", exact: true });
           await expect(feed.locator(".activity-entry")).toHaveCount(25);
           await expect(feed.getByRole("navigation").first()).toContainText("Page 1 of 3 · 63 entries");
@@ -2318,9 +2306,9 @@ try {
             await expect(planningPanel.getByRole("list", { name: "Proposed work packages" }).locator(":scope > li")).toHaveCount(3);
            await expect(planningPanel.getByRole("alert")).toContainText("build order needs a correction before approval");
             await planningPanel.locator(".job-error").getByRole("button", { name: "View logs", exact: true }).click();
-            const planningLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+            const planningLogs = page.getByRole("region", { name: "Logs", exact: true });
             await expect(planningLogs).toContainText("cycle");
-            await planningLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+            await planningLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
            const approvePlan = planningPanel.getByRole("button", { name: "Approve implementation plan", exact: true });
             await expect(approvePlan).toBeDisabled();
             await expect(page.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
@@ -2402,8 +2390,9 @@ try {
             for (const r of mapRequirements) mapState.delivered[r.id] = mapDelivery(r);
              await expect(mainMeter).toHaveAttribute("aria-valuenow", "100");
              await expect(deliveryEpic).toContainText("Delivered to main");
-             await progressDialog.getByRole("button", { name: "Close progress", exact: true }).click();
-            await page.getByLabel("Filter by feature", { exact: true }).selectOption("map-empty");
+              await page.getByRole("tab", { name: /^Specification/ }).click();
+              await page.getByText("Organize features", { exact: true }).click();
+             await page.getByLabel("Filter by feature", { exact: true }).selectOption("map-empty");
              await expect(page.locator("section.requirement-card").filter({ has: page.getByRole("button", { name: "Edit feature", exact: true }) })).toHaveCount(1);
              assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Empty feature organization fits mobile width");
              // One queued note updates the already-open review list and question drafts.
@@ -2518,9 +2507,10 @@ try {
     const resolverInbox = page.getByRole("region", { name: "Needs attention inbox", exact: true });
     await expect(resolverInbox).toContainText("Needs attention · 1 item");
     await expect(resolverInbox).toContainText("4 saved attempts");
-    // All modal entry points share the same shell and dismissal safeguards.
-    for (const [trigger, name] of [
-      [page.locator(".progress-trigger"), "Project progress"],
+     // All modal entry points share the same shell and dismissal safeguards.
+     const resolverTools = await technicalProcessing(page);
+     for (const [trigger, name] of [
+       [resolverTools.locator(".queue-trigger"), "Processing & queue"],
     ] as const) {
       const previousOverflow = await page.evaluate(() => document.body.style.overflow);
       await trigger.click();
@@ -2544,16 +2534,18 @@ try {
       await expect(modal).toHaveCount(0);
       await expect(trigger).toBeFocused();
       assert.equal(await page.evaluate(() => document.body.style.overflow), previousOverflow);
-      await trigger.click(); await page.keyboard.press("Escape");
-      await expect(modal).toHaveCount(0); await expect(trigger).toBeFocused();
+       await trigger.click(); await page.keyboard.press("Escape");
+       await expect(page.getByRole("region", { name: "Logs", exact: true })).toBeVisible();
+       await expect(modal).toHaveCount(0); await expect(trigger).toBeFocused();
     }
-     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
+      await closeTechnicalViews(page);
+      await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
      const resolverDialog = page.getByRole("region", { name: "Requirement review", exact: true });
      await expect(page.getByRole("dialog", { name: "View & resolve", exact: true })).toHaveCount(0);
     await expect(resolverDialog).toContainText("Both players return to their latest shared beacon");
     await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
     await resolverDialog.getByLabel("Anything to add? (optional)").fill("Keep this resolver draft");
-     await page.getByRole("tab", { name: "Activity", exact: true }).click();
+     await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
      await page.getByRole("tab", { name: /^Specification/ }).click();
     await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
      const recoveryTools = await technicalProcessing(page);
@@ -2644,7 +2636,7 @@ try {
     const gapQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
     await expect(gapQueue.getByRole("region", { name: "Gap exploration backlog", exact: true })).toHaveCount(0);
     await gapQueue.getByRole("button", { name: "View logs", exact: true }).last().click();
-    const gapLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+    const gapLogs = page.getByRole("region", { name: "Logs", exact: true });
     const gapStatus = gapLogs.locator(".log-record").filter({ hasText: store.jobs(gapProject.id).at(-1)!.id });
     await gapStatus.getByText("Log details", { exact: true }).click();
      await expect(gapStatus.locator(":scope > small")).toContainText("Finished");
@@ -2655,7 +2647,7 @@ try {
    await page.setViewportSize({ width: 390, height: 844 });
    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Gap backlog status fits mobile width");
    await page.screenshot({ path: ".reqwizit-state/browser-gap-backlog.png", fullPage: true });
-      await gapLogs.getByRole("button", { name: "Close logs", exact: true }).click(); await page.reload();
+      await gapLogs.getByRole("button", { name: "Back to workspace", exact: true }).click(); await page.reload();
      await discoveryActions(page);
       await expect((await technicalProcessing(page)).getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("7");
      await processingQueue(page);
@@ -2664,7 +2656,7 @@ try {
      await expect(gapStatus.locator(":scope > small")).toContainText("Finished");
      assert.deepEqual(store.jobs(gapProject.id).at(-1)!.gapReport, savedGapReport);
     assert.equal(gapCalls, 3, "Reload cannot start another inference request");
-    await gapLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+    await gapLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
     let retrievalProject = store.create("Staged retrieval fixture", "Keep exact human constraints", { providerID: "openai", modelID: "fixture" });
     const retrievalSeed = store.beginJob(retrievalProject.id, retrievalProject.revision).job; store.claimJob(retrievalSeed.id, Date.now() + 60000);
     store.finishJob(retrievalSeed.id, { summary: "Adjacent rules", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
@@ -2689,7 +2681,7 @@ try {
      await expect(retrievalLog().locator(":scope > small")).toContainText("Couldn’t finish");
      const interruptedRetrieval = structuredClone(store.jobs(retrievalProject.id).at(-1)!.retrievalWork!);
      assert.equal(interruptedRetrieval.stages.length, 1); assert.equal(interruptedRetrieval.attempts, 2);
-    await gapLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+    await gapLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
     await page.reload(); assert.equal(retrievalCalls, 2, "Reload must not resume inference");
      await exploreLegacyGaps(page, store.get(retrievalProject.id));
     await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("completed");

@@ -1,5 +1,30 @@
 # Architecture outline
 
+Saved-response read acceptance checks new requirement source types/authority before
+verification. Failed, fully checked legacy citation defects have an authenticated
+one-pass correction descriptor under SQLite 83 / portable 54; original paid reads
+remain immutable and every corrected draft is checked again. Small exact-input
+policy-identity cache records only reject incompatible historical packing probes,
+never grant model/review authority. See [compatibility and observed timings](migrations.md#saved-response-source-citations-and-compact-planning-identities-2026-11-15).
+
+Candidate-first dense discovery now prefers target-linked decision units on new
+schedules, without changing compatible paid layouts or mandatory verification.
+Packing reuses immutable lookup indexes and hashes the full project only once per
+invocation. Large private portable graphs transfer into existing segmented staging
+and release written entries before rendering. OpenCode discovery uses exclusive,
+profile-keyed, short-idle owned-server leases; each request retains a fresh session.
+See [migration and verification limits](migrations.md#processing-efficiency-and-progressive-continuation-staging-2026-11-15).
+
+`src/core/exploration.ts` derives stable requirement/note exploration statuses and
+a separate discovery percentage from existing receipt metadata and original
+snapshots. `ProjectStore.exploration()` uses compact SQL metadata, bounded historical
+digests and a change-aware read cache; no model calls or new durable semantic state
+are introduced. Whole unchanged source scopes may bypass repeated discovery
+preparation, but partial screens earn no unseen-target or readiness credit.
+Explicit revisits require current-source eligibility and separate confirmed usage;
+old paid work is not reset. Definition scoring and independent boundary scheduling
+are unchanged. See [compatibility](migrations.md#visible-exploration-progress-and-explicit-revisits-2026-11-15).
+
 Saved-response dispatch derives loaded/missing lookup permission from its existing
 exact manifest, advertises only phase-appropriate outputs and can correct one
 consecutive invalid lookup within the original charged bounds. Historical parsers,

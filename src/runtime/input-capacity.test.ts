@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ClientError } from "@opencode/client";
 import test from "node:test";
 import type {ContextPack} from "../core/context.js";
 import {ProjectStore} from "../storage/store.js";
@@ -88,4 +89,41 @@ test("cancellation during fresh capacity lookup cannot create a session or dispa
  }}) as never;
  await assert.rejects(new OpenCodeDiscovery("fixture",bootstrap).analyze(f.project,{context:f.context,signal:controller.signal,research:false,onSession:()=>{},onTelemetry:()=>{},onResearch:()=>{},onProgress:()=>{}}),/Capacity lookup cancelled/);
  assert.deepEqual(calls,["capacity","close"]);
+});
+
+test("reused owned servers still admit every large request, create fresh denied sessions and retire malformed replies", async () => {
+ const f=fixture(); let starts=0,closes=0,capacity=0,sessions=0,prompts=0;
+ const bootstrap=async()=>{starts++;return {directory:"fixture",close:async()=>{closes++;},client:{
+  provider:{list:async()=>({data:{connected:["openai"],all:[{id:"openai",models:{fixture:{name:"Fixture"}}}]}})},
+  native:{server:{info:async()=>({})},model:{list:async()=>{capacity++;return {data:[model]};}}},
+  session:{create:async(input:any)=>{assert.deepEqual(input.permission,[{permission:"*",pattern:"*",action:"deny"}]);return {data:{id:`session-${++sessions}`}};},
+   prompt:async(input:any)=>{assert.equal(input.sessionID,`session-${++prompts}`);return {data:{info:{providerID:"openai",modelID:"fixture"},parts:[{type:"text",text:prompts===3?"not JSON":"{}"}]}};}},
+  event:{subscribe:async()=>({stream:(async function*(){})()})}
+ }} as never;};
+ const adapter=new OpenCodeDiscovery("fixture",bootstrap,10000),options={context:f.context,signal:AbortSignal.timeout(10000),research:false,onSession:()=>{},onTelemetry:()=>{},onResearch:()=>{},onProgress:()=>{}};
+ try {
+  await adapter.analyze(f.project,options);await adapter.analyze(f.project,options);
+  assert.equal(starts,1);assert.equal(closes,0);assert.equal(capacity,2);assert.equal(sessions,2);
+  await assert.rejects(adapter.analyze(f.project,options),/not JSON/);
+  assert.equal(closes,1);assert.equal(capacity,3);assert.equal(prompts,3,"Malformed output is not retried");
+ } finally {await adapter.close();}
+ assert.equal(closes,1);
+});
+
+for (const where of ["catalog", "prompt"] as const) test(`owned discovery transport failure at ${where} never replays a prompt and permits explicit fresh work`, async () => {
+ const f=fixture(); let starts=0,closes=0,prompts=0;
+ const bootstrap=async()=>{const number=++starts;return {directory:"fixture",close:async()=>{closes++;},client:{
+  provider:{list:async()=>{if(number===1&&where==="catalog")throw new ClientError("Transport",{detail:"fetch failed"});return {data:{connected:["openai"],all:[{id:"openai",models:{fixture:{name:"Fixture"}}}]}};}},
+  native:{server:{info:async()=>({})},model:{list:async()=>({data:[model]})}},
+  session:{create:async()=>({data:{id:`session-${number}`}}),prompt:async()=>{prompts++;if(number===1)throw new ClientError("Transport",{detail:"fetch failed"});return {data:{info:{providerID:"openai",modelID:"fixture"},parts:[{type:"text",text:"{}"}]}};}},
+  event:{subscribe:async()=>({stream:(async function*(){})()})}
+ }} as never;};
+ const adapter=new OpenCodeDiscovery("fixture",bootstrap,10000),options={context:f.context,signal:AbortSignal.timeout(10000),research:false,onSession:()=>{},onTelemetry:()=>{},onResearch:()=>{},onProgress:()=>{}};
+ try {
+  await assert.rejects(adapter.analyze(f.project,options),where==="catalog"?/No model prompt was sent/:/may have been accepted/);
+  assert.equal(starts,1);assert.equal(closes,1);assert.equal(prompts,where==="catalog"?0:1);
+  assert.deepEqual(await adapter.analyze(f.project,options),{});
+  assert.equal(starts,2);assert.equal(prompts,where==="catalog"?1:2,"Only an explicit new call can send another prompt");
+ } finally {await adapter.close();}
+ assert.equal(closes,2);
 });

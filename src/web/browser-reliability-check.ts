@@ -108,9 +108,9 @@ try {
   await page.reload();
   await expect(page.getByRole("alert")).toContainText("The app couldn’t finish this step");
   await page.locator(".error").getByRole("button", { name: "View logs", exact: true }).click();
-  const errorLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const errorLogs = page.getByRole("region", { name: "Logs", exact: true });
   await expect(errorLogs).toContainText("Controlled project-list failure");
-  await errorLogs.getByRole("button", { name: "Close logs", exact: true }).click();
+  await errorLogs.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await expect(design).toBeVisible(); await expect(page.getByLabel("Project name", { exact: true })).toHaveCount(0);
   await context.unrouteAll({ behavior: "wait" });
 
@@ -219,9 +219,9 @@ try {
     if (failure) {
       await expect(answerPage.getByRole("alert")).toBeVisible();
       await answerPage.locator(".error").getByRole("button", { name: "View logs", exact: true }).click();
-      const logs = answerPage.getByRole("dialog", { name: "Logs", exact: true });
+      const logs = answerPage.getByRole("region", { name: "Logs", exact: true });
       await expect(logs).toContainText("Your answer is saved, but the workspace could not refresh.");
-      await logs.getByRole("button", { name: "Close logs", exact: true }).click();
+      await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
       await expect(answerPage.locator(".save-notice").filter({ hasText: "Answer saved." })).toBeVisible();
     }
     await answerContext.unrouteAll({ behavior: "wait" });

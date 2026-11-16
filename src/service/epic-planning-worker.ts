@@ -12,6 +12,7 @@ import type { PlanningBlockers } from "../core/discovery-diagnostics.js";
 // Pure local computation only. No database, credentials, provider or runtime ownership.
 const port = parentPort!;
 const input = workerData as { project: Project; jobs: Job[]; focusEpicID?: string; submissions: Submission[];
+  skippedPackageIDs?: string[]; revisitReview?: import("../core/epic-review-types.js").EpicReview; targetFirst?: boolean;
   resolved: Map<string, EpicPlanningCheckpoint>; contexts: Map<string, EpicContextCheckpoint>; resumeJob?: Job; continuation?: PlanningProgress["continuation"] };
 const snapshots = new Map<number, Project>();
 // A large history must not retain one full project for every rejected proof.
@@ -59,6 +60,7 @@ function run() {
       if (!snapshot) throw new MissingRevision(revision);
       return snapshot;
     }, { firstPending: true, cache, completedEquivalence, resolved: input.resolved, contexts: input.contexts,
+      skippedPackageIDs: input.skippedPackageIDs, revisitReview: input.revisitReview, targetFirst: input.targetFirst,
       readEquivalenceRevision: revision => {
         if (revision === input.project.revision) return input.project;
         const source = equivalenceSnapshots.get(revision);

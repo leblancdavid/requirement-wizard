@@ -7,13 +7,15 @@ import { planningProgressSchema, type PlanningProgress } from "../core/discovery
 import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 import { epicResumeReason } from "../core/epic-continuation.js";
+import type { EpicReview } from "../core/epic-review-types.js";
 
 /** Bump on any scheduling/context/freshness change that could alter skip receipts.
  * Exclude only bookkeeping never read by the workflow planner/context builder.
  * Keep revision width: changing encoded size can change a boundary partition.
  * This is NOT a semantic/model/checkpoint identity and never changes saved calls. */
-export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[]) {
-  return digestJSONArray(["resolved-prefix-v6", epicPlanningProjectKey(project), planningJobs(jobs), focusEpicID, submissions]);
+export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[],
+  scheduling: { skippedPackageIDs?: string[]; revisitReview?: EpicReview; targetFirst?: boolean } = {}) {
+  return digestJSONArray([scheduling.targetFirst ? "resolved-prefix-v8-target-first" : "resolved-prefix-v7-exploration", epicPlanningProjectKey(project), planningJobs(jobs), focusEpicID, submissions, scheduling.skippedPackageIDs, scheduling.revisitReview]);
 }
 function planningJobs(jobs: Job[]): Job[] {
   return jobs.map(({ discoveryMetrics: _metrics, telemetry: _telemetry, researchEvidence: _research, sessionID: _session, ...job }) => job);
@@ -40,6 +42,7 @@ export class PlanningTimeoutError extends Error {
  */
 export async function prepareEpicReview(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[],
   options: { signal: AbortSignal; readRevision: (revision: number) => Project; onProgress: (value: PlanningProgress) => void;
+    skippedPackageIDs?: string[]; revisitReview?: EpicReview; targetFirst?: boolean;
     timeoutMs?: number; resumeJob?: Job; loadReceipts?: (inputKey: string) => Map<string, EpicPlanningCheckpoint>;
     saveReceipt?: (inputKey: string, key: string, value: EpicPlanningCheckpoint) => void;
     loadContexts?: (inputKey: string) => Map<string, EpicContextCheckpoint>;
@@ -51,18 +54,18 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   let materialKey: string | undefined, currentKey: string | undefined, packingKey: string | undefined, projectedJobs: Job[] | undefined;
   const material = () => materialKey ??= epicPlanningProjectKey(project);
   const projected = () => projectedJobs ??= planningJobs(jobs);
-  const inputKey = () => currentKey ??= digestJSONArray(["resolved-prefix-v6", material(), projected(), focusEpicID, submissions]);
+  const inputKey = () => currentKey ??= digestJSONArray([options.targetFirst ? "resolved-prefix-v8-target-first" : "resolved-prefix-v7-exploration", material(), projected(), focusEpicID, submissions, options.skippedPackageIDs, options.revisitReview]);
   const contextInputKey = () => packingKey ??= digestJSONArray(["context-computation-generation-v1", material()]);
   // Lazy adoption of the previous exact-input cache only when its original full
   // inputs still match. These are disposable CPU receipts, never model evidence.
-  const historicalKeys = [5, 4, 3, 2, 1].map(version => {
+  const historicalKeys = [6, 5, 4, 3, 2, 1].map(version => {
     let key: string | undefined;
     return () => key ??= digestJSONArray([`resolved-prefix-v${version}`, version === 1 ? project : material(), jobs, focusEpicID, submissions]);
   });
-  const resolved = !resumeJob && options.loadReceipts?.(inputKey()) || new Map<string, EpicPlanningCheckpoint>();
+  const resolved = !resumeJob && !options.revisitReview && options.loadReceipts?.(inputKey()) || new Map<string, EpicPlanningCheckpoint>();
   const contexts = !resumeJob && options.loadContexts?.(contextInputKey()) || new Map<string, EpicContextCheckpoint>();
   for (const generation of historicalKeys) {
-    if (resumeJob) break;
+    if (resumeJob || options.revisitReview || options.targetFirst) break;
     if (resolved.size) break;
     if (!options.loadReceipts) break;
     options.signal.throwIfAborted();
@@ -73,7 +76,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     }
   }
   for (const generation of [inputKey, ...historicalKeys]) {
-    if (resumeJob) break;
+    if (resumeJob || options.revisitReview) break;
     if (contexts.size) break;
     if (!options.loadContexts) break;
     options.signal.throwIfAborted();
@@ -84,6 +87,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   }
   options.signal.throwIfAborted();
   const data = { project, jobs: resumeJob ? [] : projected(), focusEpicID, submissions, resolved, contexts,
+    skippedPackageIDs: options.skippedPackageIDs, revisitReview: options.revisitReview, targetFirst: options.targetFirst,
     resumeJob: resumeJob ? planningJobs([resumeJob])[0] : undefined, continuation };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use

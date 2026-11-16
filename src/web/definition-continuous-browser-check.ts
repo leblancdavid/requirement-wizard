@@ -55,8 +55,8 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Continuous definition fixture", exact: true }).click();
-  await page.locator(".progress-trigger").click();
-  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const overview = page.getByRole("region", { name: "Project progress", exact: true });
   await expect(overview).toContainText("until finished or you pause");
   await overview.getByText("Review limits and AI usage", { exact: true }).click();
   await expect(overview).toContainText("No overall time or area-count cutoff");
@@ -64,7 +64,7 @@ try {
   await expect(overview).toContainText("2,304 steps under the compatible continuation policy—not unlimited retries");
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
-  await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(page.locator(".queue-header")).toContainText(`Checking how clearly “${project.epics.find((area) => area.id === "project")!.title}” is defined…`);
   await page.getByRole("button", { name: /Processing & queue:/ }).click();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
@@ -84,7 +84,7 @@ try {
   assert.equal(paused.definitionWork!.citationFailures!.length, 1);
   assert.equal(paused.definitionInterruption!.cause, "user-stop"); assert.equal(store.get(project.id).assessments.length, 0);
   await page.reload(); assert.equal(calls, 4, "Reload must not automatically resume calls");
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => coverage(store.get(project.id)).stale, { timeout: 60000 }).toBe(false);
   assert.equal(store.get(project.id).assessments.length, 13, "All areas complete beyond the old ten-area limit");

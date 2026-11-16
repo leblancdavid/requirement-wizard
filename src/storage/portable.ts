@@ -105,7 +105,8 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       linked.add(job.submissionWork.reconciliation.sourceJobID); linked.add(job.submissionWork.reconciliation.clarificationJobID);
     }
     if (job.submissionWork?.draftRepair) {
-      linked.add(job.submissionWork.draftRepair.sourceJobID); linked.add(job.submissionWork.draftRepair.clarificationJobID);
+      linked.add(job.submissionWork.draftRepair.sourceJobID);
+      if (job.submissionWork.draftRepair.clarificationJobID) linked.add(job.submissionWork.draftRepair.clarificationJobID);
     }
     if (job.answerGroupWork?.sourceSupport?.recovery) linked.add(job.answerGroupWork.sourceSupport.recovery.sourceJobID);
     if (job.answerGroupWork?.pageRecovery) linked.add(job.answerGroupWork.pageRecovery.sourceJobID);
@@ -443,7 +444,9 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = project.organizationReviews.some(r => r.organizationBasis) || Object.values(continuation?.objects ?? {}).some(markedOrganization) || continuation?.jobs.some(j => j.organizationCheck) ? 52
+  const sharedFormat = continuation?.jobs.some(j => j.submissionWork?.draftRepair?.policy) ? 54
+    : continuation?.jobs.some(j => j.context?.epicReview?.recordGrouping === "target-decision-units-v3") ? 53
+    : project.organizationReviews.some(r => r.organizationBasis) || Object.values(continuation?.objects ?? {}).some(markedOrganization) || continuation?.jobs.some(j => j.organizationCheck) ? 52
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.discoveryPolicy || j.retrievalWork?.epicStages?.verification?.policy === "candidate-first-verification-v3") ? 51
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification?.policy === "relevance-first-epic-verification-v2") ? 50
     : continuation?.jobs.some(j => j.retrievalWork?.epicStages?.verification || j.retrievalWork?.epicStages?.proposalPolicy) ? 49
@@ -583,8 +586,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(52), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–52 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(54), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–54 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -625,6 +628,10 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(decodeContinuationParts(files, rawContinuation)) as Continuation;
+  if (state.formatVersion < 54 && continuation.jobs.some(j => j.submissionWork?.draftRepair?.policy))
+    throw new Error("Saved-response citation correction requires portable state format 54. Saved work was not overwritten.");
+  if (state.formatVersion < 53 && continuation.jobs.some(j => j.context?.epicReview?.recordGrouping === "target-decision-units-v3"))
+    throw new Error("Target-first discovery evidence requires portable state format 53. Saved work was not overwritten.");
   if (state.formatVersion < 52 && (project.organizationReviews.some(r => r.organizationBasis) || Object.values(continuation.objects).some(markedOrganization)
     || continuation.jobs.some(j => j.organizationCheck || j.kind === "organization-check" || j.context?.organizationCheck)))
     throw new Error("Feature organization checks require portable state format 52. Saved work was not overwritten.");

@@ -10,6 +10,7 @@ import {needsJointInputAdmission,JointInputCapacityError} from "../runtime/input
 
 /** Explicit selection dispatch: a disconnected direct account never falls back to OpenCode. */
 export class ConnectedDiscovery implements DiscoveryAdapter {
+  async close() { await this.legacy.close?.(); }
   async recoverAnswerGroup(project: Project, options: Parameters<NonNullable<DiscoveryAdapter["recoverAnswerGroup"]>>[1]) {
     if (project.model.connectionID || !this.legacy.recoverAnswerGroup) throw new Error("Completed-reply recovery is unavailable for this selection. No model request was made.");
     return this.legacy.recoverAnswerGroup(project, options);

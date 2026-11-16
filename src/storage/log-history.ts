@@ -3,8 +3,13 @@ import { logHistoryQuery, type JobLogEntry, type LogHistoryPage } from "../core/
 
 /** Presentation only: the durable worker receipt remains completed, but no draft
  * was published when its own package has an explicit saved evidence blocker. */
+export const emptyCandidateScreenSQL = (payload: string) => `COALESCE(json_extract(${payload}, '$.status') = 'completed'
+  AND json_type(${payload}, '$.result') IS NOT 'object' AND json_type(${payload}, '$.context.epicReview') = 'object'
+  AND json_extract(${payload}, '$.retrievalWork.epicStages.discoveryPolicy') = 'candidate-first-v1'
+  AND json_extract(${payload}, '$.retrievalWork.epicStages.phase') = 'complete'
+  AND json_extract(${payload}, '$.retrievalWork.epicStages.emptyCompletion') = 'no-surviving-proposals', 0)`;
 export const epicBlockedReasonSQL = (payload: string) => `CASE WHEN json_extract(${payload}, '$.status') = 'completed'
-  AND json_type(${payload}, '$.result') IS NOT 'object' THEN
+  AND json_type(${payload}, '$.result') IS NOT 'object' AND NOT (${emptyCandidateScreenSQL(payload)}) THEN
   (SELECT json_extract(b.value, '$.reason') FROM json_each(${payload}, '$.epicReviewReport.blockers') b
    WHERE json_extract(b.value, '$.packageID') = json_extract(${payload}, '$.context.epicReview.packageID') LIMIT 1) END`;
 
@@ -49,7 +54,8 @@ export function logHistory(db: Database.Database, projectID: string, input: unkn
     args.push(query.search);
   }
   const rows = db.prepare(`SELECT j.rowid AS sequence, j.id, j.project_id AS projectID, ${area} AS epicID, ${source} AS source,
-    ${title} AS title,
+     ${title} AS title,
+     CASE WHEN ${emptyCandidateScreenSQL("j.payload")} THEN 'empty-screen' END AS explorationOutcome,
     json_extract(j.payload, '$.expectedRevision') AS revision, ${status} AS status,
     json_extract(j.payload, '$.createdAt') AS createdAt, json_extract(j.payload, '$.startedAt') AS startedAt,
     json_extract(j.payload, '$.finishedAt') AS finishedAt,

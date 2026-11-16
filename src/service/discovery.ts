@@ -47,6 +47,7 @@ import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "..
 import { definitionJointReviewLimits } from "../core/definition-joint-review.js";
 
 export interface DiscoveryAdapter {
+  close?(): Promise<void>;
   /** Read completed text only. Must never prompt, retry or change providers. */
   recoverAnswerGroup?(project: Project, options: { sessionID: string; context: ContextPack; signal: AbortSignal }): Promise<{
     response: unknown; promptKey: string; messageKey: string;
@@ -396,9 +397,13 @@ export class DiscoveryService {
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; candidateFirst?: boolean; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
-    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean; answerIntegration?: AnswerIntegrationDiagnostic;
+    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean; answerIntegration?: AnswerIntegrationDiagnostic; revisitJobID?: string;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.revisitJobID && (options.gapMode !== "epic" || options.research || options.refinementOnly || options.definitionEpicID || options.readinessQuestions
+      || options.answerGroup || options.helpRequest || options.recordIDs || options.submissionIDs || options.isolatedTask || options.continueGapJobID))
+      throw new Error("Explore again requires a separate no-research discovery action.");
+    const revisitReview = options.revisitJobID ? this.store.explorationRevisit(projectID, options.revisitJobID) : undefined;
     if (options.candidateFirst !== undefined) {
       z.boolean().parse(options.candidateFirst);
       if (options.candidateFirst && (options.gapMode !== "epic" || options.research || options.helpRequest || options.refinementOnly
@@ -560,9 +565,11 @@ export class DiscoveryService {
       const resumeID = options.gapMode ? this.navigation.workflow?.resumeEpicJobID?.() : undefined;
       const resumeCandidate = resumeID ? this.store.getJob(resumeID) : undefined;
       const resumeJob = canResumePausedEpic(project, resumeCandidate, epicSubmissions, options.focusEpicID) ? resumeCandidate : undefined;
-      const epicHistory = options.gapMode ? resumeJob ? [resumeJob] : this.store.epicReviewPlanningHistory(projectID) : [];
+      const epicHistory = options.gapMode ? resumeJob ? [resumeJob] : this.store.epicReviewPlanningHistory(projectID)
+        .filter(j => !revisitReview || j.context?.epicReview?.packageID !== revisitReview.packageID) : [];
       const epicPlan = options.gapMode ? await prepareEpicReview(project, epicHistory, options.focusEpicID, epicSubmissions, {
         resumeJob: resumeCandidate,
+        skippedPackageIDs: this.store.exploration(projectID).skippedPackageIDs, revisitReview, targetFirst: options.candidateFirst,
         signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
         loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
         saveReceipt: (inputKey, key, value) => this.store.saveEpicPlanningReceipt(projectID, project.revision, inputKey, key, value),

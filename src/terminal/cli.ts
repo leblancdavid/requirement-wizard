@@ -121,7 +121,8 @@ async function main() {
   const directory = resolve(values["data-dir"] ?? defaultDataDirectory());
   const store = new ProjectStore(join(directory, "projects.sqlite"));
   const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-  const service = new DiscoveryService(store, new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))));
+  const adapter = new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime")));
+  const service = new DiscoveryService(store, adapter);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
@@ -234,8 +235,8 @@ async function main() {
     }
   } finally {
     process.removeListener("SIGINT", cancel);
-    await connections.close();
-    store.close();
+    try { await adapter.close(); }
+    finally { try { await connections.close(); } finally { store.close(); } }
   }
 }
 

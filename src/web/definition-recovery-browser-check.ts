@@ -74,8 +74,8 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Recovery fixture", exact: true }).click();
-  await page.locator(".progress-trigger").click();
-  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const overview = page.getByRole("region", { name: "Project progress", exact: true });
   await expect(overview.getByRole("button", { name: /^Recover assessment:/ })).toHaveCount(0);
   await overview.locator("details.progress-stage").first().locator("summary").first().click();
   const missionRefresh = overview.getByRole("button", { name: "Refresh definition: Destination discovery and mission-run generation with saved progression", exact: true });
@@ -92,7 +92,7 @@ try {
     await expect(confirmation.getByRole("listitem")).toHaveCount(1);
     await expect(confirmation).toContainText("Destination discovery");
     const bounds = await confirmation.boundingBox();
-    assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= height, "Confirmation scrolls into view, including on mobile");
+    assert.ok(bounds && bounds.y >= -1 && bounds.y + bounds.height <= height + 1, `Confirmation scrolls into view, including on mobile (one-pixel scroll rounding): ${JSON.stringify({ width, height, bounds })}`);
     assert.equal(calls, 0);
     await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(missionRefresh).toBeFocused();
@@ -112,13 +112,13 @@ try {
   await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(calls, 0);
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
-  await overview.getByRole("button", { name: "Close progress", exact: true }).click();
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await expect(confirmation).toHaveCount(0);
   assert.equal(calls, 0, "Closing the dialog cannot confirm a pending request");
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await page.reload(); assert.equal(calls, 0, "Reload cannot grant or dispatch recovery");
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   if (scoped) {
     await overview.locator("details.progress-stage").first().locator("summary").first().click();
     await missionRefresh.focus(); await missionRefresh.press("Enter");
@@ -158,7 +158,7 @@ try {
   assert.equal((await refreshPost({ ...refreshInput, revision: current.revision })).status, 400, "Old authorization cannot be replayed");
   await page.reload(); assert.equal(calls, expectedCalls);
   if (scoped) {
-    await page.locator(".progress-trigger").click();
+    await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
     await overview.locator("details.progress-stage").first().locator("summary").first().click();
     await runtimeRefresh.click();
     await expect(confirmation).toHaveCount(1);

@@ -85,7 +85,7 @@ try {
   await page.reload(); await page.getByRole("tab", { name: /^Specification/ }).click();
   await expect(conflict).toContainText("Your decision is saved"); assert.equal(saves, 1); assert.equal(allowances, 1);
   await page.getByRole("searchbox", { name: "Search features and requirements", exact: true }).fill("nothing matches");
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity & logs", exact: true }).click();
   await page.getByText("View changes & details", { exact: true }).click();
   await page.getByRole("button", { name: "View current requirement · rule-50", exact: true }).click();
   await expect(page.getByRole("tab", { name: /^Specification/ })).toHaveAttribute("aria-selected", "true");

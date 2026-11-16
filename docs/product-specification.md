@@ -387,6 +387,15 @@ show a deterministic project aggregate with explanations and evidence.
 - Unknown areas remain visible; unconfirmed proposals cannot count as fully defined.
 - Show critical gaps, assessment freshness, and qualitative scope confidence separately.
 - Explain that newly discovered scope can lower the estimate; even 100% is not proof of readiness.
+- Show exploration separately from definition coverage and the existing weighted
+  delivery/review aggregate. Use stable currently identified requirement/note targets,
+  not AI request or evidence-batch counts. Expose Not explored, Questions ready,
+  Explored—no questions found, Needs another look and Blocked, with per-feature
+  counts and actual recorded dates. Partial screens cannot credit unseen targets.
+  Skip unchanged completed no-question scopes automatically; allow an explicitly
+  confirmed, bounded Explore again action without resetting failed work or original
+  paid allowances. Relevant evidence changes require another look; this is not a
+  completeness or readiness verdict. See [implemented exploration progress](browser-workspace.md#exploration-status-and-project-progress-2026-11-15).
 - Expose the rubric and the supporting records behind each assessment.
 - Keep contextual status/actions in the existing workspace views rather than a
   duplicate summary card, and offer explicit opt-in maintenance after

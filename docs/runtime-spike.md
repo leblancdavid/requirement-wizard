@@ -1,5 +1,28 @@
 # OpenCode runtime spike
 
+## Owned-server health admission (2026-11-15)
+
+Idle discovery reuse now checks owned-process liveness and a bounded native
+`server.info` metadata request before session/prompt creation. Failed idle admission
+can replace one owned server, never replay a model request. Future transport
+diagnostics name the failing phase and disclose prompt-acceptance uncertainty.
+
+`npx tsx scripts/check-owned-discovery-health.ts` passed against installed V2:
+warm reuse and replacement after stopping exactly the owned process, with **zero
+sessions/prompts**. No shared service was stopped. This does not reproduce the
+reported 337-ms transport failure. See [compatibility and limits](migrations.md#owned-server-admission-and-empty-screen-outcomes-2026-11-15).
+
+## Bounded owned discovery reuse (2026-11-15)
+
+Discovery now reuses a successful owned server for up to ten idle seconds for the
+same workspace/model/research profile, with exclusive leases and at most two idle
+servers. Sessions, prompts and checks are never reused; fresh capacity admission
+still applies. Failed/cancelled requests retire the server without automatic retry.
+Browser/terminal teardown closes these owned processes, including startup races.
+The shared desktop service is not used. Deterministic lease tests demonstrate
+eleven sequential requests with one startup rather than eleven; they do not
+establish live latency or provider qualification. See [compatibility and limits](migrations.md#processing-efficiency-and-progressive-continuation-staging-2026-11-15).
+
 ## Guarded larger joint input (2026-11-09)
 
 The user subsequently approved a **200k-character exception ceiling**, keeping 96k as

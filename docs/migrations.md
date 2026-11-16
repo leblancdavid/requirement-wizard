@@ -1,5 +1,257 @@
 # Data migrations and upgrade compatibility
 
+## Inline Activity & logs workspace (2026-11-15)
+
+Activity and Logs now share one main tab with separate views; the Logs dialog is
+removed. Task links select existing records instead of copying Activity summaries
+into new browser-session diagnostics. SQLite/portable formats, persisted activity
+and log archives, record IDs, timing, redaction and retention are unchanged. Log
+navigation counters are session-only UI state. No forward migration, paid-work
+reset or reassessment is needed. Opening, filtering, returning or upgrading starts
+no model work; the existing bounded history APIs remain read-only.
+
+## Owned-server admission and empty-screen outcomes (2026-11-15)
+
+Nested dialog Escape dismissal is also isolated to the top dialog, retaining the
+underlying Logs view and restoring focus to its queue trigger. This UI-only fix
+changes no saved state. The browser runner explicitly checks this behavior.
+
+**SQLite 83 / portable 54 unchanged.** No saved job, paid attempt, decision,
+assessment fingerprint, receipt or allowance is rewritten. This changes runtime
+admission, future diagnostics and read-only log classification. Startup does not
+repeat inference or refund attempts; explicit continuation remains required.
+
+The supplied revision-3781 exports confirm citation recovery completed (19/19
+steps, ten new requests). The newest failure is `Transport: fetch failed` after
+337 ms inside an adapter attempt. Historical diagnostics do not identify its HTTP
+phase, server reuse or prompt acceptance, so its precise cause is unqualified.
+
+Idle owned-server reuse now checks process liveness when available and a
+cancellable two-second native `server.info` probe. An unhealthy idle process is
+retired before a single fresh owned startup, before any session/prompt dispatch.
+Cancellation prevents replacement. Failed requests still retire their process;
+possibly accepted prompts are never automatically replayed. Fresh sessions and
+per-request model/capacity checks remain unchanged. New credential-safe diagnostics
+identify the app-controlled phase and distinguish no prompt sent from uncertain
+acceptance. Historical diagnostic bytes are preserved.
+
+Structurally completed candidate-first `no-surviving-proposals` screens now appear
+as **Finished—no questions found in this bounded screen; not a complete scope
+review**, rather than supporting-evidence failures. Problems-only filters exclude
+them while retaining genuine evidence blockers and failures. SQL uses durable
+stage flags; compact snapshot logs use the existing staged summary. Original
+blocker reasons, workflow authority, unread evidence and readiness are unchanged.
+
+Deterministic regressions cover replacement before prompting, cancelled admission,
+no implicit prompt replay, explicit retry retaining attempts, redacted diagnostics
+and read-only outcome classification. `npx tsx scripts/check-owned-discovery-health.ts`
+passed against installed OpenCode V2: warm reuse and replacement after stopping
+precisely that owned process, **zero sessions/prompts**. This does not establish
+the production failure's cause or live reliability. The dedicated discovery-outcomes
+browser check passed filtering, reload/mobile and immutable paid records. No
+customer project was modified and no live model allowance was spent.
+
+## Consolidated Progress tab (2026-11-15)
+
+The header progress dialog is now an inline Progress tab, labeled with the existing
+overall percentage. Exploration, answer and local-code indicators remain separate
+from the equally weighted overall score. This is presentation-only: SQLite/portable
+formats, saved assessment identities, freshness rules, history and paid work are
+unchanged. No migration, reassessment or model request is required on upgrade.
+
+## Saved-response source citations and compact planning identities (2026-11-15)
+
+**SQLite 82 → 83; portable state up to 54.** This transactional reader-capability
+upgrade changes no original project/job payloads, accepted evidence, assessments,
+paid receipts or allowances. Startup does not perform inference or repair drafts.
+Correction metadata is bounded/validated during startup; unsupported future repair
+policies roll the version advance back and preserve original bytes for repair/retry.
+Old clarified-rejection corrections still require their original clarification;
+their wire contexts and provenance are unchanged.
+
+The supplied revision-3779 logs show a concrete late publication failure: a new
+requirement cited a loaded non-source ID. All 16 read/check requests had finished
+before publication enforced the source-type rule (86.9 seconds total, 84.5 inside
+adapter requests). The preceding saved-response run spent 153 of 156 seconds in
+20 adapter attempts. These are dated observations, not an inference-only benchmark.
+The old unavailable workspace-publication metric is revision 3694, not evidence of
+a fresh failure after the latest staging changes. Candidate-screen empty outcomes
+labelled blocked are not, by themselves, missing-evidence or tool failures.
+
+New saved-response authoring schemas constrain requirement sourceIDs to eligible
+original sources detailed now or retained by the prior draft. Requirements,
+questions, research, superseded/deferred/delegated sources and aliases cannot gain
+source authority merely by being loaded. Live read acceptance independently checks
+requirement source types/authority/duplicates **before** accepting that draft or
+spending verification calls. Existing unchanged-action loading rules remain in
+force; dispatch constraints do not change historical context keys or receipt replay.
+
+On explicit continuation of an unchanged **failed, fully checked** legacy draft
+with an actual invalid requirement citation, the engine may prepare one
+`invalid-requirement-evidence-v1` corrective pass. Its descriptor binds the failed
+source job, exact paid prefix, original material/plan and final detailed batch.
+This is an app-proved protocol defect, not a fabricated human clarification or a
+positive AI verdict establishing validity. No ID is automatically replaced with a
+guessed source. The model must use exact eligible sources, load missing evidence,
+or block. Original reads/checks remain immutable; all original evidence batches
+check the revised frozen draft again before publication. Each new step retains the
+existing four-request ceiling and run/time/cancellation limits. Reopen/Continue
+cannot grant a second correction pass or renew its spent attempts. Valid checked
+drafts, semantic rejections, changed material and unfinished/exhausted original
+steps cannot obtain this recovery. Original valid paid work never needs a reset.
+
+Portable 54 protects this correction descriptor and retains its failed source job;
+older exports keep their previous minimum versions. Envelopes downgraded below 54
+with a citation correction reject adoption; future policies also reject without
+overwriting stored work. Original completed work without this defect remains valid.
+
+The disposable context cache also accepts small `policy-identity` memos, bounded
+by the exact full immutable project, target set, representation and grouping.
+They only reject historical policy probes when every saved input key differs;
+same-key candidates still undergo full checks, and completed lossless-rebatch
+candidates still take their original equivalence path. Appending irrelevant dated
+history therefore need not recreate a large evicted wire layout simply to prove
+the same mismatch. No memo grants completion, a model allowance or publication.
+Changed project evidence cannot reuse the proof. One synthetic repeated-history
+fixture reduces preparations from 45 to 21 with the identical selected task/batches.
+
+Deterministic regressions cover early rejection with one charged request/no checks,
+legacy correction with zero repeated original reads, mandatory new verification,
+reopen, actual portable adoption, four-attempt exhaustion without renewal, forged
+descriptor rejection and 82→83 future-policy rollback/repair. The 136-test focused
+submission/planning regression run, full browser suite/build, typecheck and diff
+check passed. Full `npm test` passed: 1,010 pretests + 845 main tests + 351 posttests
+= 2,206 checks. CLI help checks also passed. The expanded final recovery regression
+additionally exercised the actual processing queue and clone-side allowance exhaustion.
+No customer
+project is changed and no live model calls are used by these tests. Real-project
+question yield and resolution of the older production staging OOM remain unqualified.
+
+## Processing efficiency and progressive continuation staging (2026-11-15)
+
+**SQLite 81 → 82; portable state up to 53.** The ordered, transactional
+reader-capability migration changes no saved payloads, identities, paid receipts,
+grants, timestamps or assessment semantics. Reopening does not run inference.
+Unsupported record-grouping variants reject startup transactionally; repair can
+retry without losing the old database. Formats 1–52 remain readable; exports
+without the new grouping retain their previous minimum format. New grouping in a
+downgraded portable envelope is rejected before adoption.
+
+New candidate-first dense schedules use `target-decision-units-v3`: prioritize
+exact target-linked questions/answers, then target provenance, then local evidence.
+Schedule an expanded question/answer unit once instead of separately scheduling
+members that the renderer already co-loads. Keep every mandatory record and all
+surviving-candidate verification gates. This is not a relevance verdict, evidence
+omission, larger allowance or proof of better live question yield. Normal discovery
+and all compatible saved paid representations retain their previous grouping,
+ordering, plan keys and spent attempts. Explicit continuation reconstructs the
+original grouping, not a newly preferred layout.
+
+Candidate-first CPU scheduling uses disposable `resolved-prefix-v8-target-first`;
+ordinary scheduling retains the exploration namespace. Exact staged-bundle cache
+generation 2 hashes the immutable full project once per invocation rather than once
+per policy/subtree. Question/answer lookup indexes are built once per packing
+invocation. These are derived optimizations, not new model authority; old paid
+contexts are neither invalidated nor replayed because a CPU memo misses.
+
+Large publication-private graphs (128 selected jobs or 8,192 historical objects)
+are transferred directly into the existing format-2 segmented continuation writer.
+Format metadata is computed first; staging releases original entries as bounded
+parts are written. It no longer tries a full single-file pass before segmentation
+or pins the entire receipt graph throughout staging. Small exports retain the old
+single-file path. This reuses portable format 48 segmentation and existing size,
+hash, conflict and publication-journal gates; it does not raise the 256 MiB heap cap
+or project import limit. Only private export objects are consumed. A failed stage
+cleans its private files, retains all original SQLite work and requires the existing
+explicit retry/recovery path. Existing managed files are not replaced on failure.
+
+Owned OpenCode discovery processes may be reused exclusively for ten seconds
+between successful requests with the same model/workspace/research profile (at
+most two idle processes). Every request still creates its own session and performs
+model/admission checks. Failures, cancellation and tool-policy violations retire
+that process without automatic inference retry. Concurrent requests never share an
+active process. Idle expiry and browser/terminal teardown close only owned servers;
+the user's shared OpenCode server/credentials remain outside this lifecycle.
+Recovery remains a separate read-only process. No persisted runtime sessions or
+credential representation changes are introduced.
+
+Verification is deterministic and synthetic, not a production replay. Runtime
+lease tests reduce eleven sequential mock startups to one and cover concurrency,
+profile isolation, failure/cancellation, idle expiry and shutdown during startup.
+Candidate tests compare exact evidence unions and byte-identical reconstruction of
+old layouts; one decision-heavy fixture reduces eight batches to five and 58
+packing preparations to 28. Upgrade tests cover 81→82 rollback/repair/repeated startup; existing
+paid continuation and clone tests remain applicable. A structured 695-job staging
+fixture stages 200,991,384 bytes in 25 parts under the 256 MiB cap (about 164 MB
+reported heap before staging in one run). The legacy path also passes this fixture
+with identical byte counts: this does **not** reproduce the production OOM. It is
+not the user's retained graph and cannot
+alone qualify the reported production continuation-staging OOM as fixed. No live
+model allowance is spent by these checks.
+
+Full `npm test` passed (1,005 pretests + 845 main tests + 350 posttests = 2,200),
+as did the full browser suite/build, typecheck and diff check. The final focused
+155-test runtime/planning/linked-evidence/workspace run also passed, covering the
+additional upgrade/unit-packing checks and fresh-session admission on reused
+servers. Earlier exploration-only checks below are not qualification of this work.
+
+## Visible exploration progress and explicit revisits (2026-11-15)
+
+**SQLite 81 and portable formats unchanged.** Exploration status is a read-only
+projection of existing durable discovery jobs, their actual detailed-record
+inventories and original revision snapshots. No new completion ledger, project
+field, assessment fingerprint or human decision is written during upgrade.
+Existing jobs, paid receipts, retry ceilings, timestamps and portable evidence
+remain unchanged. Older single-request and staged outcomes can populate the view;
+unavailable originals and targets never detailed by a partial screen do not earn
+current exploration credit. Missing dates remain explicitly unknown. Imported
+continuation jobs/snapshots use the same projection; no inference occurs on reopen.
+
+The stable denominator is currently identified active requirements and human
+notes, not model calls, evidence pages or changing request layouts. Exploration
+percentage counts current explored/no-question targets and targets with ready
+published questions. A completed bounded candidate screen is an exploration
+attempt, **not** completed feature review, proof of no gaps, definition coverage or
+readiness. Empty features without targets and exhaustive dependency-boundary
+coverage are outside this denominator and are disclosed in the UI. Archived and
+rejected targets leave the denominator; new targets can lower the percentage.
+
+Freshness compares the engine's existing conservative human/dependency evidence
+keys, every actually detailed source body, current local requirements/questions
+and global guidance with the original snapshot. Unrelated omitted feature edits,
+job counters and bookkeeping revisions do not alone invalidate exploration;
+changed detailed foreign evidence, local/global decisions or declared dependency
+inputs do. Missing originals remain Needs another look, never silently current.
+Only unchanged completed scope outcomes can suppress automatic rediscovery;
+partial screens cannot credit unseen targets or suppress a larger unexplored
+scope. Boundary checks remain independently scheduled. Technical failures and
+unfinished attempts do not gain a new allowance from this projection.
+
+The new disposable scheduling namespace `resolved-prefix-v7-exploration` includes
+suppression and explicit-revisit inputs. Compatible earlier reviewed CPU receipts
+can be adopted using their original exact inputs; paid model context/plan keys
+and layouts are unchanged. Browser progress reads use compact SQL projections,
+bounded digest caches and change-aware view caches, not whole model replies.
+External SQLite writes invalidate cached historical fingerprints.
+
+**Explore again** requires a current revision, an exact unchanged completed source
+scope, no active worker, and separate explicit AI-usage confirmation. It authorizes
+one bounded manual pass; the original completed jobs and all their spent attempts
+remain immutable. Failed, stale or unfinished work cannot be recycled into this
+action. New work still obeys existing request/time bounds, cancellation, context
+validation and all mandatory checks. It does not apply answers, change models,
+grant unlimited retries, reset old allowances or turn on automatic processing.
+
+Deterministic tests cover all status categories, relevance/freshness, missing
+originals, partial evidence, repeated reopen of older saved work, automatic skip,
+explicit revisit, original-receipt preservation, authentication/revision/consent
+gates, portable adoption, external history replacement and separate percentages.
+Typecheck, 178 focused regression tests, full `npm test` (1,002 pretests + 843 main
+tests + 350 posttests = 2,195) and the full browser suite passed. The dedicated browser check passed for status
+filters, per-feature summaries, explicit confirmation, reload and mobile overflow.
+Live latency/yield improvement and the production portable-save heap failure are
+not qualified by this change.
+
 ## Saved-response lookup safety and publication retention (2026-11-15)
 
 **SQLite and portable formats unchanged.** This is dispatch guidance, bounded

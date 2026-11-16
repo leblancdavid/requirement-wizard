@@ -1,4 +1,11 @@
 .logs-panel { overflow-wrap: anywhere; }
+.activity-workspace { padding-top: 12px; }
+.activity-workspace > p { color: var(--muted); }
+.activity-tabs { margin: 16px 0; }
+.logs-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.logs-heading > div { min-width: 0; }
+.logs-heading > button { flex-shrink: 0; }
+@media (max-width: 540px) { .logs-heading { flex-direction: column; gap: 4px; } }
 .log-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; margin-block: 16px; }
 .log-filters label { min-width: 0; }
 .log-filters label:has(input[type="checkbox"]) { grid-column: 1 / -1; }

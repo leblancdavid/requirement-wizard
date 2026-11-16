@@ -64,11 +64,11 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Saved baseline fixture", exact: true }).click();
-  await page.locator(".progress-trigger").click();
-  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const overview = page.getByRole("region", { name: "Project progress", exact: true });
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
-  await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await processingQueue(page);
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   const notice = `${unfinished ? "Unfinished review" : "Earlier assessment"} retained from revision ${original.revision}`;
@@ -89,7 +89,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: `.reqwizit-state/browser-definition-${unfinished ? "unfinished" : "baseline"}-mobile.png`, fullPage: true });
   await closeTechnicalViews(page);
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => store.get(p.id).assessments.find((a) => a.epicID === "project")?.atRevision ?? 0, { timeout: 60_000 }).toBeGreaterThan(original.revision);
   assert.equal(collections, savedCollections, "Pause/reload must not repeat accepted collection");

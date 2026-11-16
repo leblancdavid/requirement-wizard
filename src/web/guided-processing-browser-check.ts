@@ -88,7 +88,7 @@ try {
   await page.getByRole("button", { name: /Choose Encrypted\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   await technicalProcessing(page);
-  const submit = page.getByRole("dialog", { name: "Logs", exact: true }).getByRole("region", { name: "Advanced specification workflow", exact: true })
+  const submit = page.getByRole("region", { name: "Logs", exact: true }).getByRole("region", { name: "Advanced specification workflow", exact: true })
     .getByRole("button", { name: "Submit saved responses", exact: true });
   await expect(submit).toBeEnabled();
   assert.equal(store.submissions(p.id).at(-1)!.status, "queued");

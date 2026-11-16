@@ -66,11 +66,11 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }), errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message)); await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Exact evidence bundles fixture", exact: true }).click();
-  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
-  const open = async () => { await page.locator(".progress-trigger").click(); await overview.locator("details.progress-stage").first().locator("summary").first().click(); };
+  const overview = page.getByRole("region", { name: "Project progress", exact: true });
+  const open = async () => { await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click(); await overview.locator("details.progress-stage").first().locator("summary").first().click(); };
   await open(); await overview.getByRole("button", { name: "Refresh definition: Runtime", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
-  await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await page.setViewportSize({ width: 390, height: 844 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.locator(".queue-header").getByRole("button", { name: "Pause", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");

@@ -2,7 +2,10 @@ import type { DefinitionInterruption } from "../core/definition-interruption.js"
 
 /** Presentation only: never infer saved work, retry safety or completion from error prose. */
 export function issueSummary(detail: string, fallback = "The app couldn’t finish this step."): string {
+  if (/^OpenCode connection failed during (server startup|model catalog|input-capacity check|session creation|progress connection|model request|research evidence)\./.test(detail))
+    return "The AI connection was interrupted. Resume discovery explicitly in Processing & queue; a retry uses the remaining request allowance. See Logs for whether a prompt may have been accepted.";
   const known: Record<string, string> = {
+    "Transport: fetch failed": "The AI connection was interrupted. The older log does not show whether a prompt was accepted. Check Logs, then resume discovery explicitly within the remaining allowance; do not reset the project.",
     "Failed to fetch": "The app couldn’t connect. Check that Reqwizit is still running, then try again.",
     "Load failed": "The app couldn’t connect. Check that Reqwizit is still running, then try again.",
     "Invalid local app session. Reload this app's page.": "Your connection to this app has expired. Reload the page to reconnect.",

@@ -16,12 +16,12 @@
 .app-header-title-row h1 { min-width: 0; }
 .topbar .app-header-title h1 { font-size: 1.429rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-header-title > small { display: block; color: var(--on-accent); opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
-.topbar button.queue-trigger, .topbar button.progress-trigger, .topbar button.queue-header-action { background: color-mix(in srgb, var(--on-accent) 8%, var(--accent)); color: var(--on-accent); border-color: color-mix(in srgb, var(--on-accent) 28%, var(--accent)); }
-.topbar button.queue-trigger:hover, .topbar button.progress-trigger:hover, .topbar button.queue-header-action:hover:not(:disabled) { background: color-mix(in srgb, var(--on-accent) 14%, var(--accent)); border-color: color-mix(in srgb, var(--on-accent) 45%, var(--accent)); }
-.topbar .status-copy strong, .topbar .status-copy small, .topbar .header-progress small, .topbar .header-activity .activity-label, .topbar .activity-spinner { color: var(--on-accent); }
+.topbar button.queue-trigger, .topbar button.queue-header-action { background: color-mix(in srgb, var(--on-accent) 8%, var(--accent)); color: var(--on-accent); border-color: color-mix(in srgb, var(--on-accent) 28%, var(--accent)); }
+.topbar button.queue-trigger:hover, .topbar button.queue-header-action:hover:not(:disabled) { background: color-mix(in srgb, var(--on-accent) 14%, var(--accent)); border-color: color-mix(in srgb, var(--on-accent) 45%, var(--accent)); }
+.topbar .status-copy strong, .topbar .status-copy small, .topbar .header-activity .activity-label, .topbar .activity-spinner { color: var(--on-accent); }
 .topbar .queue-trigger .connection-dot, .topbar .meter > span, .topbar .activity-bar > span { background: var(--on-accent); }
 .topbar .meter, .topbar .activity-bar { background: color-mix(in srgb, var(--on-accent) 24%, var(--accent)); }
-.topbar button.queue-trigger:focus-visible, .topbar button.progress-trigger:focus-visible, .topbar button.queue-header-action:focus-visible { outline-color: var(--on-accent); }
+.topbar button.queue-trigger:focus-visible, .topbar button.queue-header-action:focus-visible { outline-color: var(--on-accent); }
 .app-menu { position: relative; flex: 0 0 auto; }
 .app-menu-toggle { width: 38px; height: 38px; border: 1px solid currentColor; border-radius: 8px; display: grid; place-items: center; color: var(--on-accent); }
 .app-menu-toggle:hover, .app-menu-toggle[aria-expanded=true] { background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
@@ -43,9 +43,8 @@
 .topbar .queue-header { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px 0 0; }
 .topbar button.queue-trigger { background: transparent; border: 0; border-radius: 8px; }
 @media (max-width: 1100px) {
-  .topbar:has(.queue-header) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .topbar:has(.queue-header) { display: grid; grid-template-columns: minmax(0, 1fr); }
   .topbar .queue-header { grid-column: 1 / -1; order: 3; }
-  .topbar .header-progress { width: 100%; max-width: none; }
 }
 @media (max-width: 540px) {
   .app-header-leading { gap: 10px; }

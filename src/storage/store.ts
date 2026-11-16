@@ -3,6 +3,7 @@ import { PublicationObjects } from "./publication-objects.js";
 import { portableArtifactLimit, portableProjectLimit } from "./staged-json.js";
 import { stageContinuation, discardContinuation, type StagedContinuation } from "./continuation-parts.js";
 import { publicationFailureClassifier } from "./publication-failure.js";
+import { explorationProgress, explorationFingerprinter, type ExplorationRecord } from "../core/exploration.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
@@ -105,7 +106,7 @@ import { workflowJobReceiptSchema, type WorkflowJobReceipt } from "../core/workf
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
-import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, submissionCitationRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
 import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview,adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
 import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-group.js";
@@ -737,13 +738,15 @@ export class ProjectStore {
       jobs.length = 0; submissions.length = 0; shared.clear(); historicalRecords.clear();
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
+      const execution = this.execution(id);
+      // Format/feature detection needs the intact graph; rendering does not.
+      const preparedPortableFiles = portableFiles(project, execution, continuation, true);
       phase("continuation-staging");
-      stagedContinuation = stageContinuation(directory, continuation);
+      const transfer = continuation.jobs.length >= 128 || Object.keys(continuation.objects).length >= 8192;
+      stagedContinuation = stageContinuation(directory, continuation, undefined, undefined, transfer);
       const parts = Object.entries(stagedContinuation.parts ?? {});
       const continuationBytes = stagedContinuation.bytes + parts.reduce((sum, [, part]) => sum + part.bytes, 0);
       metrics.continuationBytes = continuationBytes;
-      const execution = this.execution(id);
-      const preparedPortableFiles = portableFiles(project, execution, continuation, true);
       // The bytes and their hashes are now durable in private staged files. Only
       // small format/state metadata is needed to render the remaining artifacts.
       // Do not pin every historical receipt/snapshot while creating those strings.
@@ -2145,6 +2148,75 @@ export class ProjectStore {
     return Array.from(rows, row => readStoredJob(row.payload));
   }
 
+  private explorationViews = new Map<string, { stamp: string; value: ReturnType<typeof explorationProgress> }>();
+  private explorationFingerprints = new Map<string, string>();
+  private explorationDataVersion: unknown;
+
+  explorationRevisit(projectID: string, jobID: string) {
+    const view = this.exploration(projectID);
+    if (!view.scopes.some(scope => scope.jobID === jobID && scope.status === "explored-empty")
+      || view.scopes.some(scope => scope.jobID === jobID && scope.status !== "explored-empty"))
+      throw new Error("Only an unchanged explored scope with no open questions can be explored again. Refresh the progress view first.");
+    const job = this.getJob(jobID);
+    if (job.projectID !== projectID || job.status !== "completed" || !job.context?.epicReview || !view.skippedPackageIDs.includes(job.context.epicReview.packageID))
+      throw new Error("The original completed exploration is unavailable. No allowance was reset.");
+    return job.context.epicReview;
+  }
+
+  exploration(projectID: string) {
+    const dataVersion = this.db.pragma("data_version", { simple: true });
+    if (this.explorationDataVersion !== dataVersion) { this.explorationFingerprints.clear(); this.explorationDataVersion = dataVersion; }
+    const stamp = `${dataVersion}:${(this.db.prepare("SELECT total_changes() AS count").get() as { count: number }).count}`;
+    const cached = this.explorationViews.get(projectID);
+    if (cached?.stamp === stamp) return cached.value;
+    const project = this.get(projectID);
+    // Select only small scheduling metadata, not accumulated model replies,
+    // telemetry or the full historical job archive on every browser poll.
+    const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
+      json_extract(payload, '$.status') AS status, json_extract(payload, '$.finishedAt') AS at,
+      json_extract(payload, '$.context.epicReview') AS review,
+      json_extract(payload, '$.retrievalWork.epicStages.emptyCompletion') AS empty,
+      json_extract(payload, '$.retrievalWork.epicStages.phase') AS phase,
+      json_extract(payload, '$.result.questions') AS questions,
+      (SELECT json_group_array(json_object('phase', json_extract(value, '$.phase'), 'batch', json_extract(value, '$.batch')))
+        FROM json_each(jobs.payload, '$.retrievalWork.epicStages.receipts')) AS receipts,
+      json_extract(payload, '$.retrievalWork.epicStages.verification.groups') AS checks,
+      json_extract(payload, '$.context.includedIDs') AS included
+      FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid`).all(projectID) as
+      { id: string; revision: number; status: Job["status"]; at: string | null; review: string; empty: string | null; phase: string | null;
+        questions: string | null; receipts: string | null; checks: string | null; included: string | null }[];
+    const records: ExplorationRecord[] = rows.map(row => {
+      const review = epicReviewSchema.parse(JSON.parse(row.review));
+      const receipts = row.receipts ? JSON.parse(row.receipts) as { phase: string; batch: number }[] : [];
+      const checks = row.checks ? JSON.parse(row.checks) as string[][] : review.guardrailBatches;
+      const detailedIDs = review.guardrailBatches ? receipts.flatMap(receipt =>
+        (receipt.phase === "discover" ? review.guardrailBatches : checks)?.[receipt.batch] ?? []) : JSON.parse(row.included ?? "[]") as string[];
+      return { jobID: row.id, revision: row.revision, status: row.status, at: row.at, review,
+        empty: row.empty === "no-surviving-proposals", completed: row.status === "completed" && (row.questions !== null || row.empty === "no-surviving-proposals" && row.phase === "complete"),
+        questionTexts: row.questions ? (JSON.parse(row.questions) as { text: string }[]).map(q => q.text) : [], detailedIDs: [...new Set(detailedIDs)] };
+    });
+    const historical = new Map<number, ReturnType<typeof explorationFingerprinter>>();
+    const value = explorationProgress(project, records, revision => this.get(projectID, revision), (revision, record) => {
+      const key = `${projectID}:${record.jobID}:${revision}`;
+      let digest = this.explorationFingerprints.get(key);
+      if (!digest) {
+        let fingerprint = historical.get(revision);
+        if (!fingerprint) {
+          fingerprint = explorationFingerprinter(this.get(projectID, revision));
+          historical.set(revision, fingerprint);
+          while (historical.size > 2) historical.delete(historical.keys().next().value!);
+        }
+        digest = fingerprint(record);
+        this.explorationFingerprints.set(key, digest);
+        while (this.explorationFingerprints.size > 2048) this.explorationFingerprints.delete(this.explorationFingerprints.keys().next().value!);
+      }
+      return digest;
+    });
+    this.explorationViews.set(projectID, { stamp, value });
+    while (this.explorationViews.size > 8) this.explorationViews.delete(this.explorationViews.keys().next().value!);
+    return value;
+  }
+
   /** Derived scheduling only, not exported evidence. Input keys bind workflow
    * material, job/submission data and an explicit planner-algorithm version. */
   epicPlanningReceipts(projectID: string, inputKey: string): Map<string, EpicPlanningCheckpoint> {
@@ -2202,7 +2274,7 @@ export class ProjectStore {
     // for each checkpoint. Reject future variants before deleting a generation.
     if (this.db.prepare(`SELECT 1 FROM epic_planning_contexts INDEXED BY epic_planning_context_pool WHERE project_id = ? AND
       (format != 1 OR COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'staged', 'budget', 'planning-failure', 'policy-miss') OR
+       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'staged', 'budget', 'planning-failure', 'policy-miss', 'policy-identity') OR
        (json_extract(payload, '$.outcome') = 'planning-failure' AND
         COALESCE(json_extract(payload, '$.kind'), '') NOT IN ('context', 'target', 'seed', 'stage-limit')))` ).get(projectID))
       throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
@@ -2666,8 +2738,10 @@ export class ProjectStore {
     if (!repair) return;
     const source = this.getJob(repair.sourceJobID), original = source.submissionWork;
     const expected = source.projectID === project.id && original
-      && submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.submissionRecoveryJobs(project.id, item.id));
-    if (JSON.stringify(expected) !== JSON.stringify(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
+      && (repair.policy === "invalid-requirement-evidence-v1"
+        ? submissionCitationRepair(submissionMaterials(project, item, original.task), original, source)
+        : submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.submissionRecoveryJobs(project.id, item.id)));
+    if (canonicalJSON(expected) !== canonicalJSON(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
       || JSON.stringify(original.task) !== JSON.stringify(work.task)
       || JSON.stringify(work.receipts.slice(0, repair.fromReceipt)) !== JSON.stringify(original.receipts))
       throw new Error("Corrective review requires its completed no-question clarification and unchanged original rejected ledger.");

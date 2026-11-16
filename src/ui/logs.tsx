@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { ExecutionState } from "../core/execution.js";
 import type { DiscoveryDiagnosticReport } from "../core/discovery-diagnostics.js";
 import type { LogHistoryPage } from "../core/log-history.js";
-import { Modal } from "./modal.js";
 import { PagedList } from "./pagination.js";
-import { closeLogs, openLogs, useLogs } from "./log-access.js";
+import { openLogs, useLogs } from "./log-access.js";
 import { exportLogRecords, jobHistoryLog, logPreview, logTiming, projectLogs, redactLog, type LogRecord } from "./log-records.js";
 import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
 import { statusLabel } from "./user-messages.js";
@@ -13,24 +12,29 @@ import type { DefinitionHistoryRequest } from "./definition-review-history.js";
 import "./logs.css";
 
 const jobSources = ["Discovery", "Definition review", "Question help", "Folder scan"];
-export function Logs({ project, jobs = [], submissions = [], execution, progress = [], workflowMessage, workspaceDiagnostic, exportDiagnostics, request, technicalControls }: {
+export function Logs({ active, back, project, jobs = [], submissions = [], execution, progress = [], workflowMessage, workspaceDiagnostic, exportDiagnostics, request, technicalControls }: {
+  active: boolean; back: () => void;
   project?: Project; jobs?: Job[]; submissions?: Submission[]; execution?: ExecutionState; progress?: string[]; workflowMessage?: string; workspaceDiagnostic?: string;
   exportDiagnostics?: (jobIDs: string[]) => Promise<DiscoveryDiagnosticReport>; request?: DefinitionHistoryRequest;
   technicalControls?: React.ReactNode;
 }) {
   const state = useLogs();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (active) { heading.current?.focus({ preventScroll: true }); heading.current?.scrollIntoView({ block: "start" }); }
+  }, [active, state.request]);
   const [scope, setScope] = useState("all"), [source, setSource] = useState(""), [search, setSearch] = useState(""), [problems, setProblems] = useState(false), [area, setArea] = useState("");
   const [navigation, setNavigation] = useState<{ before?: number; refresh: number }>({ refresh: 0 });
   const [history, setHistory] = useState<LogHistoryPage | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState("");
   const latest = () => setNavigation((n) => ({ refresh: n.refresh + 1 }));
   useEffect(() => {
-    if (state.open) { setScope("all"); setSource(state.target === "definition-history" ? "Definition review" : ""); setSearch(""); setProblems(false); setArea(""); latest(); }
-  }, [state.open, state.target, project?.id]);
+    setScope("all"); setSource(state.target === "definition-history" ? "Definition review" : ""); setSearch(""); setProblems(false); setArea(""); latest();
+  }, [state.request, project?.id]);
   const target = state.target === "definition-history" ? undefined : state.target?.replace(/^definition-history:/, "");
   const jobSignature = jobs.map((job) => `${job.id}:${job.status}:${job.finishedAt ?? ""}:${job.definitionWork?.receipts.length ?? ""}:${job.definitionWork?.attempts ?? ""}`).join("|");
   useEffect(() => {
     const controller = new AbortController(); setHistory(null); setError("");
-    if (!state.open || !project || !request || scope === "app" || source && !jobSources.includes(source) || target === "live-progress") { setLoading(false); return; }
+    if (!active || !project || !request || scope === "app" || source && !jobSources.includes(source) || target === "live-progress") { setLoading(false); return; }
     setLoading(true);
     const query = new URLSearchParams({ problems: String(problems), search });
     if (source) query.set("source", source);
@@ -42,9 +46,9 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
     }).catch(() => { if (!controller.signal.aborted) setError("Could not load saved task logs. Reload logs to retry; no AI work is started."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [state.open, project?.id, request, scope, source, area, search, problems, navigation, target, jobSignature]);
-  const saved = useMemo(() => state.open ? projectLogs(jobs, submissions, execution).map((record) => ({ ...record, projectID: record.projectID ?? project?.id })) : [], [state.open, jobs, submissions, execution, project?.id]);
-  if (!state.open) return null;
+  }, [active, project?.id, request, scope, source, area, search, problems, navigation, target, jobSignature]);
+  const saved = useMemo(() => active ? projectLogs(jobs, submissions, execution).map((record) => ({ ...record, projectID: record.projectID ?? project?.id })) : [], [active, jobs, submissions, execution, project?.id]);
+  if (!active) return null;
   const current: LogRecord[] = project ? [{ id: "live-progress", title: "Current processing messages", source: "Live status", projectID: project.id,
     detail: [progress.length ? `Processing messages:\n${progress.join("\n")}` : "No current processing messages.", workflowMessage ? `Coordinated workflow status (separate from definition coverage):\n${workflowMessage}` : "", workspaceDiagnostic].filter(Boolean).join("\n\n") }] : [];
   const records = new Map<string, LogRecord>();
@@ -63,11 +67,10 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
       || (historyOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (historyOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   const sources = [...new Set([...jobSources, ...[...records.values()].map((r) => r.source)])];
   const newestDatedTask = filtered.find((record) => record.projectID && record.source !== "Live status" && record.at && Number.isFinite(Date.parse(record.at)));
-  return <Modal id="logs" titleID="logs-title" title="Logs" close={closeLogs} closeLabel="Close logs" bodyClassName="logs-panel">
-    <p>One timeline for definition reviews, discovery, planning, code checks, delivery and app diagnostics. Saved history loads automatically. Opening logs never starts AI work.</p>
-    <details><summary>Timing, privacy and retention</summary><p>Times show recorded starts, finishes or recorded-event times—not guesses. Older missing timing stays unknown. Saved-step counts can include checks reused from earlier attempts; model request counts describe only this run. Browser-session diagnostics retain up to 250 entries. Logs can contain project text and paths; review before sharing.</p></details>
+  return <section id="logs" aria-labelledby="logs-title" className="logs-panel">
+    <div className="logs-heading"><div><h2 id="logs-title" ref={heading} tabIndex={-1}>Logs</h2><p>Processing runs and app diagnostics. For product changes and decisions, use Activity. Opening logs never starts AI work.</p></div><button type="button" className="quiet" onClick={back}>Back to workspace</button></div>
+    <details><summary>Timing, privacy and retention</summary><p>Tasks are ordered newest first by recorded start or creation time. Filters and older-history pages can hide newer runs. “Current processing messages” is a live snapshot, not the last saved task.</p><p>Times show recorded starts, finishes or recorded-event times—not guesses. Older missing timing stays unknown. Saved-step counts can include checks reused from earlier attempts; model request counts describe only this run. Browser-session diagnostics retain up to 250 entries. Logs can contain project text and paths; review before sharing.</p></details>
     {target && <p role="status">Showing the selected task or diagnostic—not necessarily the latest run. <button type="button" className="secondary" onClick={() => openLogs()}>Show all logs</button></p>}
-    {!target && <p>Tasks are ordered newest first by recorded start or creation time. Filters and older-history pages can hide newer runs. “Current processing messages” is a live snapshot, not the last saved task.</p>}
     {exportDiagnostics && <details><summary>Export discovery diagnostics</summary><p>This bounded metadata-only export excludes original text and credentials. Review it before sharing.</p><DiscoveryDiagnostics jobs={jobs} load={exportDiagnostics} /></details>}
     <details><summary>Export these logs</summary><p>Downloads up to 250 loaded matching records, not the complete history. Common credentials are redacted, but project text, paths and other sensitive information may remain. Review the file before sharing. Export starts no AI work.</p>
       <button type="button" className="secondary" disabled={loading || !filtered.length} onClick={() => {
@@ -96,7 +99,7 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
       {record.summary && <p>{record.summary}</p>}
       <LogDetails record={record} open={record.id === target} />
     </article>}</PagedList>
-  </Modal>;
+  </section>;
 }
 
 function LogDetails({ record, open }: { record: LogRecord; open: boolean }) {

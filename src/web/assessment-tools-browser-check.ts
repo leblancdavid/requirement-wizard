@@ -28,13 +28,12 @@ try {
   page.on("request", (r) => { if (r.url().includes("/definition-mixed-")) { if (r.url().endsWith("-start") || r.url().endsWith("-save") || r.url().endsWith("-apply")) writes++; else reads++; } });
   await page.goto(app.origin); await expect(page.getByRole("region", { name: "Opening workspace", exact: true })).toContainText("Loading your saved project list"); release();
   await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const progress = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const progress = page.getByRole("region", { name: "Project progress", exact: true });
   for (const label of ["Recover missing saved assessments", "Inspect original finding sources", "Review selected definition dimensions (pilot)", "Check mixed original findings (pilot)"]) await expect(progress.getByText(label, { exact: true })).toHaveCount(0);
-  const cards = progress.locator("details.progress-stage > summary"); assert.equal(await cards.count(), 3);
+  const cards = progress.locator(".progress-stages > details.progress-stage > summary"); assert.equal(await cards.count(), 3);
   await expect(cards.first()).toContainText("Definition coverage");
   await page.screenshot({ path: ".reqwizit-state/browser-progress-clean.png", fullPage: true });
-  await progress.getByRole("button", { name: "Close progress", exact: true }).click();
   const tools = await assessmentTools(page); await expect(tools).toContainText("You do not need to select sources or run mixed reviews"); assert.equal(reads, 0); assert.equal(calls, 0);
   const summaries = tools.locator(".assessment-tools-group > details > summary, .assessment-tools-group > section > details > summary");
   await expect(summaries).toHaveCount(5);

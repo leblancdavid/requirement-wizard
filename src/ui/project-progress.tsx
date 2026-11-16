@@ -33,15 +33,15 @@ function LocalCodeProgress({ counts, epic }: { counts: LocalAssessmentCounts; ep
 
 export const ProjectProgress = React.memo(ProjectProgressView);
 export const openAssessmentTools = () => window.dispatchEvent(new Event("reqwizit:assessment-tools"));
-function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, inspectDefinitionImpact, definitionSources, definitionJoint, definitionScope, definitionMixed, disabled, disabledReason, hideTrigger }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; inspectDefinitionImpact?: InspectDefinitionImpact; definitionSources?: DefinitionSourceActions; definitionJoint?: DefinitionJointActions; definitionScope?: DefinitionScopeActions; definitionMixed?: DefinitionMixedActions; disabled?: boolean; disabledReason?: string; hideTrigger?: boolean }) {
-  const [open, setOpen] = useState(false);
+function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, inspectDefinitionImpact, definitionSources, definitionJoint, definitionScope, definitionMixed, disabled, disabledReason, visible, children }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; inspectDefinitionImpact?: InspectDefinitionImpact; definitionSources?: DefinitionSourceActions; definitionJoint?: DefinitionJointActions; definitionScope?: DefinitionScopeActions; definitionMixed?: DefinitionMixedActions; disabled?: boolean; disabledReason?: string; visible: boolean; children?: React.ReactNode }) {
   const [toolsOpen, setToolsOpen] = useState(false);
   useEffect(() => {
-    const show = () => { setOpen(false); setToolsOpen(true); };
+    const show = () => { setToolsOpen(true); };
     window.addEventListener("reqwizit:assessment-tools", show);
     return () => window.removeEventListener("reqwizit:assessment-tools", show);
   }, []);
   const [refreshScope, setRefreshScope] = useState<{ epicID?: string } | null>(null);
+  useEffect(() => { if (!visible) setRefreshScope(null); }, [visible]);
   const confirmationID = useId();
   const confirmationRef = useRef<HTMLDivElement>(null);
   const refreshTrigger = useRef<HTMLButtonElement | null>(null);
@@ -71,7 +71,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
     </div> : null;
   const discovery = jobs.filter((j) => j.epicReviewReport).at(-1);
   const assessment = jobs.filter((j) => j.context?.definitionAssessment).at(-1);
-  const stages = open ? progress.stages.map((stage) => <details className="progress-stage" key={stage.id}>
+  const stages = visible ? progress.stages.map((stage) => <details className="progress-stage" key={stage.id}>
     <summary><span><strong>{stage.title}</strong><small>{stage.status} · {stage.detail}</small></span><strong>{progressLabel(stage)}</strong></summary>
     {(!stage.assessmentState || stage.assessmentState === "current") && <ProgressMeter value={stage.percent} label={`${stage.title} progress`} />}<p>{stage.explanation}</p>
     <ul className="progress-epics">{stage.epics.map((epic) => {
@@ -80,32 +80,30 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
     })}</ul>
   </details>) : null;
   return <>
-    {!hideTrigger && <button className="header-progress progress-trigger" aria-haspopup="dialog" aria-expanded={open} aria-controls="project-progress" onClick={() => setOpen(true)}>
-      <span className="header-progress-label"><span>Overall progress</span><strong>{progress.percent}%</strong></span>
-      <ProgressMeter value={progress.percent} label="Overall progress" />
-       <small>{progress.stages[0]?.assessmentState === "outdated" ? "Saved definition · validity pending" : progress.stages[0]?.assessmentState !== "current" ? "Definition assessment incomplete" : progress.status} · View breakdown ▾</small>
-    </button>}
-    {open && <Modal id="project-progress" className="progress-dialog" titleID="progress-title" title="Project progress" description={<p>{progress.percent}% overall · {progress.status}</p>} close={() => { setOpen(false); setRefreshScope(null); }} closeLabel="Close progress">
-      <p>This estimate combines three equally weighted steps: defining the product, reviewing requirements and adding verified changes to the main project. New features can lower the score. Even 100% is not a guarantee that everything is ready.</p>
-      <details><summary>How the score works</summary><p>Areas not yet checked count as zero; outdated checks keep their previous score until refreshed. Answering questions and finding existing code are shown separately: neither proves that the product is fully defined or that changes have reached the main project.</p></details>
-      {stages}
-      <section className="progress-stage" aria-label="Definition assessment refresh"><h3>How clearly is the product defined?</h3><p>{progress.stages[0]?.detail}. Finding new questions and updating this score are separate steps. Refresh the score to review the latest information across each area.</p>
-        <p>Refresh reviews the latest information using your AI allowance and prepares Design questions where your decisions are needed. Your progress is saved if you pause. It does not change requirements or start coding.</p>
+    {visible && <section className="progress-dialog progress-panel" aria-label="Project progress">
+      <div className="progress-overview"><h2>Project progress <strong>{progress.percent}%</strong></h2><p>{progress.status}</p><ProgressMeter value={progress.percent} label="Overall progress" /></div>
+      <details><summary>How the score works</summary><p>Three equally weighted steps: definition coverage, specification decisions and verified delivery to main. Unchecked areas count as zero; outdated checks retain their saved score until refreshed. New scope can lower the score. Even 100% does not guarantee readiness.</p></details>
+      <div className="progress-stages">{stages}</div>
+      <section className="progress-stage" aria-label="Definition assessment refresh"><h3>Update definition coverage</h3>
+        <p>Review the latest evidence and prepare Design questions using your AI allowance. Current assessments and paused work are reused. This does not change requirements or start coding.</p>
         <div className="progress-actions">
           {refreshDefinition && <button type="button" className="primary progress-action" disabled={disabled} title={disabledReason || "Resume saved work and assess pending areas, using your AI allowance. Current assessments are reused; evidence-blocked areas are reported, not endlessly retried. No specification changes."} aria-expanded={!!refreshScope && !refreshScope.epicID && confirmation.length > 0} aria-controls={refreshScope && !refreshScope.epicID && confirmation.length > 0 ? confirmationID : undefined} onClick={(event) => refresh(event.currentTarget)}>Refresh definition coverage</button>}
-          <button type="button" className="secondary progress-action" onClick={() => { setOpen(false); setRefreshScope(null); openLogs(); }}>View logs</button>
+          <button type="button" className="secondary progress-action" onClick={() => { setRefreshScope(null); openLogs(); }}>View logs</button>
         </div>
         {refreshConfirmation()}
         {assessment && <p role="status">{["pending", "running"].includes(assessment.status) ? "Reviewing how clearly your product is defined…" : assessment.status === "completed" ? "The latest definition review is saved." : "The latest definition review paused before finishing. Your completed work is saved."}<LogLink target={assessment.id} /></p>}
       </section>
-      <section className="progress-stage" aria-label="Discovery review status"><h3>Finding missing decisions</h3><p>No new questions does not necessarily mean everything is defined. Some parts may still be waiting for review or need attention. These results describe the last review, not a continuous check of the whole project.</p>{discovery ? <GapExplorationStatus job={discovery} project={project} /> : <p>No review for missing decisions has been saved yet.</p>}</section>
-      <section className="progress-stage" aria-label="Questions answered"><h3>Questions answered</h3><strong>{progress.questions.answered} / {progress.questions.total} ({progress.questions.percent}%)</strong><ProgressMeter value={progress.questions.percent} label="Questions answered" /><p>Saved answers in active areas, excluding retired questions. Deferred and delegated questions remain unanswered. More questions may emerge as scope develops.</p></section>
+      <h3>Supporting indicators</h3><p>Exploration, answers and local code are tracked separately; they do not establish completeness or verified delivery.</p>
+      {children}
+      <details className="progress-stage" aria-label="Discovery review status"><summary>Last discovery review</summary><p>Saved results describe the last review, not a continuous completeness check. No new questions does not mean no gaps remain.</p>{discovery ? <GapExplorationStatus job={discovery} project={project} /> : <p>No review for missing decisions has been saved yet.</p>}</details>
+      <div className="progress-indicators"><section className="progress-stage" aria-label="Questions answered"><h3>Questions answered</h3><strong>{progress.questions.answered} / {progress.questions.total} ({progress.questions.percent}%)</strong><ProgressMeter value={progress.questions.percent} label="Questions answered" /><p>Saved answers in active areas, excluding retired questions. Deferred and delegated questions remain unanswered. More questions may emerge as scope develops.</p></section>
       {progress.stages[2]?.localAssessment && <section className="progress-stage" aria-label="Local implementation"><h3>Local implementation</h3><LocalCodeProgress counts={progress.stages[2].localAssessment} /><p>Current saved assessments of approved requirements. Unknown, not assessed, and outdated results do not mean code is missing. Local completeness does not establish verified delivery to main.</p></section>}
+      </div>
       <p>Definition scope confidence: {definition.scopeConfidence}. {definition.scopeExplanation}{definition.pendingReviews > 0 ? ` ${definition.pendingReviews} organization changes awaiting review.` : ""}</p>
-    </Modal>}
+    </section>}
     {toolsOpen && <Modal className="progress-dialog assessment-tools-dialog" titleID="assessment-tools-title" title="Advanced assessment tools" close={() => setToolsOpen(false)} closeLabel="Close assessment tools"
       description={<p>Optional history, recovery and experimental review tools. Not required for normal project progress.</p>}>
-      <p>For everyday use, return to the workspace and use <strong>Refresh definition coverage</strong> in Overall progress. You do not need to select sources or run mixed reviews.</p>
+      <p>For everyday use, return to the Progress tab and use <strong>Refresh definition coverage</strong>. You do not need to select sources or run mixed reviews.</p>
       <section className="assessment-tools-group" aria-label="Assessment history and recovery"><h3>History and recovery</h3>
         {assessmentHistory && <AssessmentHistory project={project} actions={assessmentHistory} disabled={disabled} />}
         {inspectDefinitionImpact && <DefinitionImpactInspector project={project} inspect={inspectDefinitionImpact} />}

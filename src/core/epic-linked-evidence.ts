@@ -13,17 +13,25 @@ type Support = NonNullable<EpicStages["linkedEvidence"]>[number];
 /** Follow only explicit question/answer relationships, not a transitive requirement
  * closure. Historical answers keep their question and its declared current answer. */
 export function questionAnswerUnitIDs(project: Project, included: Iterable<string>): string[] {
-  const ids = new Set(included), sources = new Map(project.sources.map(source => [source.id, source]));
+  return questionAnswerUnitIndex(project)(included);
+}
+
+/** One immutable planning invocation can expand many packing probes. */
+export function questionAnswerUnitIndex(project: Project) {
+  const sources = new Map(project.sources.map(source => [source.id, source]));
   const questions = new Map(project.questions.map(question => [question.id, question]));
-  const pending = [...ids];
-  for (let index = 0; index < pending.length; index++) {
-    const id = pending[index]!, source = sources.get(id), question = questions.get(id);
-    const linked = source?.questionID && ["answer", "delegation", "deferral"].includes(source.kind) ? source.questionID : question?.sourceID;
-    if (!linked || ids.has(linked)) continue;
-    if (!sources.has(linked) && !questions.has(linked)) throw new Error("Linked question/answer evidence is missing. Saved progress was not discarded.");
-    ids.add(linked); pending.push(linked);
-  }
-  return [...ids];
+  return (included: Iterable<string>): string[] => {
+    const ids = new Set(included);
+    const pending = [...ids];
+    for (let index = 0; index < pending.length; index++) {
+      const id = pending[index]!, source = sources.get(id), question = questions.get(id);
+      const linked = source?.questionID && ["answer", "delegation", "deferral"].includes(source.kind) ? source.questionID : question?.sourceID;
+      if (!linked || ids.has(linked)) continue;
+      if (!sources.has(linked) && !questions.has(linked)) throw new Error("Linked question/answer evidence is missing. Saved progress was not discarded.");
+      ids.add(linked); pending.push(linked);
+    }
+    return [...ids];
+  };
 }
 
 /** Existing proposals are duplicate-check material, not confirmed preferences. */

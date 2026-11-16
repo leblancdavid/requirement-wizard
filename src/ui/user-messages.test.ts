@@ -13,6 +13,9 @@ test("known connection and validation issues give practical guidance", () => {
   assert.match(issueSummary("Invalid request fields."), /Check what you entered/);
   assert.match(issueSummary("Invalid local app session. Reload this app's page."), /Reload/);
   assert.match(issueSummary("Project changed. Refresh it before retrying; no newer decisions were overwritten."), /Review the latest information/);
+  assert.match(issueSummary("Transport: fetch failed"), /older log does not show whether a prompt was accepted/);
+  assert.match(issueSummary("OpenCode connection failed during model request. The prompt may have been accepted."), /remaining request allowance/);
+  assert.doesNotMatch(issueSummary("Transport: fetch failed"), /safe to retry|saved successfully/i);
 });
 
 test("unknown and historical diagnostics never imply saved work or a safe retry", () => {

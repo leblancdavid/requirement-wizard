@@ -186,8 +186,8 @@ try {
   assert.deepEqual(store.getJob(blocked.id), blocked); assert.deepEqual(errors, []);
   await page.getByRole("button", { name: "Close processing queue" }).click();
   await page.setViewportSize({ width: 1280, height: 960 });
-  await page.locator(".progress-trigger").click();
-  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const overview = page.getByRole("region", { name: "Project progress", exact: true });
   await expect(overview.getByRole("region", { name: "Discovery review status", exact: true })).toContainText("Discovery is incomplete");
   await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("separate steps");
   const refreshCoverage = overview.getByRole("button", { name: "Refresh definition coverage", exact: true });
@@ -211,7 +211,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-progress.png"), fullPage: true });
-  await page.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await page.reload(); assert.equal(assessmentCalls, 3, "Reload cannot start assessment inference");
   let targetProject = store.create("Epic question target browser", "Inspect independent order workflows", { providerID: "openai", modelID: "fixture" });
   targetProject = store.organize(targetProject.id, targetProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Independent workflows", dependencies: [] }]);
@@ -362,7 +362,7 @@ try {
   const initial = store.beginJob(large.id, large.revision).job; store.claimJob(initial.id, Date.now() + 60000);
   store.finishJob(initial.id, { ...empty(), requirements: [{ epicID: "runtime", statement: "Preserve startup compatibility", rationale: "Human constraints", acceptance: ["Startup honors saved decisions"], sourceIDs: large.sources.map((s) => s.id) }] }); large = store.get(large.id);
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Large definition browser/ }).click();
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary").click();
   const refreshRuntime = overview.getByRole("button", { name: "Refresh definition: Runtime startup and build compatibility", exact: true });
   assert.equal(await refreshRuntime.evaluate((button) => getComputedStyle(button).borderTopStyle), "solid", "Area refresh must also look like a button");
@@ -378,9 +378,9 @@ try {
   await expect(batchProgress).toContainText("rules that apply to the whole project");
   assert.equal(largeAssessmentCalls, 2, "Inspecting assessment evidence never starts a request");
   assert.deepEqual(store.get(large.id).assessments, []);
-  await page.reload(); await page.locator(".progress-trigger").click();
+  await page.reload(); await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await expect(batchProgress).toContainText("1 of"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
-  await page.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(large.id).at(-1)!.status).toBe("cancelled");
   const stoppedAssessment = structuredClone(store.jobs(large.id).at(-1)!);
@@ -399,7 +399,7 @@ try {
   assert.equal(resumedAssessment.definitionWork!.receipts[1]!.attempts, 2);
   assert.deepEqual(store.getJob(stoppedAssessment.id), stoppedAssessment);
   await page.getByRole("button", { name: "Close processing queue", exact: true }).click();
-  await page.locator(".progress-trigger").click();
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   await expect(batchProgress).toContainText("The review is finished");
   await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 awaiting change review · 1 not assessed");
   await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");

@@ -18,9 +18,14 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 /** Keep small checkpoints byte-identical. Large checkpoints use independently
  * bounded JSON parts, not a giant string concatenated again during import. */
 export function stageContinuation(directory: string, value: Continuation, partLimit = 8 * 1024 * 1024,
-  singleLimit = portableArtifactLimit): StagedContinuation {
-  try { return stageJSON(directory, value, singleLimit); }
-  catch (error) { if (!(error instanceof Error) || !error.message.startsWith("Portable artifact exceeds")) throw error; }
+  singleLimit = portableArtifactLimit, transfer = false): StagedContinuation {
+  // Publication-private graphs may be consumed. Stage them directly as existing
+  // format-2 parts, avoiding the doomed whole-file pass and releasing each batch
+  // before walking the rest. Never use this for caller/store-owned evidence.
+  if (!transfer) {
+    try { return stageJSON(directory, value, singleLimit); }
+    catch (error) { if (!(error instanceof Error) || !error.message.startsWith("Portable artifact exceeds")) throw error; }
+  }
   if (partLimit < 128 || partLimit > portableArtifactLimit) throw new Error("Invalid continuation part bound.");
   const parts: Record<string, StagedArtifact> = {}, descriptors: z.infer<typeof partSchema>[] = [];
   const counts = { jobs: 0, submissions: 0, snapshots: 0, objects: 0 };
@@ -48,7 +53,8 @@ export function stageContinuation(directory: string, value: Continuation, partLi
           for (let at = chunk.indexOf("\n"); at !== -1; at = chunk.indexOf("\n", at + 1)) indentation += 4;
         });
         if (entries.length && size + recordBytes + indentation > partLimit) flush();
-        entries.push([key, item]); size += recordBytes + indentation + 8; counts[field]++;
+         entries.push([key, item]); size += recordBytes + indentation + 8; counts[field]++;
+         if (transfer) delete (value[field] as unknown as Record<string, unknown>)[key];
         if (size >= partLimit) flush();
       }
       flush();

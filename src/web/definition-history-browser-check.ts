@@ -42,7 +42,7 @@ try {
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Definition history fixture", exact: true }).click();
   await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
-  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const logs = page.getByRole("region", { name: "Logs", exact: true });
   await expect(logs.getByText("Loading saved task logs…", { exact: true })).toHaveCount(0);
   await expect(logs).toContainText("Definition review"); await expect(logs).toContainText("Project review");
   await expect(logs.getByRole("status").filter({ hasText: "Most recent dated task in this view" })).toContainText(discovery.id);
@@ -93,7 +93,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-history-mobile.png", fullPage: true });
-  await page.keyboard.press("Escape"); await expect(logs).toHaveCount(0);
+  await logs.getByRole("button", { name: "Back to workspace", exact: true }).click(); await expect(logs).toHaveCount(0);
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   await expect(logs).toContainText("Definition review");
   assert.equal(calls, 0); assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.jobs(p.id), jobs); assert.deepEqual(errors, []);

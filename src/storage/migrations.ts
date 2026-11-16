@@ -32,7 +32,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 81;
+export const databaseSchemaVersion = 83;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -440,6 +440,10 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE INDEX IF NOT EXISTS organization_jobs_by_feature ON jobs(project_id,
     json_extract(payload, '$.context.focusEpicID'), json_extract(payload, '$.organizationCheck.inputKey'))
     WHERE json_extract(payload, '$.kind') = 'organization-check'`);
+} }, { version: 82, name: "target-first-discovery-evidence", apply() {
+  // Reader capability only. Preserve paid layouts/receipts and all allowances.
+} }, { version: 83, name: "checked-submission-citation-recovery", apply() {
+  // Reader capability only; never rewrite original paid receipts or start work.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -505,6 +509,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       WHERE json_type(payload, '$.retrievalWork.epicStages.collectionBaseline') IS NOT NULL`).iterate() as Iterable<{ baseline: string | null }>) {
       if (!row.baseline) throw new Error("Unsupported incremental collection provenance. Saved work was not overwritten.");
       epicCollectionBaselineSchema.parse(JSON.parse(row.baseline));
+    }
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.draftRepair') AS BLOB)) <= 524288
+      THEN json_extract(payload, '$.submissionWork.draftRepair') END AS repair FROM jobs
+      WHERE json_type(payload, '$.submissionWork.draftRepair') IS NOT NULL`).iterate() as Iterable<{ repair: string | null }>) {
+      if (!row.repair) throw new Error("Unsupported saved-response correction checkpoint. Saved work was not overwritten.");
+      submissionWorkSchema.shape.draftRepair.unwrap().parse(JSON.parse(row.repair));
     }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.verification') AS BLOB)) <= 4194304
       THEN json_extract(payload, '$.submissionWork.verification') END AS verification FROM jobs

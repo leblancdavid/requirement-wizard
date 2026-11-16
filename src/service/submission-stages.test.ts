@@ -21,6 +21,114 @@ import Database from "better-sqlite3";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence } from "../core/submission-stages.js";
 import { packSubmissionVerification, submissionDispatchSchema, submissionLookupInventory, SubmissionLookupError } from "../core/submission-stages.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
+import { submissionCitationRepair } from "../core/submission-stages.js";
+
+test("saved-response source-type errors stop at the producing read, before any paid verification", async () => {
+  const f = fixture(":memory:", "answer");
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), work = planSubmissionStages(m);
+    const context = submissionStageContext(m, work, empty()), prompt = discoveryPrompt(f.project, context);
+    const schema = JSON.parse(prompt.split("Stage response schema: ")[1]!.split("\nWorking evidence batch:")[0]!);
+    const allowed = schema.anyOf[0].properties.requirements.items.properties.sourceIDs.items.enum as string[];
+    assert.ok(allowed.includes(f.item.appliedSourceID!));
+    assert.ok(!allowed.includes(f.project.questions[0]!.id)); assert.ok(!allowed.includes(f.project.requirements[0]!.id));
+    const bad = { ...empty(), requirements: [{ epicID: "inbox", statement: "Retain a local report copy", rationale: "Offline behavior",
+      acceptance: ["A report remains available offline"], sourceIDs: [f.project.questions[0]!.id] }] };
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let calls = 0;
+    await assert.rejects(runSubmissionStages(f.store, { async analyze() { calls++; return bad; } }, f.project, job, f.item, f.task,
+      { research: false, signal: new AbortController().signal }), /missing source/);
+    assert.equal(calls, 1); const saved = f.store.getJob(job.id);
+    assert.equal(saved.submissionWork!.attempts, 1); assert.equal(saved.submissionWork!.receipts.length, 0);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+  } finally { f.store.close(); }
+});
+
+test("legacy fully checked invalid citations recover once without replaying paid reads; correction survives upgrade/reopen and portable adoption", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-citation-repair-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "answer", false, 19, true); let store = f.store;
+  try {
+    const p = f.project, m = submissionMaterials(p, f.item, f.task), work = planSubmissionStages(m);
+    const bad: Analysis = { ...empty(), requirements: [{ epicID: "inbox", statement: "Retain a local report copy", rationale: "Offline behavior",
+      acceptance: ["A report remains available offline"], sourceIDs: [p.questions[0]!.id] }] };
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, work).draft;
+    while (submissionStep(work) < submissionTotalSteps(work)) {
+      const context = submissionStageContext(m, work, draft), response = context.manifest.submissionStage!.phase === "check"
+        ? { submissionCheck: { valid: true, reason: "Legacy positive verdict" } } : submissionStep(work) === 0 ? bad : { submissionKeep: true as const };
+      // Exact older acceptance contract: the loaded question was wrongly accepted
+      // as a requirement source. Keep all historical contexts and verdicts intact.
+      work.receipts.push({ step: submissionStep(work), attempt: 1, contextKey: createHash("sha256").update(JSON.stringify(context.data)).digest("hex"),
+        atRevision: p.revision, jobID: old.id, model: old.model, response });
+      draft = replaySubmissionStages(m, work).draft;
+    }
+    const manifest = submissionStageContext(m, { ...work, receipts: work.receipts.slice(0, -1) }, draft).manifest;
+    manifest.includedIDs = m.evidenceIDs;
+    store.checkpointSubmission(old.id, work, manifest);
+    assert.throws(() => store.finishJob(old.id, bad), /missing source/);
+    store.failJob(old.id, "failed", "Requirement cites a question, not its source");
+    const original = store.getJob(old.id), repair = submissionCitationRepair(m, work, original)!;
+    assert.ok(repair); assert.equal(repair.policy, "invalid-requirement-evidence-v1");
+    assert.equal(submissionCitationRepair(m, { ...work, attempts: 1 }, original), undefined);
+    assert.equal(submissionCitationRepair(m, work, { ...original, status: "completed" }), undefined);
+    assert.throws(() => store.assertSubmissionDraftRepair(p, f.item, { ...work,
+      draftRepair: { ...repair, conclusion: "A forged error is not original evidence" } }), /unchanged original/);
+    const next = store.beginJob(p.id, p.revision).job; store.claimJob(next.id, Date.now() + 60000);
+    let corrections = 0;
+    const paused = await runSubmissionStages(store, { async analyze(_p, { context }) {
+      corrections++; assert.equal(context.manifest.submissionStage!.phase, "read");
+      return { ...bad, requirements: bad.requirements.map(r => ({ ...r, sourceIDs: [f.item.appliedSourceID!] })) };
+    } }, p, next, f.item, f.task, { research: false, signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted"); assert.equal(corrections, 1);
+    assert.deepEqual(paused.submissionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    const wire = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), rev => store.get(p.id, rev)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 54);
+    assert.deepEqual(decodePortable(wire, p.model).continuation.jobs.find(j => j.id === paused.id)!.submissionWork, paused.submissionWork);
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 53 }) }, p.model), /format 54/);
+    const folder = join(directory, "portable"); mkdirSync(folder); store.connectWorkspace(p.id, p.revision, folder);
+    const clone = new ProjectStore(":memory:");
+    try {
+      const imported = clone.openWorkspace(folder, p.model);
+      assert.deepEqual(clone.getJob(paused.id).submissionWork, paused.submissionWork);
+      const importedItem = clone.submissions(imported.id).find(s => s.id === f.item.id)!;
+      clone.assertSubmissionDraftRepair(imported, importedItem, clone.getJob(paused.id).submissionWork!);
+      let malformedCalls = 0;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const failed = clone.beginJob(imported.id, imported.revision).job; clone.claimJob(failed.id, Date.now() + 60000);
+        await assert.rejects(runSubmissionStages(clone, { async analyze() { malformedCalls++; return { submissionKeep: true }; } },
+          imported, failed, importedItem, f.task, { research: false, signal: new AbortController().signal }),
+          attempt < 4 ? /verification cannot rewrite/ : /finite request allowance/);
+        clone.failJob(failed.id, "failed", "Retain the charged corrective check");
+      }
+      assert.equal(malformedCalls, 4, "Repeated Continue cannot renew the correction/check allowance");
+      assert.deepEqual(clone.get(imported.id), imported, "Failed correction checks publish no changes");
+    } finally { clone.close(); }
+    store.close();
+    const db = new Database(file), future = structuredClone(paused);
+    (future.submissionWork!.draftRepair as { policy: string }).policy = "future-citation-recovery";
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
+    db.exec("DELETE FROM migration_history WHERE version >= 83; PRAGMA user_version=82"); db.close();
+    assert.throws(() => new ProjectStore(file));
+    const recover = new Database(file);
+    assert.equal(recover.pragma("user_version", { simple: true }), 82);
+    assert.equal((recover.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload, JSON.stringify(future));
+    recover.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(paused), paused.id); recover.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(old.id), original); store.close(); }
+    store = new ProjectStore(file); let checks = 0;
+    const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      checks++; assert.equal(context.manifest.submissionStage!.phase, "check");
+      return { submissionCheck: { valid: true, reason: "Corrected frozen draft matches exact evidence" } };
+    } }));
+    try { queue.resume(p.id, { processOnly: true, research: false, submissionIDs: [f.item.id] }); await queue.wait(p.id); }
+    finally { await queue.close(); }
+    const done = store.jobs(p.id).at(-1)!;
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(checks, work.batches.length);
+    assert.equal(store.get(p.id).requirements.at(-1)!.sourceIDs.includes(f.item.appliedSourceID!), true);
+    assert.deepEqual(store.getJob(old.id), original);
+    console.log(JSON.stringify({ fixtureOnly: true, retainedOriginalSteps: work.receipts.length, repeatedOriginalReads: 0, corrections, freshChecks: checks }));
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 for (const outcome of ["valid", "rejected", "cancelled", "malformed", "exhausted", "publication-failure"] as const) test(`completed saved review checks omitted linked support without repeating paid work: ${outcome}`, async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
@@ -929,7 +1037,7 @@ function decodeWire(input: unknown) {
   };
   return decode(input);
 }
-function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation" = "review", splitSupport = false, notes = 19) {
+function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation" = "review", splitSupport = false, notes = 19, broad = false) {
   const store = new ProjectStore(file);
   let p = store.create("Large saved review", "Save reports", { providerID: "openai", modelID: "fixture" });
   if (splitSupport) for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
@@ -942,7 +1050,7 @@ function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation"
   if (mode !== "review") {
     const questions = store.beginJob(p.id, p.revision).job; store.claimJob(questions.id, Date.now() + 60000);
     store.finishJob(questions.id, { ...empty(), questions: [{ text: "Should this report save offline?", whyItMatters: "Clarify the target behavior", epicID: "inbox",
-      evidenceIDs: [mode === "reconciliation" ? p.sources[0]!.id : p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the report without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] });
+      evidenceIDs: [mode === "reconciliation" || broad ? p.sources[0]!.id : p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the report without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] });
     p = store.get(p.id);
   }
   if (!splitSupport) for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");

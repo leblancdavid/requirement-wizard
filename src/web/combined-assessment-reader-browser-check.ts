@@ -55,8 +55,8 @@ const browser = await chromium.launch(); let diagnose: ReturnType<typeof browser
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const dialog = page.getByRole("region", { name: "Project progress", exact: true });
   await dialog.getByText("Definition coverage", { exact: true }).click();
   const assessment = dialog.locator(".definition-assessment"); await assessment.getByText("See what is defined and what needs attention", { exact: true }).click();
   await expect(assessment).toContainText(`Combined assessment wrapper: version ${p.revision}`);
@@ -71,7 +71,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 }); await first.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-combined-assessment-reader-mobile.png", fullPage: true });
-  await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
+  await page.reload();
   assert.deepEqual(store.get(p.id).assessments, before.assessments); assert.equal(calls, 0);
   console.log("Combined assessment reader browser passed using a curated fixture only: original dates versus wrapper, conservative broader freshness, reload/mobile and zero new model calls. This runner does not qualify publication.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-combined-assessment-reader-failure"); throw error; }

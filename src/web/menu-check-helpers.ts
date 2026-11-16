@@ -30,7 +30,7 @@ export async function assessmentTools(page: Page) {
 /** Explicit opt-in navigation for tests of retained technical controls. Never
  * install global UI handlers that reopen old screens during ordinary tests. */
 export async function technicalProcessing(page: Page) {
-  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const logs = page.getByRole("region", { name: "Logs", exact: true });
   if (!await logs.isVisible()) await (await applicationMenu(page)).getByRole("button", { name: "Logs", exact: true }).click();
   const details = logs.locator("details").filter({ has: page.locator(":scope > summary", { hasText: /^Technical processing controls and retained preferences$/ }) });
   if (!await details.evaluate(element => (element as HTMLDetailsElement).open)) await details.locator(":scope > summary").click();
@@ -46,8 +46,8 @@ export async function processingQueue(page: Page) {
 export async function closeTechnicalViews(page: Page) {
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   if (await queue.isVisible()) await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
-  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
-  if (await logs.isVisible()) await logs.getByRole("button", { name: "Close logs", exact: true }).click();
+  const logs = page.getByRole("region", { name: "Logs", exact: true });
+  if (await logs.isVisible()) await logs.getByRole("button", { name: "Back to workspace", exact: true }).click();
 }
 
 export async function automaticInputs(page: Page, value?: boolean) {

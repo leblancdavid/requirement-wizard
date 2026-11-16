@@ -653,7 +653,7 @@ export class DiscoveryQueue {
       : { ...options, gapMode: "epic" });
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; collectQuestionBatch?: boolean; processOnly?: boolean; submissionIDs?: string[] } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; collectQuestionBatch?: boolean; processOnly?: boolean; submissionIDs?: string[]; revisitJobID?: string } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -695,6 +695,7 @@ export class DiscoveryQueue {
         if (options.questionTarget !== undefined) await this.findQuestions(id, options, controller.signal, report);
         else {
           const job = await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
+            revisitJobID: options.revisitJobID, ...(options.revisitJobID ? { candidateFirst: true } : {}),
             signal: controller.signal, onProgress: report });
           if (job.status === "completed") await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
         }
@@ -777,7 +778,7 @@ export class DiscoveryQueue {
     }
   }
 
-  private async findQuestions(id: string, options: { questionTarget?: number; collectQuestionBatch?: boolean; focusEpicID?: string; research?: boolean; gapMode?: "epic"; savedEvidencePolicy?: SavedEvidencePolicy }, signal: AbortSignal, report: (message: string) => void) {
+  private async findQuestions(id: string, options: { questionTarget?: number; collectQuestionBatch?: boolean; focusEpicID?: string; research?: boolean; gapMode?: "epic"; savedEvidencePolicy?: SavedEvidencePolicy; revisitJobID?: string }, signal: AbortSignal, report: (message: string) => void) {
     const target = options.questionTarget!;
     const batchSignal = AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]);
     const waitingInput = () => {
@@ -796,7 +797,7 @@ export class DiscoveryQueue {
         && (!options.collectQuestionBatch || !options.focusEpicID || q.epicID === options.focusEpicID)).length;
       if (pending >= target) { report(`Question target reached: ${pending} pending (target ${target}). All questions from the last package were kept.`); return; }
       report(`Finding gaps · ${pending} pending / target ${target} · package ${index + 1} of at most 10. The target is not a quota or hard cap.`);
-      const job = await this.service.analyze(id, project.revision, { ...options, candidateFirst: !!options.collectQuestionBatch && !options.research, signal: batchSignal, onProgress: report });
+      const job = await this.service.analyze(id, project.revision, { ...options, candidateFirst: (!!options.collectQuestionBatch || !!options.revisitJobID) && !options.research, signal: batchSignal, onProgress: report });
       if (options.collectQuestionBatch && job.status === "interrupted" && !batchSignal.aborted
         && job.retrievalWork?.stagedRun?.paused && job.retrievalWork.epicStages
         && job.retrievalWork.attempts === 0 && this.service.store.projectRevision(id) === job.expectedRevision) {

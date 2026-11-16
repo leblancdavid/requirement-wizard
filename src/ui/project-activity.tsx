@@ -67,7 +67,8 @@ export function ProjectActivityFeed({ projectID, feature, updateToken, request, 
         {!!entry.features.length && <small>{entry.features.map((f) => f.title).join(" · ")}</small>}
         <LazyDetails summary="View changes & details">{() => <>
           <p><small>{entry.at ? `${entry.atLabel ?? "Started"} ${new Date(entry.at).toLocaleString()}` : "Date not recorded"}</small></p>
-          <LogLink detail={`${entry.title}\n${entry.summary}\n${entry.reason}\nSpecification revision: ${entry.revision ?? "not recorded"}`} title="Activity record" projectID={projectID} />
+          <p>{entry.reason}{entry.revision !== undefined ? ` · Specification revision ${entry.revision}` : ""}</p>
+          {/^(job|submission|execution|assessment):/.test(entry.id) && <LogLink target={entry.id.split(":")[1]} projectID={projectID} />}
           {entry.features.filter((f) => activeFeatureIDs.includes(f.id)).map((f) => <button key={f.id} className="quiet" onClick={() => openFeature(f.id)}>View current feature: {f.title} →</button>)}
           {entry.changes.filter((change) => change.label === "requirement").map((change) => openRequirement && <button key={change.id} type="button" className="secondary" onClick={() => openRequirement(change.id)}>View current requirement · {change.id}</button>)}
           {entry.changes.map((change, index) => <LazyDetails key={`${change.id}:${index}`} summary={<>{change.label} · {change.id}</>}>{() => <div className="activity-comparison">{change.before !== undefined && <section><h4>Before</h4><p className="source-excerpt">{change.before}</p></section>}{change.after !== undefined && <section><h4>{change.before === undefined ? "Added / recorded" : "After"}</h4><p className="source-excerpt">{change.after}</p></section>}{change.after === undefined && <p>Removed from this revision.</p>}</div>}</LazyDetails>)}

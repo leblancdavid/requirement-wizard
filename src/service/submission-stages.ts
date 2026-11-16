@@ -7,6 +7,7 @@ import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
 import { packSubmissionVerification, SubmissionLookupError } from "../core/submission-stages.js";
+import { submissionCitationRepair } from "../core/submission-stages.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -45,6 +46,14 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
     }
   }
   if (!priorRecovery && w.permissionRecovery) options.onProgress?.("Recovered an older staged revision-permission blocker. Original input, completed steps and spent attempts remain saved; continuing the unfinished read with exact supporting evidence.");
+  if (previous && !w.draftRepair) {
+    const repair = local("validation", () => submissionCitationRepair(m, w, previous));
+    if (repair) {
+      w.draftRepair = repair;
+      ({ draft, blocked } = local("replay", () => replaySubmissionStages(m, w)));
+      options.onProgress?.("Correcting invalid requirement citations in the retained checked draft. Original reads, checks and paid attempts remain saved. One bounded correction must pass every original evidence check; nothing publishes automatically.");
+    }
+  }
   local("validation", () => store.assertSubmissionDraftRepair(project, item, w));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;

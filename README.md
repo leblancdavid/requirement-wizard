@@ -16,6 +16,36 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Idle discovery servers pass health admission before reuse; unhealthy owned servers
+can be replaced before prompting, never by silently retrying failed prompts. Logs
+distinguish finished no-question screens from genuine evidence failures. Saved
+decisions, paid work and allowances are unchanged. See [recovery and limits](docs/migrations.md#owned-server-admission-and-empty-screen-outcomes-2026-11-15).
+
+Saved-response citation errors are caught before verification; explicitly continuing
+an unchanged, fully checked legacy failure can correct its citations without
+repeating original reads. Corrected drafts still require every evidence check.
+Compact historical-policy identities reduce repeated local planning. See
+[compatibility and diagnostics](docs/migrations.md#saved-response-source-citations-and-compact-planning-identities-2026-11-15).
+
+Processing optimizations now prioritize saved target decisions in new candidate
+screens, avoid duplicate decision-unit packing, reuse bounded owned OpenCode
+startups and progressively release large continuation graphs while staging.
+Existing paid work is preserved. These deterministic improvements do not yet prove
+real-project latency/yield or resolution of the production save-memory failure.
+See [compatibility and verification](docs/migrations.md#processing-efficiency-and-progressive-continuation-staging-2026-11-15).
+
+The **Progress (N%)** tab consolidates the overall breakdown and refresh controls,
+replacing the header progress dialog. It separates **Discovery explored** from **Definition coverage**,
+with per-feature/target exploration states, unchanged no-question scope suppression
+and explicitly confirmed **Explore again**. Older paid work is projected without a
+reset or reassessment. Bounded screening does not prove completeness. See
+[exploration progress](docs/browser-workspace.md#exploration-status-and-project-progress-2026-11-15).
+
+**Activity & logs** groups readable project history and technical logs into two
+views, replacing the Logs dialog. Existing log links select the relevant task;
+app diagnostics remain available without a project. See
+[Activity & logs](docs/browser-workspace.md#activity--logs-workspace-2026-11-15).
+
 Saved-response evidence lookups now use exact missing-record schemas and bounded
 protocol correction within the original allowance. Verification schemas are smaller,
 and portable publication releases staged history before rendering other artifacts.

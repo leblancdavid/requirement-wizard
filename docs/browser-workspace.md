@@ -1,5 +1,116 @@
 # Browser workspace, epics, and estimated completeness
 
+## Activity & logs workspace (2026-11-15)
+
+The **Activity & logs** main tab has two views:
+
+- **Activity** shows saved product changes, decisions and outcomes. Its existing
+  **Changes & outcomes** / **Research sources** filters retain research history.
+- **Logs** shows processing runs and app diagnostics, with search, source/area/
+  problem filters, older-task paging, timing, redacted details/copy and exports.
+  Optional technical processing/recovery controls remain collapsed here.
+
+Logs is an inline page, not a dialog: it does not lock scrolling, trap keyboard
+focus or close on Escape. **View logs** links select the corresponding task and
+focus the Logs heading. **Back to workspace** restores the previous workspace
+view; its drafts and expanded sections remain mounted while viewing logs.
+Switching to another main tab or Activity leaves Logs. The application menu's
+**Logs** shortcut also works without an active project and during project setup;
+Activity is disabled in that case. Reload returns to the normal workspace without
+starting AI work.
+
+Task-backed Activity records link to their existing logs rather than creating a
+second diagnostic containing the same summary. Revision reasons and before/after
+changes stay in Activity. Existing archives, log redaction, bounded paging and
+export privacy warnings are unchanged. This is presentation-only; no data reset,
+migration, reassessment or model request is required.
+
+## Connection failures versus empty screens (2026-11-15)
+
+Logs distinguish completed bounded **no questions found** candidate screens from
+supporting-evidence blockers. Empty screens no longer appear under Problems only;
+they do not prove complete scope review or readiness. Original evidence and
+workflow receipts are unchanged.
+
+Idle owned servers pass health admission before reuse. Failed prompts are never
+automatically resubmitted: resume discovery explicitly in Processing & queue,
+within the remaining allowance, without resetting or repeating saved answers.
+New Logs distinguish no prompt sent from possibly accepted prompts; historical
+generic errors cannot establish acceptance. See [preservation and qualification](migrations.md#owned-server-admission-and-empty-screen-outcomes-2026-11-15).
+
+The deterministic check `npx tsx src/web/discovery-outcomes-browser-check.ts` passed
+filtering, reload, mobile layout and unchanged paid records. Build the UI first;
+screenshot: `.reqwizit-state/browser-discovery-outcomes-mobile.png`.
+
+## Processing efficiency (2026-11-15)
+
+Saved-response drafts now reject invalid requirement source citations before
+verification, rather than only at final publication. After updating, explicitly
+continue saved-response processing to recover an unchanged failed legacy draft
+that already passed all checks: one bounded correction keeps the paid reads and
+requires fresh verification of the corrected draft. No citation is guessed or
+silently substituted. Restart/reload does not automatically authorize the work,
+and repeating Continue cannot renew an exhausted correction allowance. See
+[citation recovery and compatibility](migrations.md#saved-response-source-citations-and-compact-planning-identities-2026-11-15).
+
+New bounded candidate screens prioritize saved decisions linked to the target,
+and pack linked question/answer units once instead of repeating their members.
+Every mandatory evidence record remains in the saved read/check inventory; old
+paid schedules keep their original ordering and attempts. Ordinary context packing
+also reuses local indexes and avoids repeatedly hashing the full project.
+
+Successful OpenCode requests can reuse Reqwizit's own server for ten idle seconds,
+but always use fresh sessions and checks. Stop/failure retires that server without
+automatically retrying. Large portable saves progressively release privately staged
+history rather than retaining the full graph through all staging passes. SQLite
+originals and existing file-conflict checks remain intact.
+
+Deterministic examples show fewer batches/preparations and owned startups; actual
+project latency, question yield and the reported production save-memory failure
+still need real-project qualification. See [upgrade and verification details](migrations.md#processing-efficiency-and-progressive-continuation-staging-2026-11-15).
+
+## Exploration status and project progress (2026-11-15)
+
+The **Progress (N%)** workspace tab shows the existing overall completion estimate,
+with three expandable stages: definition coverage, specification decisions and
+verified delivery to main. The former header progress button/dialog is removed.
+Definition refresh controls sit below the stages; supporting indicators group
+discovery exploration, answered questions and local code assessments separately.
+Expand **Exploration status by target** to see per-feature
+summaries, filter statuses and inspect the last recorded exploration date:
+
+- **Not explored** — no completed attempt yet (including work still running).
+- **Questions ready** — the saved exploration produced currently pending questions.
+- **Explored—no questions found** — a current completed exploration attempt yielded
+  no remaining questions. A bounded candidate screen may still leave evidence unread.
+- **Needs another look** — relevant evidence changed, originals are unavailable,
+  or a partial screen never actually detailed this target.
+- **Blocked** — technical/missing-evidence failure or stopped unfinished work.
+
+Discovery progress is the share of currently identified active requirement/note
+targets explored, **not** a percentage of all possible questions, complete feature
+reviews or readiness. Evidence batches and AI calls are not denominator units.
+New targets can lower the percentage. Features without identified workflow targets
+are shown separately; exhaustive dependency-boundary review is not measured here.
+Definition coverage and saved assessment findings are unchanged.
+
+The consolidated panel appears only in Progress, not in Design,
+Specification, Implement, Activity or Settings. Detailed score breakdowns and
+assessment refresh controls are available directly in the tab. This navigation-only
+change does not modify saved data, freshness rules or paid work; no migration is needed.
+
+Unchanged completed no-question scopes are skipped automatically while other
+eligible scopes remain available. Relevant local/global/dependency or detailed
+evidence changes require another look; unrelated omitted feature edits and extra
+jobs alone do not. **Explore again → Confirm explore again** explicitly authorizes
+one bounded pass using your AI plan. It cannot reset failed/unfinished allowances,
+rewrite original paid work or automatically process saved answers. No calls start
+on opening the panel, filtering, reloading or upgrading.
+
+Run `npm run test:browser:exploration` for the deterministic status/consent/reload/
+mobile fixture. Its screenshot is `.reqwizit-state/browser-exploration-mobile.png`.
+See [upgrade and preservation rules](migrations.md#visible-exploration-progress-and-explicit-revisits-2026-11-15).
+
 Saved-response processing now tells the AI exactly which supporting records are
 already present and which can still be requested. One invalid lookup can be
 corrected within the existing authorized request allowance; repeated invalid
@@ -1103,12 +1214,12 @@ widths and exercise keyboard open/close rotation. Electron checks compare actual
 content bounds at normal/maximized/restored sizes and enlarged text; the corrected header and
 accordion screenshots were inspected. No live calls or project-data changes were made.
 
-Overall progress starts with the three consistently styled score breakdowns, followed by
+The Progress tab starts with the three consistently styled score breakdowns, followed by
 the ordinary definition-refresh action and supporting status. Recovery, change inspection,
-original-source inspection and scoped/mixed experiments are no longer embedded in that dialog.
+original-source inspection and scoped/mixed experiments are not embedded in the tab.
 Open **Settings → Project settings → Advanced assessment tools → Open advanced assessment tools**
 for optional history/recovery and separately grouped experiments. These are not normal workflow
-steps; use **Refresh definition coverage** in Overall progress for everyday review. Calculations,
+steps; use **Progress → Refresh definition coverage** for everyday review. Calculations,
 saved work, source verification, AI consent and apply permissions are unchanged.
 
 The mixed experiment explains an empty source page instead of displaying nine empty selectors.
@@ -3682,11 +3793,11 @@ sign-in feedback, reduced motion and mobile sizing.
 
 ## Project progress summary
 
-The top-right **Overall progress** card shows a percentage and status. Click it to
-open **Project progress**, then expand **Questions / Definition**, **Requirements
-review**, or **Implementation** for epic-level percentages, statuses and counts.
+The **Progress (N%)** tab shows the overall percentage. Open it to view
+**Project progress**, then expand **Definition coverage**, **Specification
+decisions**, or **Verified delivery to main** for epic-level percentages, statuses and counts.
 The summary always covers the whole project, independently of the Feature filter.
-Escape or **Close progress** closes the modal and restores focus to the card.
+The breakdown is inline, not a dialog; switch tabs to return to other work.
 
 - **Definition** retains the evidence-gated coverage rubric: equal weight per active
   epic plus project-wide information, excluding an empty inbox. Unknown areas stay

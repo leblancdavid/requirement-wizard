@@ -39,15 +39,14 @@ let app = await start(); const browser = await chromium.launch(); let diagnose: 
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+  const dialog = page.getByRole("region", { name: "Project progress", exact: true });
   const stage = dialog.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) });
   await stage.locator(":scope > summary").click();
   const area = stage.locator(".progress-epics > li").filter({ has: page.getByText("Saved area", { exact: true }) });
   await area.getByText("See what is defined and what needs attention", { exact: true }).click();
   await expect(area).toContainText("This check uses the latest relevant project information");
   await expect(area.getByRole("button", { name: "Refresh definition: Saved area", exact: true })).toHaveCount(0);
-   await dialog.getByRole("button", { name: "Close progress", exact: true }).click();
    const tools = await assessmentTools(page);
    const inspector = tools.getByRole("region", { name: "Definition finding impact", exact: true });
   await inspector.getByText("Inspect changes since a definition review", { exact: true }).click();
@@ -60,8 +59,7 @@ try {
   p = store.note(p.id, p.revision, "A genuinely changed rule", "a");
    await expect(report).toContainText(`Current project version ${p.revision}`);
    await tools.getByRole("button", { name: "Close assessment tools", exact: true }).click();
-   await page.getByRole("button", { name: /Back to workspace/ }).click();
-   await page.getByRole("button", { name: /Overall progress/ }).click(); await stage.locator(":scope > summary").click();
+   await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click(); await stage.locator(":scope > summary").click();
    await expect(area).toContainText("Saved findings are retained");
   await page.setViewportSize({ width: 390, height: 844 }); await area.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
