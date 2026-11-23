@@ -5,7 +5,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { modelSelection, type ModelSelection, type Project } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
-import { renderCombinedSpecification } from "../storage/workspace.js";
+import { canonicalDirectory, managedDirectory, renderCombinedSpecification } from "../storage/workspace.js";
+import { cleanWorkspaceTemps } from "../storage/workspace-temporary.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { safeMessage } from "../runtime/contract.js";
@@ -30,6 +31,7 @@ npm run reqwizit -- review --project <id> --expected-revision <n> --requirement 
 npm run reqwizit -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
 npm run reqwizit -- jobs --project <id>
 npm run reqwizit -- recover
+npm run reqwizit -- cleanup --path "D:\\Projects\\my-app" [--apply] [--json]
 npm run reqwizit -- workspace --project <id> --operation connect --path "D:\\Projects\\my-app" --expected-revision <n> [--create-directory]
 npm run reqwizit -- workspace --project <id> --operation status|sync|disconnect [--expected-revision <n>]
 npm run reqwizit -- implementation --project <id> --expected-revision <n> --requirement <id> --status in-progress --text "Notes" [--evidence "Verification results"]
@@ -37,6 +39,8 @@ npm run reqwizit -- implementation --project <id> --expected-revision <n> --requ
 answer supports --kind answer|delegation|deferral. Delegation text must describe its scope.
 review supports accept|reject. Historical revisions are read-only snapshots.
 export prints a combined Markdown specification, or portable JSON with --json.
+cleanup previews root export temp files older than 24 hours; --apply removes them.
+It does not open the database, start workers, or remove saved project evidence.
 Optional --data-dir <directory> overrides the user-local data location.
 Optional --connection <saved-account-id|opencode> selects the route for new/open/model.
 open restores .reqwizit project state without inference; processing starts paused.
@@ -110,12 +114,20 @@ async function main() {
     research: { type: "boolean" }, "focus-epic": { type: "string" },
     operation: { type: "string" }, path: { type: "string" }, "create-directory": { type: "boolean" },
     status: { type: "string" }, evidence: { type: "string" },
-    "resume-job": { type: "string" },
+    "resume-job": { type: "string" }, apply: { type: "boolean" },
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
-  if (positionals.length !== 1 || !["new", "open", "list", "show", "export", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
+  if (positionals.length !== 1 || !["new", "open", "list", "show", "export", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation", "cleanup"].includes(command!)) {
     throw new Error("Unknown command. See --help.");
+  }
+  if (command === "cleanup") {
+    const directory = managedDirectory(canonicalDirectory(required(values.path, "path")));
+    const result = cleanWorkspaceTemps(directory, { apply: values.apply });
+    if (values.json) console.log(JSON.stringify({ directory, applied: !!values.apply, ...result }, null, 2));
+    else console.log(`${values.apply ? "Removed" : "Would remove"} ${values.apply ? result.removed : result.eligible} temporary files (${((values.apply ? result.removedBytes : result.bytes) / 1024 ** 3).toFixed(2)} GiB logical size). ${result.failed} failures. Recent files and saved artifacts retained.${values.apply ? "" : " Run with --apply to delete."}`);
+    if (result.failed) process.exitCode = 1;
+    return;
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
   const directory = resolve(values["data-dir"] ?? defaultDataDirectory());

@@ -18,12 +18,12 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 /** Keep small checkpoints byte-identical. Large checkpoints use independently
  * bounded JSON parts, not a giant string concatenated again during import. */
 export function stageContinuation(directory: string, value: Continuation, partLimit = 8 * 1024 * 1024,
-  singleLimit = portableArtifactLimit, transfer = false): StagedContinuation {
+  singleLimit = portableArtifactLimit, transfer = false, owner?: string): StagedContinuation {
   // Publication-private graphs may be consumed. Stage them directly as existing
   // format-2 parts, avoiding the doomed whole-file pass and releasing each batch
   // before walking the rest. Never use this for caller/store-owned evidence.
   if (!transfer) {
-    try { return stageJSON(directory, value, singleLimit); }
+    try { return stageJSON(directory, value, singleLimit, owner); }
     catch (error) { if (!(error instanceof Error) || !error.message.startsWith("Portable artifact exceeds")) throw error; }
   }
   if (partLimit < 128 || partLimit > portableArtifactLimit) throw new Error("Invalid continuation part bound.");
@@ -35,7 +35,7 @@ export function stageContinuation(directory: string, value: Continuation, partLi
       let entries: [string, unknown][] = [], size = 128;
       const flush = () => {
         if (!entries.length) return;
-        const staged = stageJSON(directory, { formatVersion: 1, field, entries });
+        const staged = stageJSON(directory, { formatVersion: 1, field, entries }, portableArtifactLimit, owner);
         const path = `continuation/${staged.hash}.json`;
         parts[path] = staged; bytes += staged.bytes;
         if (bytes > portableProjectLimit) throw new Error("Portable project exceeds supported import size bounds. SQLite work is retained; no managed files were replaced.");
@@ -59,7 +59,7 @@ export function stageContinuation(directory: string, value: Continuation, partLi
       }
       flush();
     }
-    const index = stageJSON(directory, indexSchema.parse({ formatVersion: 2, parts: descriptors, counts }));
+    const index = stageJSON(directory, indexSchema.parse({ formatVersion: 2, parts: descriptors, counts }), portableArtifactLimit, owner);
     return { ...index, parts };
   } catch (error) { for (const part of Object.values(parts)) discardStaged(part); throw error; }
 }

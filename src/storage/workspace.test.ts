@@ -3,11 +3,12 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync, symlinkSync, statSync, utimesSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { PublicationObjects } from "./publication-objects.js";
 import { writePrettyJSON, stageJSON, discardStaged } from "./staged-json.js";
+import { cleanWorkspaceTemps, cleanWorkspaceTempsInBackground, startWorkspaceTemporaryCleanup, workspaceTemporaryAge } from "./workspace-temporary.js";
 import { continuationState, decodePortable, portableFiles } from "./portable.js";
 import { emptyExecution } from "../core/execution.js";
 import { publicationFailureClassifier } from "./publication-failure.js";
@@ -20,6 +21,111 @@ import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 const parent = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "private-account" } as const;
+
+test("idle cleanup streams past the publication scan bound and periodically refreshes bindings without overlap", async () => {
+  const directory = mkdtempSync(join(parent, "idle-temp-cleanup-")), other = join(directory, "other"); mkdirSync(other);
+  for (let index = 0; index < 600; index++) writeFileSync(join(directory, `metadata-${index}`), "keep");
+  const old = stageJSON(directory, { old: true }), active = stageJSON(directory, { live: true });
+  utimesSync(old.path, new Date(0), new Date(0));
+  let directories = [join(directory, "missing"), directory];
+  const cleanup = startWorkspaceTemporaryCleanup(() => directories, 10);
+  try {
+    const first = cleanup.sweep(); assert.equal(cleanup.sweep(), first, "An in-flight sweep is coalesced"); await first;
+    assert.equal(existsSync(old.path), false); assert.ok(existsSync(active.path));
+    assert.equal(readFileSync(join(directory, "metadata-599"), "utf8"), "keep");
+    const later = stageJSON(other, { later: true }); utimesSync(later.path, new Date(0), new Date(0));
+    directories = [other];
+    for (let index = 0; index < 100 && existsSync(later.path); index++) await delay(10);
+    assert.equal(existsSync(later.path), false, "Periodic cleanup finds newly connected directories");
+    await cleanup.close();
+    const stopped = stageJSON(other, { retainAfterClose: true }); utimesSync(stopped.path, new Date(0), new Date(0));
+    await cleanup.sweep(); await delay(25); assert.ok(existsSync(stopped.path), "Close stops periodic and explicit sweeps");
+  } finally { await cleanup.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("idle cleanup includes saved and failed bindings without changing publication state or retrying exports", async () => {
+  const f = fixture();
+  try {
+    f.store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    const binding = f.store.workspace(f.project.id)!; binding.status = "unavailable"; binding.diagnostic = "Retained export failure";
+    const db = new Database(f.database);
+    try {
+      db.prepare("UPDATE workspaces SET payload=?, dirty=1 WHERE project_id=?").run(JSON.stringify(binding), f.project.id);
+      const before = db.prepare("SELECT * FROM workspaces").all();
+      const old = stageJSON(join(f.path, workspaceFolder), { orphan: true }); utimesSync(old.path, new Date(0), new Date(0));
+      const cleanup = startWorkspaceTemporaryCleanup(() => f.store.workspaceTemporaryDirectories());
+      try { await cleanup.sweep(); assert.equal(existsSync(old.path), false); }
+      finally { await cleanup.close(); }
+      assert.deepEqual(db.prepare("SELECT * FROM workspaces").all(), before);
+      assert.deepEqual(f.store.get(f.project.id), f.project); assert.deepEqual(f.store.jobs(f.project.id), []);
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("background housekeeping respects cancellation and rejects redirected managed directories", async () => {
+  const directory = mkdtempSync(join(parent, "idle-temp-cancel-")), outside = join(directory, "outside"); mkdirSync(outside);
+  try {
+    const old = stageJSON(outside, { keep: true }); utimesSync(old.path, new Date(0), new Date(0));
+    const controller = new AbortController(); controller.abort();
+    await cleanWorkspaceTempsInBackground(outside, controller.signal); assert.ok(existsSync(old.path));
+    const junction = join(directory, "junction"); symlinkSync(outside, junction, "junction");
+    await assert.rejects(cleanWorkspaceTempsInBackground(junction, new AbortController().signal), /regular managed directory/);
+    assert.ok(existsSync(old.path));
+    const cleanup = startWorkspaceTemporaryCleanup(() => [outside]); await cleanup.close();
+    assert.ok(existsSync(old.path), "Shutdown before the first filesystem await prevents deletion");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stale staging cleanup previews and removes only exact old root temps, preserving recovery evidence", () => {
+  const directory = mkdtempSync(join(parent, "temp-cleanup-")), now = Date.now();
+  try {
+    const old = stageJSON(directory, { old: true }), recent = stageJSON(directory, { active: true });
+    const owned = stageJSON(directory, { crashed: true }, undefined, "11111111-1111-4111-8111-111111111111");
+    for (const path of [old.path, owned.path]) utimesSync(path, new Date(now - workspaceTemporaryAge - 1000), new Date(now - workspaceTemporaryAge - 1000));
+    const protectedFiles = ["manifest.json", "continuation.json", ".reqwizit-not-a-uuid.tmp", "notes.tmp"];
+    for (const name of protectedFiles) { writeFileSync(join(directory, name), "original"); utimesSync(join(directory, name), new Date(0), new Date(0)); }
+    const nested = join(directory, "evidence"); mkdirSync(nested);
+    const nestedTemp = stageJSON(nested, { retained: true }); utimesSync(nestedTemp.path, new Date(0), new Date(0));
+    const fake = join(directory, ".reqwizit-22222222-2222-4222-8222-222222222222.tmp"); mkdirSync(fake);
+    const preview = cleanWorkspaceTemps(directory, { now });
+    assert.equal(preview.eligible, 2); assert.equal(preview.removed, 0);
+    assert.equal(preview.bytes, old.bytes + owned.bytes); assert.ok(existsSync(old.path));
+    const applied = cleanWorkspaceTemps(directory, { now, apply: true });
+    assert.equal(applied.removed, 2); assert.equal(applied.failed, 0); assert.equal(applied.removedBytes, preview.bytes);
+    assert.ok(existsSync(recent.path)); assert.ok(existsSync(nestedTemp.path)); assert.ok(existsSync(fake));
+    for (const name of protectedFiles) assert.equal(readFileSync(join(directory, name), "utf8"), "original");
+    assert.equal(cleanWorkspaceTemps(directory, { now, apply: true }).removed, 0, "Repeated cleanup is safe");
+    const limited = cleanWorkspaceTemps(directory, { now, apply: true, maxEntries: 1 });
+    assert.equal(limited.inspected, 1); assert.equal(limited.truncated, true);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("observed publisher exit reclaims its fresh partial files without touching other publishers", () => {
+  const directory = mkdtempSync(join(parent, "temp-owner-"));
+  const owner = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222";
+  try {
+    const ours = stageJSON(directory, { incomplete: true }, undefined, owner);
+    const theirs = stageJSON(directory, { active: true }, undefined, other);
+    const legacy = stageJSON(directory, { active: true });
+    assert.equal(cleanWorkspaceTemps(directory, { apply: true }).removed, 0);
+    assert.equal(cleanWorkspaceTemps(directory, { apply: true, exitedOwner: owner }).removed, 1);
+    assert.equal(existsSync(ours.path), false); assert.ok(existsSync(theirs.path)); assert.ok(existsSync(legacy.path));
+    assert.throws(() => cleanWorkspaceTemps(directory, { apply: true, exitedOwner: "" }), /Invalid/);
+    assert.throws(() => stageJSON(directory, {}, undefined, "../escape"), /Invalid/);
+    assert.equal(cleanWorkspaceTemps(join(directory, "missing"), { apply: true }).removed, 0);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("temporary cleanup does not follow directory junctions or temp-named symlinks", () => {
+  const directory = mkdtempSync(join(parent, "temp-link-")), outside = join(directory, "outside"); mkdirSync(outside);
+  try {
+    const temp = stageJSON(outside, { keep: true }); utimesSync(temp.path, new Date(0), new Date(0));
+    const junction = join(directory, "junction"); symlinkSync(outside, junction, "junction");
+    assert.throws(() => cleanWorkspaceTemps(junction, { apply: true }), /regular managed directory/);
+    const named = join(directory, ".reqwizit-22222222-2222-4222-8222-222222222222.tmp"); symlinkSync(outside, named, "junction");
+    assert.equal(cleanWorkspaceTemps(directory, { apply: true }).removed, 0); assert.ok(existsSync(temp.path));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("publication failure classification recognizes fragmented V8 reports without exporting raw stderr", () => {
   const classified = publicationFailureClassifier();
@@ -367,17 +473,56 @@ test("publication child exit releases only its own lease and never changes a pee
     f.store.syncWorkspace(f.project.id); f.store.syncWorkspace(peer.id);
     const child = (f.store as unknown as { publicationWorker: { spawnargs: string[]; kill(): boolean } }).publicationWorker;
     const owner = child.spawnargs.at(-1)!;
+    const managed = join(f.path, workspaceFolder);
+    // Simulate partial bytes left by the killed child (no child finally runs).
+    const orphan = stageJSON(managed, { partial: true }, undefined, owner);
+    const peerTemp = stageJSON(managed, { active: true }, undefined, "33333333-3333-4333-8333-333333333333");
+    const manifest = readFileSync(join(managed, "manifest.json"), "utf8");
     const db = new Database(f.database);
     try {
       db.prepare("UPDATE workspaces SET owner=?, lease_until=? WHERE project_id=?").run(owner, Date.now() + 60000, f.project.id);
       db.prepare("UPDATE workspaces SET owner='live-peer', lease_until=? WHERE project_id=?").run(Date.now() + 60000, peer.id);
       const before = db.prepare("SELECT payload, owner, lease_until FROM workspaces WHERE project_id=?").get(peer.id);
       child.kill(); await f.store.flushWorkspacePublication();
+      assert.equal(existsSync(orphan.path), false, "Parent cleans only the exited publisher's fresh partial bytes");
+      assert.ok(existsSync(peerTemp.path)); assert.equal(readFileSync(join(managed, "manifest.json"), "utf8"), manifest);
       assert.equal(f.store.workspace(f.project.id)!.status, "unavailable");
       assert.equal((db.prepare("SELECT owner FROM workspaces WHERE project_id=?").get(f.project.id) as { owner: unknown }).owner, null);
       assert.deepEqual(db.prepare("SELECT payload, owner, lease_until FROM workspaces WHERE project_id=?").get(peer.id), before);
     } finally { db.close(); }
   } finally { await f.store.stopWorkspacePublication(); f.cleanup(); }
+});
+
+test("old unowned temps are reclaimed on publication without revising saved evidence or repeating work", () => {
+  const f = fixture();
+  try {
+    f.store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    const managed = join(f.path, workspaceFolder), old = stageJSON(managed, { legacy: true });
+    const recent = stageJSON(managed, { active: true }); utimesSync(old.path, new Date(0), new Date(0));
+    const project = f.store.get(f.project.id), jobs = f.store.jobs(f.project.id);
+    const manifest = readFileSync(join(managed, "manifest.json"), "utf8");
+    f.store.syncWorkspace(f.project.id);
+    assert.equal(existsSync(old.path), false); assert.ok(existsSync(recent.path));
+    assert.deepEqual(f.store.get(f.project.id), project); assert.deepEqual(f.store.jobs(f.project.id), jobs);
+    assert.equal(readFileSync(join(managed, "manifest.json"), "utf8"), manifest);
+    f.store.syncWorkspace(f.project.id); assert.equal(f.store.workspace(f.project.id)!.status, "saved");
+  } finally { f.cleanup(); }
+});
+
+test("cleanup CLI previews by default and applies without opening a database or starting publication", () => {
+  const directory = mkdtempSync(join(parent, "temp-cli-")), repo = join(directory, "repo"), data = join(directory, "must-not-create");
+  mkdirSync(join(repo, workspaceFolder), { recursive: true });
+  try {
+    const temp = stageJSON(join(repo, workspaceFolder), { legacy: true }); utimesSync(temp.path, new Date(0), new Date(0));
+    const run = (apply: boolean) => {
+      const result = spawnSync(process.execPath, ["--import", "tsx", "src/terminal/cli.ts", "cleanup", "--path", repo,
+        "--data-dir", data, "--json", ...(apply ? ["--apply"] : [])], { encoding: "utf8", timeout: 15000 });
+      assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
+    };
+    assert.equal(run(false).eligible, 1); assert.ok(existsSync(temp.path));
+    assert.equal(run(true).removed, 1); assert.equal(existsSync(temp.path), false);
+    assert.equal(existsSync(data), false); assert.deepEqual(readdirSync(join(repo, workspaceFolder)), []);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("71 to 72 installs publication generations transactionally and retains original workspace/job payloads", () => {

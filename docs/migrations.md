@@ -1,5 +1,131 @@
 # Data migrations and upgrade compatibility
 
+## Scoped saved-answer proposals (SQLite 83 → 84; portable 55)
+
+New multi-batch scoped-answer schedules may carry `proposalRead` with policy
+`scoped-target-v1`: one proposal request includes the exact saved answer, linked
+requirements and original support, followed by verification against the complete
+mandatory evidence inventory. If the proposal packet cannot fit, planning retains
+the all-read protocol. No omitted original reads are recorded as completed.
+
+Version 84 is a reader boundary, not a payload rewrite. Existing schedules without
+`proposalRead` retain their hashes, receipts, attempts and remaining reads. Startup
+does not opt paid work into the new protocol or dispatch inference. Unsupported
+proposal/correction policies fail validation transactionally; reopening after the
+incompatible data is restored safely retries the upgrade. Schema versions remain
+separate from project revisions and concurrency counters.
+
+New drafts fail scoped write-boundary validation before verification requests.
+An unchanged, fully checked legacy draft that failed because of an out-of-scope AI
+action can receive one explicitly resumed `invalid-scoped-output-v1` correction.
+Original paid receipts remain immutable, and every original evidence batch must
+check the corrected draft again. This does not choose human precedence, renew an
+existing correction, or approve requirements automatically.
+
+Portable format 55 is emitted only when retained jobs need the proposal-first or
+scope-correction capability. Other exports retain their existing format selection.
+Older-format declarations cannot carry these fields; unsupported future policies
+are rejected without overwriting saved evidence. Existing assessment identities,
+human sources, completed checks and unrelated work are not invalidated.
+
+Focused deterministic checks cover preserved legacy paid reads, repeated startup,
+failed-upgrade rollback/retry, portable roundtrip, retained proposal continuation,
+scope rejection before checks, and stale/malformed/rejected verification. A large
+fixture used nine requests (one proposal plus eight checks) versus eighteen under
+the original nine-read/nine-check schedule. This is request-count evidence, not
+production latency or live model-quality qualification; no live inference was run.
+
+Verification for this change: type checking and diff checks passed; saved-response
+and decision-availability tests passed 106/106; saved-response and diagnostics tests
+passed 93/93 after correcting proposal-first progress accounting. The question
+collection browser check passed with review-order navigation, retained approvals,
+mobile layout and save-only answer processing. `npm run test:browser`, including
+the UI build and posttest browser checks, passed. These fixtures do not establish
+production performance.
+
+## Disposable workspace staging retention (2026-11-23)
+
+**No SQLite, portable format, assessment or freshness migration.** Existing
+`.reqwizit-<uuid>.tmp` root files remain disposable; new continuation staging uses
+`.reqwizit-<publisher-owner-uuid>-<file-uuid>.tmp`. These paths are never referenced
+by the published manifest or durable job evidence. Only the exited child's own
+new-style temps are reclaimed immediately by its parent, including after fatal
+heap aborts; another publisher's fresh files are retained. Parent cleanup also
+works after the database has closed, using captured workspace bindings.
+
+The publisher performs a bounded legacy/new-style stale-file sweep (24 hours,
+512 root entries). The browser/desktop backend also performs a full asynchronous
+streaming sweep on startup and every 15 minutes, independently of dirty/publication
+status. It refreshes connected bindings, coalesces overlapping passes, and cancels/
+awaits cleanup on shutdown. This read-only binding lookup never changes durable
+state or retries failed exports. `reqwizit cleanup --path <workspace>` previews the
+complete root inventory; explicit `--apply` removes eligible files without opening
+the database. No recursive cleanup, project revision, model work, evidence
+reconstruction or reassessment is involved. Interrupted/locked cleanup is retryable and cannot make an unpublished
+checkpoint current. Older applications ignore the new temporary names. Published
+artifact bytes, completed work, spent attempts and dirty/publication recovery rules
+are unchanged. This addresses staging retention, not the underlying export-memory
+failure. See [operation and limits](project-workspaces.md#temporary-export-files-and-cleanup-2026-11-23).
+
+Deterministic tests cover legacy/new-style age retention, dry-run/apply/repeat,
+bounded scans, junction rejection, owner-specific fresh cleanup, abrupt child exit
+with another publisher's files retained, unchanged saved evidence on publication,
+and a database-free CLI invocation. Additional idle-maintenance tests cover a
+directory larger than 512 entries, periodic binding refresh/coalescing, shutdown,
+failed-export preservation and automatic app-start cleanup without inference.
+
+Verification: type checking, desktop/UI build, terminal help and diff checks passed.
+Store/portable tests passed 40/40; workspace tests passed 40/41, including every
+cleanup/exit/recovery check. The existing 48 MiB large-text staging fixture aborted
+with heap exhaustion; the same fixture also aborts using the HEAD staging
+implementation without these changes. That memory-test failure remains unresolved.
+No live inference was run.
+
+Idle-maintenance follow-up verification: all 9 focused workspace housekeeping/
+exit/CLI tests and all 29 browser API tests passed, including startup cleanup and
+shutdown. Type checking, desktop/UI rebuild and diff checks passed. No live
+inference or production export-memory qualification was performed.
+
+## Grouped candidate discovery before leaf splitting (2026-11-22)
+
+**SQLite 83 / portable 54 unchanged.** Fresh explicitly authorized no-research
+candidate collection tries the existing dense exact-record protocol on an intact
+related-target group before legacy closure-based staging/splitting. The older
+leaf-first path could split six targets into six separate proposal screens, each
+with its own copy of the mandatory verification schedule. Unfittable groups still
+split; exact records, draft reserves, all mandatory checks and existing consent/
+request/time limits are unchanged. Ten is still a soft target, not permission to
+invent questions or republish rejected proposals.
+
+The disposable target-first scheduling namespace changes from
+`resolved-prefix-v8-target-first` to `resolved-prefix-v9-grouped-target-first` so
+old local split/skip computations cannot hide newly eligible intact groups.
+Intermediate exact context computations remain reusable. No durable semantic
+format, assessment/freshness identity or optimistic-concurrency counter changes;
+no schema migration is required. Compatible paid roots and child schedules are
+selected **before** the new preference, retaining original layouts, accepted
+receipts, attempts and completion evidence. Restart/reload does not authorize
+requests, refund spend or repeat unchanged completed screens. A compatible paused
+singleton continues its old protocol rather than being regrouped for fresh calls.
+
+The supplied exports show 13 completed gap runs taking 625.7 seconds/37 requests,
+five drafted questions and two survivors. The captured target was ten; individual
+screen scopes contained one target and seven to nine mandatory evidence batches.
+Some local planning passes took 23–33 seconds. These observations locate a narrow
+search/planning cost, not proof that ten legitimate unanswered questions exist.
+Separate answer-integration runs and the reported 256 MiB continuation-staging
+heap exhaustion are **not fixed or requalified** by this scheduling change.
+
+Deterministic checks reproduce the old one-target split and preserve six targets
+with the complete evidence union, reducing context preparations from 21 to 12 in
+that fixture. A controlled adapter supplies ten independent questions through two
+groups/six requests, with every verification check required. A saved paid singleton survives
+two store reopenings and explicitly resumes without repeating its accepted read.
+The 192-test discovery/planning/collection set, type check and deterministic
+question-collection/exploration browser checks passed. Actual
+production latency, model yield and the folder-save failure remain unqualified;
+the supplied private exports are not committed fixtures.
+
 ## Inline Activity & logs workspace (2026-11-15)
 
 Activity and Logs now share one main tab with separate views; the Logs dialog is

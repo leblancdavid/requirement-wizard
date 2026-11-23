@@ -22,9 +22,200 @@ import { prepareSubmissionPublicationSupport, submissionPublicationEvidence } fr
 import { packSubmissionVerification, submissionDispatchSchema, submissionLookupInventory, SubmissionLookupError } from "../core/submission-stages.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
 import { submissionCitationRepair } from "../core/submission-stages.js";
+import { submissionReadSteps, submissionScopedRepair } from "../core/submission-stages.js";
+
+test("new scoped answer proposes once then checks the complete evidence union instead of repeating full reads", async () => {
+  const f = fixture(":memory:", "answer", false, 60), seen = new Set<string>();
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), legacy = planSubmissionStages(m);
+    let reads = 0, checks = 0;
+    const base = adapter(f, seen);
+    const job = await new DiscoveryService(f.store, { async analyze(project, options) {
+      if (options.context.manifest.submissionStage!.phase === "read") reads++; else checks++;
+      return base.analyze(project, options);
+    } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id], research: false });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.ok(job.submissionWork!.proposalRead); assert.equal(reads, 1);
+    assert.equal(submissionReadSteps(job.submissionWork!), 1);
+    assert.equal(checks, job.submissionWork!.verification?.batches.length ?? job.submissionWork!.batches.length);
+    const diagnostic = f.store.discoveryDiagnostics(f.project.id, [job.id]).runs[0]!;
+    assert.equal(diagnostic.savedWork.totalSteps, reads + checks);
+    assert.equal(diagnostic.savedWork.phase, "complete");
+    assert.ok(reads + checks < legacy.batches.length * 2);
+    assert.deepEqual([...seen].sort(), [...m.evidenceIDs].sort());
+    assert.deepEqual(f.store.get(f.project.id).sources, f.project.sources);
+    assert.equal(f.store.get(f.project.id).requirements[0]!.statement, "Save reports offline");
+    console.log(JSON.stringify({ fixtureOnly: true, legacyReads: legacy.batches.length, proposalReads: reads, mandatoryChecks: checks, totalRequests: reads + checks }));
+  } finally { f.store.close(); }
+});
+
+for (const invalid of ["unrelated-target", "shared-question", "new-requirement", "review-change"] as const) test(`scoped ${invalid} draft stops before spending any verification request`, async () => {
+  const f = fixture(":memory:", "answer");
+  try {
+    const output = f.output(), target = f.project.requirements[0]!.id, sourceID = f.item.appliedSourceID!;
+    if (invalid === "unrelated-target") output.pendingChanges = { format: 1, changes: [{ type: "revise-requirement", requirementID: randomUUID(),
+      statement: "Unrelated rewrite", rationale: "Not authorized", acceptance: ["Wrong target"], sourceIDs: [sourceID], reason: "Outside answer scope" }] };
+    if (invalid === "shared-question") output.questions = [{ epicID: "project", text: "Set a global rule?", whyItMatters: "Unauthorized broader scope", evidenceIDs: [target],
+      options: [{ label: "Yes", consequence: "Change shared behavior" }, { label: "No", consequence: "Keep existing behavior" }] }];
+    if (invalid === "new-requirement") output.requirements = [{ statement: "A new capability", rationale: "Not scoped", acceptance: ["New behavior"], sourceIDs: [sourceID] }];
+    if (invalid === "review-change") output.reviewChanges = [{ type: "reject", requirementID: target, sourceID, reason: "No review authority" }];
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000); let calls = 0;
+    await assert.rejects(runSubmissionStages(f.store, { async analyze() { calls++; return output; } }, f.project, job, f.item, f.task,
+      { research: false, signal: new AbortController().signal }), /Scoped answers can only/);
+    assert.equal(calls, 1); assert.equal(f.store.getJob(job.id).submissionWork!.attempts, 1);
+    assert.equal(f.store.getJob(job.id).submissionWork!.receipts.length, 0);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+  } finally { f.store.close(); }
+});
+
+test("scoped proposal checkpoints upgrade transactionally, survive reopen/portable roundtrip and resume only unpaid checks", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "scoped-proposal-upgrade-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "answer"); let store = f.store;
+  try {
+    const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const paused = await runSubmissionStages(store, adapter(f), f.project, job, f.item, f.task,
+      { research: false, signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted"); assert.ok(paused.submissionWork!.proposalRead);
+    assert.equal(paused.submissionWork!.receipts.length, 1); assert.equal(submissionStep(paused.submissionWork!), 1);
+    const diagnostic = store.discoveryDiagnostics(f.project.id, [paused.id]).runs[0]!;
+    assert.equal(diagnostic.savedWork.totalSteps, submissionTotalSteps(paused.submissionWork!));
+    assert.equal(diagnostic.savedWork.phase, "check");
+    const original = structuredClone(paused), work = paused.submissionWork!;
+    assert.throws(() => replaySubmissionStages(submissionMaterials(f.project, f.item, f.task), { ...work,
+      proposalRead: { ...work.proposalRead!, recordIDs: work.proposalRead!.recordIDs.slice(1) } }), /plan changed|omitted/);
+    const wire = renderWorkspace(f.project, undefined, continuationState(f.project, store.jobs(f.project.id), store.submissions(f.project.id), revision => store.get(f.project.id, revision)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 55);
+    assert.deepEqual(decodePortable(wire, f.project.model).continuation.jobs.find(j => j.id === paused.id)!.submissionWork, work);
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 54 }) }, f.project.model), /format 55/);
+    store.close(); const future = structuredClone(paused);
+    (future.submissionWork!.proposalRead as { policy: string }).policy = "future-proposal-read";
+    const db = new Database(file); db.exec("DELETE FROM migration_history WHERE version>=84; PRAGMA user_version=83");
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id); db.close();
+    assert.throws(() => new ProjectStore(file));
+    const repair = new Database(file); assert.equal(repair.pragma("user_version", { simple: true }), 83);
+    assert.equal((repair.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), paused.id); repair.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(paused.id), original); store.close(); }
+    store = new ProjectStore(file); let calls = 0;
+    const next = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+    const completed = await runSubmissionStages(store, { async analyze(_p, { context }) {
+      calls++; assert.equal(context.manifest.submissionStage!.phase, "check");
+      return { submissionCheck: { valid: true, reason: "Exact current evidence permits this scoped update" } };
+    } }, f.project, next, f.item, f.task, { research: false, signal: new AbortController().signal });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, submissionTotalSteps(completed.submissionWork!) - 1);
+    assert.deepEqual(completed.submissionWork!.receipts[0], original.submissionWork!.receipts[0]);
+    assert.deepEqual(store.getJob(paused.id), original);
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("84 upgrade leaves a paid scoped all-read schedule unchanged and continues its remaining reads", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "scoped-legacy-reads-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "answer"); let store = f.store;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), work = planSubmissionStages(m), old = store.beginJob(f.project.id, f.project.revision).job;
+    store.claimJob(old.id, Date.now() + 60000); work.attempts = 1;
+    acceptSubmissionStage(m, work, replaySubmissionStages(m, { ...work, attempts: 0 }).draft, f.output(), old);
+    const context = submissionStageContext(m, work, f.output()); store.checkpointSubmission(old.id, work, context.manifest);
+    store.pauseSubmission(old.id, "Legacy paid read retained"); const original = store.getJob(old.id);
+    store.close(); const db = new Database(file); db.exec("DELETE FROM migration_history WHERE version>=84; PRAGMA user_version=83"); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(old.id), original); store.close(); }
+    store = new ProjectStore(file); let reads = 0;
+    const next = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+    const completed = await runSubmissionStages(store, { async analyze(_p, { context }) {
+      if (context.manifest.submissionStage!.phase === "read") { reads++; return { submissionKeep: true }; }
+      return { submissionCheck: { valid: true, reason: "Original exact evidence verified" } };
+    } }, f.project, next, f.item, f.task, { research: false, signal: new AbortController().signal });
+    assert.equal(completed.status, "completed", completed.diagnostic); assert.equal(reads, work.batches.length - 1);
+    assert.equal(completed.submissionWork!.proposalRead, undefined); assert.equal(completed.submissionWork!.planKey, original.submissionWork!.planKey);
+    assert.deepEqual(completed.submissionWork!.receipts[0], original.submissionWork!.receipts[0]);
+    assert.deepEqual(store.getJob(old.id), original);
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const outcome of ["reject", "malformed", "stale"] as const) test(`scoped proposal-first ${outcome} check cannot publish partial updates`, async () => {
+  const f = fixture(":memory:", "answer"); let calls = 0;
+  try {
+    const job = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+      calls++;
+      if (context.manifest.submissionStage!.phase === "read") return f.output();
+      if (outcome === "stale") { f.store.note(f.project.id, f.project.revision, "A newer human decision", "project"); return { submissionCheck: { valid: true, reason: "Outdated verdict" } }; }
+      return outcome === "reject" ? { submissionCheck: { valid: false, reason: "A genuine earlier human rule conflicts" } } : { malformed: true };
+    } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id], research: false });
+    assert.equal(job.status, outcome === "stale" ? "stale" : "failed", job.diagnostic); assert.equal(calls, 2);
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+    assert.ok(job.submissionWork!.proposalRead); assert.equal(job.submissionWork!.receipts[0]!.step, 0);
+  } finally { f.store.close(); }
+});
+
+test("cancelled scoped verification retains its proposal and charged check attempt without accepting late output", async () => {
+  const f = fixture(":memory:", "answer"), controller = new AbortController();
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    await assert.rejects(runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      if (context.manifest.submissionStage!.phase === "read") return f.output();
+      controller.abort(new Error("Stop verification"));
+      return { submissionCheck: { valid: true, reason: "Late verdict must not apply" } };
+    } }, f.project, job, f.item, f.task, { research: false, signal: controller.signal }), /Stop verification/);
+    f.store.failJob(job.id, "cancelled", "Stop verification");
+    const stopped = f.store.getJob(job.id);
+    assert.equal(stopped.status, "cancelled"); assert.equal(stopped.submissionWork!.receipts.length, 1);
+    assert.equal(stopped.submissionWork!.attempts, 1); assert.deepEqual(f.store.get(f.project.id), f.project);
+    const next = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(next.id, Date.now() + 60000);
+    let checks = 0;
+    const completed = await runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.submissionStage!.phase, "check"); checks++;
+      return { submissionCheck: { valid: true, reason: "Exact mandatory evidence permits the update" } };
+    } }, f.project, next, f.item, f.task, { research: false, signal: new AbortController().signal });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(checks, submissionTotalSteps(completed.submissionWork!) - 1);
+    assert.equal(completed.submissionWork!.receipts[1]!.attempt, 2);
+    assert.deepEqual(completed.submissionWork!.receipts[0], stopped.submissionWork!.receipts[0]);
+  } finally { f.store.close(); }
+});
+
+test("a fully checked legacy scope violation gets one explicit correction, retaining original reads and requiring every check again", async () => {
+  const f = fixture(":memory:", "answer");
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), work = planSubmissionStages(m);
+    const bad = { ...f.output(), questions: [{ epicID: "project", text: "Change a shared policy?", whyItMatters: "Outside this answer's scope",
+      evidenceIDs: [f.project.requirements[0]!.id], options: [{ label: "Yes", consequence: "Broader change" }, { label: "No", consequence: "Keep shared policy" }] }] };
+    const old = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(old.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, work).draft;
+    while (submissionStep(work) < submissionTotalSteps(work)) {
+      const context = submissionStageContext(m, work, draft), response = context.manifest.submissionStage!.phase === "check"
+        ? { submissionCheck: { valid: true, reason: "Legacy positive check" } } : submissionStep(work) === 0 ? bad : { submissionKeep: true as const };
+      work.receipts.push({ step: submissionStep(work), attempt: 1, contextKey: createHash("sha256").update(JSON.stringify(context.data)).digest("hex"),
+        atRevision: f.project.revision, jobID: old.id, model: old.model, response });
+      draft = replaySubmissionStages(m, work).draft;
+    }
+    const manifest = submissionStageContext(m, { ...work, receipts: work.receipts.slice(0, -1) }, draft).manifest;
+    manifest.includedIDs = m.evidenceIDs; f.store.checkpointSubmission(old.id, work, manifest);
+    assert.throws(() => f.store.finishJob(old.id, bad), /Scoped answers can only/);
+    f.store.failJob(old.id, "failed", "Original scoped write-boundary error"); const original = structuredClone(f.store.getJob(old.id));
+    assert.equal(submissionScopedRepair(m, work, original)!.policy, "invalid-scoped-output-v1");
+    let corrections = 0, checks = 0;
+    const next = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(next.id, Date.now() + 60000);
+    const completed = await runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      if (context.manifest.submissionStage!.phase === "read") { corrections++; return f.output(); }
+      checks++; return { submissionCheck: { valid: true, reason: "The corrected draft stays inside exact source scope" } };
+    } }, f.project, next, f.item, f.task, { research: false, signal: new AbortController().signal });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(corrections, 1); assert.equal(checks, work.batches.length);
+    assert.deepEqual(completed.submissionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(f.store.getJob(old.id), original);
+    assert.equal(submissionScopedRepair(m, completed.submissionWork!, completed), undefined, "An existing correction cannot renew");
+    const current = f.store.get(f.project.id), wire = renderWorkspace(current, undefined,
+      continuationState(current, f.store.jobs(current.id), f.store.submissions(current.id), revision => f.store.get(current.id, revision)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 55);
+    assert.deepEqual(decodePortable(wire, current.model).continuation.jobs.find(j => j.id === completed.id)!.submissionWork, completed.submissionWork);
+  } finally { f.store.close(); }
+});
 
 test("saved-response source-type errors stop at the producing read, before any paid verification", async () => {
-  const f = fixture(":memory:", "answer");
+  const f = fixture(":memory:", "answer", false, 19, true);
   try {
     const m = submissionMaterials(f.project, f.item, f.task), work = planSubmissionStages(m);
     const context = submissionStageContext(m, work, empty()), prompt = discoveryPrompt(f.project, context);
@@ -257,6 +448,27 @@ for (const outcome of ["valid", "rejected", "cancelled", "malformed", "exhausted
 });
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
+
+test("scoped dispatch advertises only linked write targets and proposal-first evidence semantics", () => {
+  const f = fixture(":memory:", "answer");
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m, { proposalFirst: true });
+    const context = submissionStageContext(m, w, replaySubmissionStages(m, w).draft);
+    const prompt = discoveryPrompt(f.project, context);
+    assert.match(prompt, /SCOPED PROPOSAL-FIRST/); assert.match(prompt, /SCOPED ANSWER WRITE BOUNDARY/);
+    const schema = JSON.parse(prompt.split("Stage response schema: ")[1]!.split("\nWorking evidence batch:")[0]!);
+    const enums: unknown[][] = [];
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "requirementID" && child && typeof child === "object" && "enum" in child) enums.push((child as { enum: unknown[] }).enum);
+        visit(child);
+      }
+    };
+    visit(schema); assert.ok(enums.length >= 3);
+    for (const values of enums) assert.deepEqual(values, f.item.answerScope!.requirementIDs);
+  } finally { f.store.close(); }
+});
 
 test("saved-response dispatch exposes only distinct missing original IDs and phase-specific outputs", () => {
   const f = fixture();

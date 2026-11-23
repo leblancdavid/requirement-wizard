@@ -32,7 +32,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 83;
+export const databaseSchemaVersion = 84;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -444,6 +444,8 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader capability only. Preserve paid layouts/receipts and all allowances.
 } }, { version: 83, name: "checked-submission-citation-recovery", apply() {
   // Reader capability only; never rewrite original paid receipts or start work.
+} }, { version: 84, name: "scoped-submission-proposal-first", apply() {
+  // Reader capability only. Paid all-read schedules retain their original protocol.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -509,6 +511,12 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       WHERE json_type(payload, '$.retrievalWork.epicStages.collectionBaseline') IS NOT NULL`).iterate() as Iterable<{ baseline: string | null }>) {
       if (!row.baseline) throw new Error("Unsupported incremental collection provenance. Saved work was not overwritten.");
       epicCollectionBaselineSchema.parse(JSON.parse(row.baseline));
+    }
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.proposalRead') AS BLOB)) <= 524288
+      THEN json_extract(payload, '$.submissionWork.proposalRead') END AS proposal FROM jobs
+      WHERE json_type(payload, '$.submissionWork.proposalRead') IS NOT NULL`).iterate() as Iterable<{ proposal: string | null }>) {
+      if (!row.proposal) throw new Error("Unsupported or oversized scoped proposal schedule. Nothing was overwritten.");
+      submissionWorkSchema.shape.proposalRead.unwrap().parse(JSON.parse(row.proposal));
     }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.draftRepair') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.submissionWork.draftRepair') END AS repair FROM jobs

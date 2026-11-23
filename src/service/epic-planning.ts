@@ -15,7 +15,7 @@ import type { EpicReview } from "../core/epic-review-types.js";
  * This is NOT a semantic/model/checkpoint identity and never changes saved calls. */
 export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[],
   scheduling: { skippedPackageIDs?: string[]; revisitReview?: EpicReview; targetFirst?: boolean } = {}) {
-  return digestJSONArray([scheduling.targetFirst ? "resolved-prefix-v8-target-first" : "resolved-prefix-v7-exploration", epicPlanningProjectKey(project), planningJobs(jobs), focusEpicID, submissions, scheduling.skippedPackageIDs, scheduling.revisitReview]);
+  return digestJSONArray([scheduling.targetFirst ? "resolved-prefix-v9-grouped-target-first" : "resolved-prefix-v7-exploration", epicPlanningProjectKey(project), planningJobs(jobs), focusEpicID, submissions, scheduling.skippedPackageIDs, scheduling.revisitReview]);
 }
 function planningJobs(jobs: Job[]): Job[] {
   return jobs.map(({ discoveryMetrics: _metrics, telemetry: _telemetry, researchEvidence: _research, sessionID: _session, ...job }) => job);
@@ -54,7 +54,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
   let materialKey: string | undefined, currentKey: string | undefined, packingKey: string | undefined, projectedJobs: Job[] | undefined;
   const material = () => materialKey ??= epicPlanningProjectKey(project);
   const projected = () => projectedJobs ??= planningJobs(jobs);
-  const inputKey = () => currentKey ??= digestJSONArray([options.targetFirst ? "resolved-prefix-v8-target-first" : "resolved-prefix-v7-exploration", material(), projected(), focusEpicID, submissions, options.skippedPackageIDs, options.revisitReview]);
+  const inputKey = () => currentKey ??= digestJSONArray([options.targetFirst ? "resolved-prefix-v9-grouped-target-first" : "resolved-prefix-v7-exploration", material(), projected(), focusEpicID, submissions, options.skippedPackageIDs, options.revisitReview]);
   const contextInputKey = () => packingKey ??= digestJSONArray(["context-computation-generation-v1", material()]);
   // Lazy adoption of the previous exact-input cache only when its original full
   // inputs still match. These are disposable CPU receipts, never model evidence.

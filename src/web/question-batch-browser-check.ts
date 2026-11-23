@@ -84,7 +84,13 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-question-batch-mobile.png", fullPage: true });
    await closeTechnicalViews(page);
-  const originalCalls = topics.length;
+   await page.getByRole("tab", { name: /^Specification/ }).click();
+   const reviewOrder = page.getByRole("region", { name: "Recommended review order", exact: true });
+   await expect(reviewOrder).toContainText("submit saved responses");
+   await expect(reviewOrder).toContainText("Existing approvals are retained");
+   await reviewOrder.getByRole("button", { name: "Return to Design", exact: true }).click();
+   await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
+   const originalCalls = topics.length;
   // A slow/stale workspace read must not hold a response's durable save open.
   const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve; });
   let refreshHeld = false;

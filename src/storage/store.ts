@@ -3,6 +3,7 @@ import { PublicationObjects } from "./publication-objects.js";
 import { portableArtifactLimit, portableProjectLimit } from "./staged-json.js";
 import { stageContinuation, discardContinuation, type StagedContinuation } from "./continuation-parts.js";
 import { publicationFailureClassifier } from "./publication-failure.js";
+import { cleanWorkspaceTemps } from "./workspace-temporary.js";
 import { explorationProgress, explorationFingerprinter, type ExplorationRecord } from "../core/exploration.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -106,7 +107,7 @@ import { workflowJobReceiptSchema, type WorkflowJobReceipt } from "../core/workf
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
-import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, submissionCitationRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, submissionCitationRepair, submissionScopedRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
 import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview,adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
 import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-group.js";
@@ -245,6 +246,7 @@ export class ProjectStore {
   private readonly db: Database.Database;
   private readonly deferredWorkspaceSync = new Map<string, number>();
   private publicationWorker?: ChildProcess;
+  private publicationDirectories = new Set<string>();
   private readonly publicationTasks = new Map<string, { promise: Promise<void>; resolve: () => void; progress?: PublicationProgress }>();
   private closing = false;
   // Content-addressed derived drafts, not model-call results or new authority.
@@ -354,6 +356,7 @@ export class ProjectStore {
       const entry = fileURLToPath(new URL(`./workspace-publication-process.${source ? "ts" : "js"}`, import.meta.url));
       const heap = Math.max(16, Math.min(512, this.options.publicationHeapMb ?? 256));
       const failureCause = publicationFailureClassifier();
+      const publicationDirectories = this.publicationDirectories = new Set<string>();
       const worker = this.publicationWorker = fork(entry, [this.path, owner], {
         execArgv: [`--max-old-space-size=${heap}`, ...(source ? ["--import", "tsx"] : [])],
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -392,6 +395,13 @@ export class ProjectStore {
         if (worker.pid && worker.exitCode === null && !worker.killed) worker.kill(); else failure();
       });
       worker.on("exit", (code, signal) => {
+        // A fatal V8 abort cannot execute the child's finally blocks. Its private
+        // filenames let us reclaim even fresh partial parts, never another worker's.
+        for (const path of publicationDirectories) {
+          try {
+            cleanWorkspaceTemps(managedDirectory(path), { apply: true, exitedOwner: owner });
+          } catch { /* Cleanup failure must not hide the saved-work diagnostic. */ }
+        }
         if (this.publicationWorker !== worker) return;
         if (this.publicationTasks.size) failure(`exit code ${code ?? "unknown"}, signal ${signal ?? "none"}`);
         if (this.publicationWorker === worker) this.publicationWorker = undefined;
@@ -401,6 +411,8 @@ export class ProjectStore {
     let resolve!: () => void;
     const promise = new Promise<void>(done => { resolve = done; });
     this.publicationTasks.set(id, { promise, resolve });
+    const binding = this.workspace(id);
+    if (binding) this.publicationDirectories.add(binding.path);
     this.publicationWorker.ref(); this.publicationWorker.channel?.ref(); this.publicationWorker.send({ projectID: id });
   }
 
@@ -712,6 +724,9 @@ export class ProjectStore {
       if ((binding.formatVersion ?? 1) > 3) throw new Error("Workspace conflict: unsupported future workspace format. Upgrade the app; files were not overwritten.");
       checkWorkspace(binding);
       const directory = migrateWorkspaceDirectory(binding.path);
+      // Bounded recovery of old, unowned crash debris. Large historical backlogs
+      // can be previewed and removed with the explicit cleanup command.
+      try { cleanWorkspaceTemps(directory, { apply: true, maxEntries: 512 }); } catch { /* Best effort only. */ }
       const project = this.get(id);
       const storedRevision = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number };
       if (storedRevision.revision !== project.revision) throw new Error("Workspace snapshot changed before publication. Retry from the saved project revision.");
@@ -743,7 +758,7 @@ export class ProjectStore {
       const preparedPortableFiles = portableFiles(project, execution, continuation, true);
       phase("continuation-staging");
       const transfer = continuation.jobs.length >= 128 || Object.keys(continuation.objects).length >= 8192;
-      stagedContinuation = stageContinuation(directory, continuation, undefined, undefined, transfer);
+      stagedContinuation = stageContinuation(directory, continuation, undefined, undefined, transfer, owner);
       const parts = Object.entries(stagedContinuation.parts ?? {});
       const continuationBytes = stagedContinuation.bytes + parts.reduce((sum, [, part]) => sum + part.bytes, 0);
       metrics.continuationBytes = continuationBytes;
@@ -826,6 +841,16 @@ export class ProjectStore {
   syncWorkspaces() {
     if (this.db.inTransaction) return;
     for (const row of this.db.prepare("SELECT project_id FROM workspaces WHERE dirty = 1 AND json_extract(payload, '$.status') NOT IN ('unavailable', 'conflict')").all() as Array<{ project_id: string }>) this.syncWorkspace(row.project_id);
+  }
+
+  workspaceTemporaryDirectories() {
+    const directories: string[] = [];
+    // Read only binding paths, not project/checkpoint graphs. Include clean and
+    // failed workspaces: housekeeping must not depend on retrying publication.
+    for (const row of this.db.prepare("SELECT json_extract(payload, '$.path') AS path FROM workspaces").all() as { path: string }[]) {
+      try { directories.push(managedDirectory(row.path)); } catch { /* Offline/conflicting binding. */ }
+    }
+    return directories;
   }
 
   setImplementation(id: string, revision: number, requirementID: string, raw: unknown) {
@@ -1966,6 +1991,7 @@ export class ProjectStore {
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
        json_extract(payload, '$.submissionWork.verification.format') AS savedVerificationFormat,
        json_array_length(payload, '$.submissionWork.verification.batches') AS savedVerificationBatches,
+       json_extract(payload, '$.submissionWork.proposalRead.format') AS savedProposalReadFormat,
        json_extract(payload, '$.retrievalWork.epicStages.collectionBaseline.reads') AS reusedCollectionBatches,
        json_array_length(payload, '$.retrievalWork.epicStages.verification.groups') AS epicVerificationBatches,
        json_extract(payload, '$.retrievalWork.epicStages.discoveryPolicy') = 'candidate-first-v1' AS epicCandidateFirst,
@@ -2006,7 +2032,7 @@ export class ProjectStore {
       CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.readinessWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_type(r.value, '$.response.clarificationRead') IS NOT NULL OR json_type(r.value, '$.response.clarificationVerdict') IS NOT NULL)
         WHEN json_type(payload, '$.submissionWork.draftRepair') IS NOT NULL THEN
-        json_array_length(payload, '$.submissionWork.batches') + (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE CAST(r.key AS INTEGER) >= json_extract(payload, '$.submissionWork.draftRepair.fromReceipt') AND (json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1))
+        (CASE WHEN json_type(payload, '$.submissionWork.proposalRead') IS NOT NULL THEN 1 ELSE json_array_length(payload, '$.submissionWork.batches') END) + (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE CAST(r.key AS INTEGER) >= json_extract(payload, '$.submissionWork.draftRepair.fromReceipt') AND (json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1))
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
         WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN
@@ -2740,6 +2766,8 @@ export class ProjectStore {
     const expected = source.projectID === project.id && original
       && (repair.policy === "invalid-requirement-evidence-v1"
         ? submissionCitationRepair(submissionMaterials(project, item, original.task), original, source)
+        : repair.policy === "invalid-scoped-output-v1"
+        ? submissionScopedRepair(submissionMaterials(project, item, original.task), original, source)
         : submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.submissionRecoveryJobs(project.id, item.id)));
     if (canonicalJSON(expected) !== canonicalJSON(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
       || JSON.stringify(original.task) !== JSON.stringify(work.task)

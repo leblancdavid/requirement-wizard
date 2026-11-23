@@ -1,5 +1,22 @@
 # Architecture outline
 
+New multi-batch scoped saved answers can use a target/support-only proposal read
+followed by full-inventory frozen verification (`scoped-target-v1`, SQLite 84 /
+conditional portable 55). All-read paid schedules retain their exact identities.
+New drafts are checked against scoped write permissions before verification; an
+authenticated, explicitly resumed one-time correction can repair a fully checked
+legacy scope-invalid AI draft without repeating original reads. The corrected
+draft still requires every original evidence check. See
+[compatibility rules](migrations.md#scoped-saved-answer-proposals-sqlite-83--84-portable-55).
+
+Fresh target-first candidate planning now attempts dense exact-record staging for
+an intact related-target group before closure-based leaf splitting. This changes
+only the preference for newly eligible work; historical compatible roots/children
+still win first, and every surviving candidate requires the complete mandatory
+verification union. Only disposable target-first scheduling caches move to v9;
+semantic protocols and persisted formats are unchanged. See
+[grouped scheduling and qualification](migrations.md#grouped-candidate-discovery-before-leaf-splitting-2026-11-22).
+
 Saved-response read acceptance checks new requirement source types/authority before
 verification. Failed, fully checked legacy citation defects have an authenticated
 one-pass correction descriptor under SQLite 83 / portable 54; original paid reads

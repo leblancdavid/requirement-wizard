@@ -823,7 +823,17 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       // that can still be divided into ordinary <=72k packages.
       const splittable = kind === "workflow" ? records.length > 1 : records.length > 2
         && epicIDs.every((id) => records.some((record) => record.epicID === id));
-      const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-dense-records-v5"] as const;
+      // Fresh candidate collection can stage the complete evidence inventory
+      // without pinning every target's transitive human chain in every request.
+      // Try that intact group BEFORE recursive splits: leaf-first fallback turns
+      // a multi-frontier search into one target plus the same guardrails per job.
+      // Compatible paid roots/children have already been selected above; do not
+      // change their representation or consent merely to obtain a wider search.
+      const policies = options.targetFirst
+        ? splittable ? ["staged-dense-records-v5", "staged-guardrails-v1"] as const
+          : ["staged-dense-records-v5", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3"] as const
+        : splittable ? ["staged-guardrails-v1"] as const
+          : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-dense-records-v5"] as const;
       for (const policy of policies) {
         staged = build(epicID, epicIDs, kind, records, policy, policy === "staged-dense-records-v5"
           ? options.targetFirst ? "target-decision-units-v3" : "pending-question-units-v2" : undefined);

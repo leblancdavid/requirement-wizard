@@ -1,5 +1,46 @@
 # Browser workspace, epics, and estimated completeness
 
+## Efficient scoped answers and review order (2026-11-23)
+
+For new oversized answers linked to specific requirements, processing can propose
+one update from the exact answer, linked requirements and their original support,
+then check the frozen proposal against every mandatory evidence batch. It falls
+back to the existing all-read schedule when that proposal cannot fit. Previously
+paid schedules resume unchanged; completed requests are not replayed. Out-of-scope
+new drafts stop before verification, and output schemas constrain linked targets.
+Real conflicts still require a human choice; broader input needs a feature or
+project note rather than silently widening a scoped answer.
+
+Specification shows **Recommended review order** while questions or unprocessed
+answers remain: answer Design questions → submit/process saved responses → review
+updated requirements together. **Return to Design** opens unanswered questions.
+This is guidance, not a project-wide approval lock: existing approvals are retained,
+and independent decisions keep their existing availability safeguards. Prompts
+prefer updating an existing requirement when the exact answer explicitly settles
+it, rather than creating duplicate requirements and redundant clarification loops.
+
+The supplied diagnostics contained 13 response-processing runs with 242 requests
+and 1,414.8 seconds elapsed; 1,376.8 seconds were inside adapter requests. Eight
+runs processed scoped answers separately. A deterministic large fixture reduced
+18 requests to 9 while preserving full verification. Actual model quality and
+wall-clock improvements remain unqualified. See [upgrade rules](migrations.md#scoped-saved-answer-proposals-sqlite-83--84-portable-55).
+
+## Broader grouped discovery scheduling (2026-11-22)
+
+New **Discover** collection with research off now tries related targets together
+before splitting oversized shared-decision context into single-target searches.
+Each screen may propose several independent questions; every survivor still needs
+all mandatory evidence checks. Compatible saved work continues its original
+layout, and unchanged no-question screens are not automatically repeated. Use the
+updated backend and explicitly Discover when ready; do not reset saved work.
+
+The supplied exports confirm a target of ten, but mostly one-target screens with
+zero/one draft and repeated seven-to-nine-batch checks. A controlled fixture now
+reaches ten questions through two grouped screens. This is not a guarantee of ten
+real questions or a measured production speedup. Answer processing (including a
+61-request/two-answer run) and the reported portable-save heap exhaustion remain
+separate outstanding costs. See [preservation and verification](migrations.md#grouped-candidate-discovery-before-leaf-splitting-2026-11-22).
+
 ## Activity & logs workspace (2026-11-15)
 
 The **Activity & logs** main tab has two views:

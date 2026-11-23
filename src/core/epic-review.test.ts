@@ -286,6 +286,112 @@ function sharedHeavy(store: ProjectStore) {
   return p;
 }
 
+test("fresh candidate collection stages related targets together before splitting their shared human evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store), target = p.requirements.find(r => r.epicID === "orders")!;
+    target.sourceIDs = p.sources.map(s => s.id);
+    p.requirements = Array.from({ length: 6 }, (_, index) => ({ ...structuredClone(target), id: `target-${index}`, statement: `Independent workflow ${index}` }));
+    const original = structuredClone(p);
+    let legacyPreparations = 0, groupedPreparations = 0;
+    const legacy = planEpicReview(p, [], "orders", [], undefined, { firstPending: true, onPrepare: () => { legacyPreparations++; } }).task!;
+    const grouped = planEpicReview(p, [], "orders", [], undefined, { targetFirst: true, firstPending: true, onPrepare: () => { groupedPreparations++; } }).task!;
+    assert.equal(legacy.review.recordIDs.length, 1, "Reproduce the narrow leaf-first search");
+    assert.equal(grouped.review.recordIDs.length, 6);
+    assert.equal(grouped.review.contextPolicy, "staged-dense-records-v5");
+    assert.equal(grouped.review.recordGrouping, "target-decision-units-v3");
+    assert.ok(groupedPreparations < legacyPreparations, "Avoid speculative legacy closure/split work on fresh candidate groups");
+    const contexts = epicReviewBatches(p, grouped.review), union = new Set(contexts.flatMap(c => c.manifest.includedIDs));
+    for (const record of [...p.sources, ...p.requirements]) assert.ok(union.has(record.id), "Every original mandatory record remains checked");
+    for (const context of contexts) {
+      assert.ok(grouped.review.recordIDs.every(id => context.manifest.includedIDs.includes(id)));
+      assert.ok(context.manifest.characters <= 96000);
+    }
+    assert.deepEqual(p, original);
+    console.log(JSON.stringify({ fixtureOnly: true, legacyTargets: 1, groupedTargets: 6, legacyPreparations, groupedPreparations, evidenceBatches: contexts.length }));
+  } finally { store.close(); }
+});
+
+test("footer collection can publish ten independent dense questions from two groups without repeating shared checks per target", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    let p = sharedHeavy(store);
+    const sourceIDs = p.sources.map(source => source.id);
+    for (let offset = 0; offset < 11; offset += 10) {
+      const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+      store.finishJob(job.id, { ...empty(), requirements: Array.from({ length: Math.min(10, 11 - offset) }, (_, index) => ({
+        epicID: "orders", statement: `Independent order behavior ${offset + index}`, rationale: "Keep all original shared human decisions",
+        acceptance: [`Behavior ${offset + index} has an observable outcome`], sourceIDs,
+      })) });
+      p = store.get(p.id);
+    }
+    const original = structuredClone(p), seen: string[] = [];
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      const review = context.manifest.epicReview!;
+      assert.equal(review.recordIDs.length, 6); assert.equal(review.contextPolicy, "staged-dense-records-v5");
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number; draft: Analysis } }).stagedGuardrailReview;
+      const key = `${review.packageID}:${stage.phase}:${stage.batch}`; assert.ok(!seen.includes(key)); seen.push(key);
+      return stage.phase === "discover" ? { ...empty(), questions: review.recordIDs.slice(0, 5).map(id => ({ epicID: "orders",
+        text: `Choose the recovery behavior for ${id}?`, whyItMatters: "An independent observable product choice", evidenceIDs: [id],
+        options: [{ label: "Retain", consequence: "Keep recoverable state" }, { label: "Discard", consequence: "Start fresh" }],
+      })) } : { guardrailVerdict: { keepQuestions: stage.draft.questions.map((_, index) => index), keepRequirements: [] } };
+    } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 10, collectQuestionBatch: true, research: false });
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await delay(20);
+    assert.equal(queue.isActive(p.id), false);
+    const jobs = store.jobs(p.id).filter(job => job.context?.epicReview);
+    assert.equal(store.get(p.id).questions.length, 10, queue.progress(p.id).join("\n"));
+    assert.equal(jobs.length, 2);
+    for (const job of jobs) {
+      const work = job.retrievalWork!.epicStages!;
+      assert.equal(work.discoveryPolicy, "candidate-first-v1"); assert.equal(work.phase, "complete");
+      assert.equal(work.receipts.filter(r => r.phase === "discover").length, 1);
+      assert.equal(work.receipts.filter(r => r.phase === "validate").length, work.verification!.groups.length);
+    }
+    assert.deepEqual(store.get(p.id).sources, original.sources);
+    assert.deepEqual(store.get(p.id).requirements, original.requirements);
+    assert.match(queue.progress(p.id).join("\n"), /Question target reached: 10 pending/);
+    console.log(JSON.stringify({ fixtureOnly: true, questions: 10, candidateGroups: jobs.length, adapterRequests: seen.length,
+      authority: "Every surviving proposal checked against all mandatory evidence; not live yield or latency" }));
+  } finally { await queue?.close(); store.close(); }
+});
+
+test("grouped discovery upgrade resumes a paid singleton after repeated reopen without regrouping or replaying its receipt", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "grouped-discovery-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = sharedHeavy(store);
+    const sourceIDs = p.sources.map(source => source.id);
+    const seedJob = store.beginJob(p.id, p.revision).job; store.claimJob(seedJob.id, Date.now() + 60000);
+    store.finishJob(seedJob.id, { ...empty(), requirements: Array.from({ length: 5 }, (_, index) => ({ epicID: "orders",
+      statement: `Historical grouped behavior ${index}`, rationale: "Retain all original decisions", acceptance: ["Observable behavior"], sourceIDs })) });
+    p = store.get(p.id); const calls: string[] = [];
+    const adapter = { async analyze(_project: Project, { context }: import("../service/discovery.js").DiscoveryOptions) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      const key = `${context.manifest.epicReview!.packageID}:${stage.phase}:${stage.batch}`;
+      assert.ok(!calls.includes(key), "A paid accepted request must never repeat"); calls.push(key);
+      return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    } };
+    const paused = await new DiscoveryService(store, adapter, { stagedLimits: { requests: 1, durationMs: 900000 } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(paused.status, "interrupted"); assert.equal(paused.context!.epicReview!.recordIDs.length, 1);
+    assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 1); assert.equal(calls.length, 1);
+    const original = structuredClone(store.getJob(paused.id)), review = structuredClone(paused.context!.epicReview);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.getJob(paused.id), original); assert.equal(calls.length, 1, "Opening an upgraded store cannot repeat model work");
+    }
+    const resumed = await new DiscoveryService(store, adapter).analyze(p.id, p.revision,
+      { gapMode: "epic", focusEpicID: "orders", candidateFirst: true, research: false });
+    assert.equal(resumed.status, "completed", resumed.diagnostic);
+    assert.deepEqual(resumed.context!.epicReview, review, "The compatible paid child wins before a new grouped strategy");
+    assert.equal(resumed.retrievalWork!.epicStages!.discoveryPolicy, undefined, "Do not silently change an all-read paid protocol");
+    assert.deepEqual(resumed.retrievalWork!.epicStages!.receipts[0], original.retrievalWork!.epicStages!.receipts[0]);
+    assert.deepEqual(store.getJob(paused.id), original); assert.deepEqual(store.get(p.id).sources, p.sources);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 function addStageLimitGuardrails(store: ProjectStore, p: Project, count = 80) {
   for (let i = 0; i < count; i++) p = store.note(p.id, p.revision,
     Array.from({ length: 150 }, (_, n) => digest(`stage-ceiling-${i}-${n}`)).join(""), "project");

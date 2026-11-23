@@ -108,6 +108,7 @@ export type DiagnosticSource = {
   savedDraftRepairFormat?: number | null;
   savedVerificationFormat?: number | null;
   savedVerificationBatches?: number | null;
+  savedProposalReadFormat?: number | null;
   reusedCollectionBatches?: number | null;
   epicVerificationBatches?: number | null;
   epicCandidateFirst?: number | null;
@@ -154,7 +155,8 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
       const stored = row.sections === null ? {} : JSON.parse(row.sections) as Record<string, unknown>;
       for (const key of diagnosticSections) if (typeof stored[key] === "number") sections[key] = count.parse(stored[key]);
       const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "");
-       const legacyTotalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches)
+       const readSteps = row.savedProposalReadFormat === 1 ? 1 : row.stagedBatches;
+       const legacyTotalSteps = exactStages && row.stagedBatches !== null ? count.parse(readSteps)
          + (row.savedDraftRepairFormat !== 1 && row.savedVerificationFormat === 1 && row.savedVerificationBatches != null
            ? count.parse(row.savedVerificationBatches) : count.parse(row.stagedBatches)) + Number(row.savedDraftRepairFormat === 1) : null;
       const group = row.groupProgress ? groupProgressSchema.parse(JSON.parse(row.groupProgress)) : null;
@@ -183,7 +185,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePub
           additionalRecoveryRequestsGranted: nullableCount(row.groupRecoveryRequests ?? null), originalSupportRecords: nullableCount(row.groupSupportRecords ?? null),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
             totalSteps, remainingSteps: row.epicEmptyCompletion === 1 ? 0 : totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,
-             phase: row.epicEmptyCompletion === 1 ? "complete" : groupProgress?.phase ?? (totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : row.answerGroupPhase === "repair" ? "repair" : completedSteps < (row.epicCandidateFirst === 1 ? 1 : row.stagedBatches!) || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null),
+              phase: row.epicEmptyCompletion === 1 ? "complete" : groupProgress?.phase ?? (totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : row.answerGroupPhase === "repair" ? "repair" : completedSteps < (row.epicCandidateFirst === 1 ? 1 : readSteps!) || row.savedDraftRepairFormat === 1 && completedSteps === readSteps ? "read" : "check" : null),
             ...(group && groupProgress ? { pageAccounting: { ...answerGroupPageCounts(group), budgetScope: answerGroupPageStepLimit(group) === answerGroupLimits.completedPages ? "shared-group" as const : "original-step" as const,
               currentPage: groupProgress.evidencePage ? groupProgress.evidencePage.completed + 1 : null,
               currentPages: groupProgress.evidencePage?.total ?? null, limits: { pagesPerStep: answerGroupPageStepLimit(group),

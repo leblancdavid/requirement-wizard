@@ -16,6 +16,13 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Fresh no-research discovery now tries related targets together before splitting
+large shared context into single-target screens. Existing paid work is retained;
+ten remains a soft question target, not a promised yield. Deterministic grouping
+checks pass; production latency, answer-processing cost and the reported folder-save
+heap exhaustion remain unqualified. See
+[grouped discovery](docs/browser-workspace.md#broader-grouped-discovery-scheduling-2026-11-22).
+
 Idle discovery servers pass health admission before reuse; unhealthy owned servers
 can be replaced before prompting, never by silently retrying failed prompts. Logs
 distinguish finished no-question screens from genuine evidence failures. Saved

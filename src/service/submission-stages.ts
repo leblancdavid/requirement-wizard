@@ -7,7 +7,7 @@ import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
 import { packSubmissionVerification, SubmissionLookupError } from "../core/submission-stages.js";
-import { submissionCitationRepair } from "../core/submission-stages.js";
+import { submissionCitationRepair, submissionScopedRepair } from "../core/submission-stages.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -18,7 +18,8 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   // Browsing another feature does not redefine an unfinished saved submission.
   // Reconstruct its original scope, then revalidate all current mandatory evidence.
   let m = local("preparation", () => submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow));
-  let w = local("preparation", () => previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m));
+  let w = local("preparation", () => previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m, { proposalFirst: true }));
+  if (!previous && w.proposalRead) options.onProgress?.("Preparing one scoped update from your saved answer, linked requirements and their original support. Every mandatory evidence batch will check the frozen proposal; omitted reads are not credited. Existing approvals and unrelated requirements remain protected.");
   if (previous?.submissionWork) {
     const history = local("history", () => store.submissionRecoveryJobs(project.id, item.id));
     const reconciliation = local("replay", () => submissionReconciliation(project, item.id, w, history));
@@ -47,11 +48,13 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   }
   if (!priorRecovery && w.permissionRecovery) options.onProgress?.("Recovered an older staged revision-permission blocker. Original input, completed steps and spent attempts remain saved; continuing the unfinished read with exact supporting evidence.");
   if (previous && !w.draftRepair) {
-    const repair = local("validation", () => submissionCitationRepair(m, w, previous));
+    const repair = local("validation", () => submissionCitationRepair(m, w, previous) ?? submissionScopedRepair(m, w, previous));
     if (repair) {
       w.draftRepair = repair;
       ({ draft, blocked } = local("replay", () => replaySubmissionStages(m, w)));
-      options.onProgress?.("Correcting invalid requirement citations in the retained checked draft. Original reads, checks and paid attempts remain saved. One bounded correction must pass every original evidence check; nothing publishes automatically.");
+      options.onProgress?.(repair.policy === "invalid-scoped-output-v1"
+        ? "Correcting an AI draft that exceeded this saved answer's scope. Your answer and paid reads stay saved; no new human decision is needed for that protocol error. One bounded correction must pass every original evidence check, without widening the write boundary."
+        : "Correcting invalid requirement citations in the retained checked draft. Original reads, checks and paid attempts remain saved. One bounded correction must pass every original evidence check; nothing publishes automatically.");
     }
   }
   local("validation", () => store.assertSubmissionDraftRepair(project, item, w));

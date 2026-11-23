@@ -8,7 +8,8 @@ import { analysisSchema, reviewFingerprint } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { command } from "../service/git-delivery.js";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { stageJSON } from "../storage/staged-json.js";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
@@ -17,6 +18,24 @@ import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionDependencySnapshotKey } from "../core/definition-dependencies.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { dimensions } from "../core/epics.js";
+
+test("app startup cleans idle workspace staging without publishing or making model calls", async () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/app-temp-cleanup-"));
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const p = store.create("Idle app", "Keep saved decisions", { providerID: "openai", modelID: "fixture" });
+  store.connectWorkspace(p.id, p.revision, directory);
+  const managed = join(directory, ".reqwizit"), old = stageJSON(managed, { orphan: true }), recent = stageJSON(managed, { active: true });
+  utimesSync(old.path, new Date(0), new Date(0));
+  const before = readFileSync(join(managed, "manifest.json"), "utf8");
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Cleanup cannot infer"); } } });
+  try {
+    await until(() => !existsSync(old.path)); assert.ok(existsSync(recent.path));
+    assert.equal(readFileSync(join(managed, "manifest.json"), "utf8"), before);
+    assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.jobs(p.id), []); assert.equal(calls, 0);
+    await app.close(); await app.close();
+  } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("original-finding inspection APIs require local auth and exact inputs, never create jobs or authorize model work", async () => {
   const store = new ProjectStore(":memory:");

@@ -103,6 +103,46 @@ Disconnecting retains both generated files and app records.
 
 ## Generated files
 
+### Temporary export files and cleanup (2026-11-23)
+
+Root `.reqwizit-<uuid>.tmp` files are disposable publication staging, not saved
+decisions or recovery evidence. A fatal export-process abort can bypass normal
+cleanup. New continuation staging names include the publisher's random owner ID;
+after observing that child's exit, its parent removes only that owner's files,
+including incomplete parts. Normal success/failure cleanup remains in place.
+Restart the desktop/backend to load this change; it does not qualify the separate
+large-project export heap-exhaustion problem as fixed.
+
+Publication also makes a bounded, best-effort pass over at most 512 root entries
+to remove exactly named staging files older than 24 hours. The browser/desktop
+backend additionally sweeps **on startup and every 15 minutes**, including idle,
+already-saved and failed-export projects. That full sweep uses asynchronous,
+streamed filesystem operations (no 512-entry cutoff), coalesces overlapping passes,
+refreshes connected folders each pass and stops on app shutdown. No export retry
+or manual command is needed. Cleanup does not traverse evidence/features, follow
+symlinks, delete saved artifacts, or compact SQLite. Recent temps remain protected
+unless their owning export process has exited.
+For a large pre-existing backlog, preview first, then apply explicitly:
+
+```powershell
+npm run reqwizit -- cleanup --path "D:\Projects\my-app"
+npm run reqwizit -- cleanup --path "D:\Projects\my-app" --apply
+```
+
+The command streams directory entries, reports counts/logical bytes/failures, and
+retains recent files. `--json` provides a machine-readable report. It does not open
+the database, run publication or start model calls. Interrupted cleanup can be
+repeated; locked files remain for a later attempt. Existing generated artifacts,
+manifest bytes, revision identities and paid checkpoints are unchanged. Do not
+delete `.reqwizit/` itself; it contains the portable project.
+
+All manifest-listed files belong to the saved portable project, not a temp cache.
+Feature requirements, original evidence, continuation checkpoints and execution
+results preserve review/reuse and clone recovery. Markdown/progress views are
+generated conveniences, and SQLite remains the local working store, but manually
+removing any manifest-listed file breaks the coherent portable export. Remove only
+disposable staging through the cleanup policy, not individual saved artifacts.
+
 ```text
 my-repo/
   .reqwizit/

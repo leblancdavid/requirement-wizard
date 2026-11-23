@@ -8,6 +8,7 @@ import { submissionClarificationQuestions } from "./readiness-questions.js";
 import { assertSpecificationAuthorization, specificationAuthorizationSources } from "./specification.js";
 import { refinementEvidenceRecords } from "./refinement-context.js";
 import { canonicalJSON } from "./assessment-identity.js";
+import { validateScopedAnswerResult } from "./input-scope.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -63,6 +64,8 @@ export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]),
   reviewChanges: z.array(z.discriminatedUnion("type", [analysisSchema.shape.reviewChanges.unwrap().element.options[0],
     analysisSchema.shape.reviewChanges.unwrap().element.options[1]])).max(30).optional() });
 export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-submission-batches-v1"), submissionID: z.string().uuid(),
+  proposalRead: z.object({ format: z.literal(1), policy: z.literal("scoped-target-v1"),
+    recordIDs: z.array(z.string().min(1)).min(1).max(512).refine(ids => new Set(ids).size === ids.length) }).strict().optional(),
   verification: z.object({ format: z.literal(1), policy: z.literal("frozen-draft-exact-packing-v1"),
     fromReceipt: z.number().int().min(1).max(512), prefixKey: key, draftKey: key, planKey: key,
     batches: z.array(z.array(z.string().min(1)).min(1)).min(1).max(32) }).strict().optional(),
@@ -84,7 +87,7 @@ export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   reconciliation: z.object({ format: z.literal(1), sourceJobID: z.string().uuid(), clarificationJobID: z.string().uuid(),
     questionID: z.string().min(1), answerSourceID: z.string().min(1) }).strict().optional(),
   draftRepair: z.object({ format: z.literal(1), sourceJobID: z.string().uuid(), clarificationJobID: z.string().uuid().optional(),
-    policy: z.literal("invalid-requirement-evidence-v1").optional(),
+     policy: z.enum(["invalid-requirement-evidence-v1", "invalid-scoped-output-v1"]).optional(),
     fromReceipt: z.number().int().min(1).max(511), priorAttempts: z.number().int().min(0).max(8),
     evidenceIDs: z.array(z.string().min(1)).min(1), conclusion: z.string().max(12000) }).strict()
     .refine(r => r.policy ? !r.clarificationJobID && r.priorAttempts === 0 : !!r.clarificationJobID && r.priorAttempts > 0,
@@ -92,6 +95,8 @@ export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   allowanceExtensions: z.array(z.object({ step: z.number().int().min(0).max(63), additionalRequests: z.literal(4),
     atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict()).max(64).optional() }).strict();
 export type SubmissionWork = z.infer<typeof submissionWorkSchema>;
+export const submissionReadSteps = (w: SubmissionWork) => w.proposalRead ? 1 : w.batches.length;
+const submissionPlanKey = (w: SubmissionWork) => hash([w.policy, w.materialKey, w.batches, ...(w.proposalRead ? [w.proposalRead] : [])]);
 
 /** A new explicit answer can supersede an incompatible draft plan, never its
  * original human input or immutable evidence receipts. No answer, no new plan. */
@@ -113,19 +118,19 @@ const complete = (r: z.infer<typeof submissionStageResponseSchema>) => "question
 const repairActive = (w: SubmissionWork) => !!w.draftRepair && w.receipts.length >= w.draftRepair.fromReceipt;
 const repairRead = (w: SubmissionWork) => repairActive(w) && !w.receipts.slice(w.draftRepair!.fromReceipt).some((r) => complete(r.response));
 export const submissionStep = (w: SubmissionWork) => repairActive(w)
-  ? w.batches.length + w.receipts.slice(w.draftRepair!.fromReceipt).filter((r) => complete(r.response)).length
+  ? submissionReadSteps(w) + w.receipts.slice(w.draftRepair!.fromReceipt).filter((r) => complete(r.response)).length
   : w.receipts.filter((r) => complete(r.response)).length;
-export const submissionTotalSteps = (w: SubmissionWork) => w.draftRepair ? w.batches.length * 2 + 1 : w.batches.length + (w.verification?.batches.length ?? w.batches.length);
+export const submissionTotalSteps = (w: SubmissionWork) => w.draftRepair ? submissionReadSteps(w) + w.batches.length + 1 : submissionReadSteps(w) + (w.verification?.batches.length ?? w.batches.length);
 export const submissionProgress = (w: SubmissionWork) => w.publicationSupport ? { completed: submissionStep(w) + Number(!!w.publicationSupport.receipt?.verdict.valid), total: submissionTotalSteps(w) + 1,
   phase: w.publicationSupport.receipt?.verdict.valid ? "complete" as const : "check" as const } : ({ completed: submissionStep(w), total: submissionTotalSteps(w),
-   phase: submissionStep(w) >= submissionTotalSteps(w) ? "complete" as const : repairRead(w) || submissionStep(w) < w.batches.length ? "read" as const : "check" as const });
+   phase: submissionStep(w) >= submissionTotalSteps(w) ? "complete" as const : repairRead(w) || submissionStep(w) < submissionReadSteps(w) ? "read" as const : "check" as const });
 export const submissionRequestLimit = (w: SubmissionWork, step = submissionStep(w)) => !repairActive(w) && w.allowanceExtensions?.some((g) => g.step === step) ? 8 : 4;
 export function submissionAllowance(w: SubmissionWork) {
   if (w.publicationSupport) return { step: submissionTotalSteps(w), attempts: w.publicationSupport.attempts, limit: 4, canExtend: false };
   const step = submissionStep(w), limit = submissionRequestLimit(w), last = w.receipts.at(-1);
   const blocked = last && ("submissionCheck" in last.response && !last.response.submissionCheck.valid
     || "submissionBlocked" in last.response && w.permissionRecovery?.receiptIndex !== w.receipts.length - 1);
-  return { step, attempts: w.attempts, limit, canExtend: !w.draftRepair && step < w.batches.length * 2 && w.attempts === 4 && limit === 4 && !blocked };
+  return { step, attempts: w.attempts, limit, canExtend: !w.draftRepair && step < submissionTotalSteps(w) && w.attempts === 4 && limit === 4 && !blocked };
 }
 const empty = (): Analysis => ({ summary: "Saved response follow-up in progress", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 export const canStageSubmission = (s: Submission | undefined): s is Submission => !!s?.applied && !!s.appliedSourceID && !s.conflict
@@ -159,6 +164,27 @@ export function submissionMaterials(project: Project, item: Submission, input: C
 }
 export type SubmissionMaterials = ReturnType<typeof submissionMaterials>;
 
+function assertScopedSubmissionDraft(m: SubmissionMaterials, output: Analysis) {
+  if (!m.item.answerScope) return;
+  const epicID = m.project.questions.find(q => q.id === m.item.answerScope!.questionID)?.epicID;
+  validateScopedAnswerResult(m.project, [m.item.answerScope], { ...output, questions: output.questions.map(q => ({ ...q, epicID: q.epicID ?? epicID })) });
+}
+
+/** A proven write-boundary defect is an AI draft error, not a new human decision.
+ * Explicit continuation may correct it once while preserving every paid receipt. */
+export function submissionScopedRepair(m: SubmissionMaterials, w: SubmissionWork, source: Job): SubmissionWork["draftRepair"] {
+  if (!m.item.answerScope || w.draftRepair || w.publicationSupport || w.attempts || source.status !== "failed" || source.projectID !== m.project.id
+    || !source.context?.submissionIDs?.includes(m.item.id) || canonicalJSON(source.submissionWork) !== canonicalJSON(w)) return;
+  const replay = replaySubmissionStages(m, w);
+  if (replay.blocked || submissionStep(w) !== submissionTotalSteps(w)) return;
+  let issue: string;
+  try { assertScopedSubmissionDraft(m, replay.draft); return; }
+  catch (error) { if (!(error instanceof Error)) throw error; issue = error.message; }
+  const context = submissionStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, replay.draft);
+  return { format: 1, policy: "invalid-scoped-output-v1", sourceJobID: source.id, fromReceipt: w.receipts.length,
+    priorAttempts: 0, evidenceIDs: context.manifest.includedIDs, conclusion: issue };
+}
+
 /** Explicit continuation of an old fully checked but unpublishable draft. This
  * proves a protocol defect, not missing human intent or permission to publish. */
 export function submissionCitationRepair(m: SubmissionMaterials, w: SubmissionWork, source: Job): SubmissionWork["draftRepair"] {
@@ -180,7 +206,7 @@ export function submissionCitationRepair(m: SubmissionMaterials, w: SubmissionWo
 export function submissionDraftRepair(m: SubmissionMaterials, w: SubmissionWork, jobs: Job[]): SubmissionWork["draftRepair"] {
   const last = w.receipts.at(-1);
   if (w.draftRepair || !last || !("submissionCheck" in last.response) || last.response.submissionCheck.valid
-    || submissionStep(w) < w.batches.length) return undefined;
+    || submissionStep(w) < submissionReadSteps(w)) return undefined;
   for (const job of [...jobs].reverse()) {
     const task = job.context?.readinessQuestions;
     if (task?.format !== 3 || task.submissionID !== w.submissionID || job.status !== "completed" || !job.result || job.result.questions.length) continue;
@@ -204,20 +230,28 @@ export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork
   if (step >= submissionTotalSteps(w) || phase === "complete") throw new Error("No unfinished saved-response stage.");
   const supplemental = w.receipts.slice(repairActive(w) ? w.draftRepair!.fromReceipt : 0).filter((r) => r.step === step).flatMap((r) => "submissionEvidence" in r.response ? r.response.submissionEvidence.recordIDs : []);
   const verification = phase === "check" && !repairActive(w) ? w.verification : undefined;
-  const batch = repairRead(w) ? w.draftRepair!.evidenceIDs : verification ? verification.batches[step - w.batches.length]!
-    : w.batches[repairActive(w) ? step - w.batches.length - 1 : step % w.batches.length]!;
+  const reads = submissionReadSteps(w);
+  const batch = repairRead(w) ? w.draftRepair!.evidenceIDs : verification ? verification.batches[step - reads]!
+    : w.proposalRead && phase === "read" ? w.proposalRead.recordIDs
+    : w.batches[repairActive(w) ? step - reads - 1 : w.proposalRead ? step - reads : step % w.batches.length]!;
   const selected = new Set([...m.pins, ...batch, ...supplemental]);
   const records = m.records.filter((r) => selected.has(r.record.id));
   const detail = Object.fromEntries(["sources", "questions", "requirements", "research"].map((field) => [field, records.filter((r) => r.field === field).map((r) => r.record)]));
-  let data: unknown = { ...m.base, ...detail, draft, submissionStage: { phase, step, batches: w.batches.length,
-    ...(verification ? { verificationPlan: { key: verification.planKey, batch: step - w.batches.length + 1, batches: verification.batches.length,
+  let data: unknown = { ...m.base, ...detail, draft,
+    ...(w.proposalRead ? { instruction: "Original scoped human input is already saved. Propose only its exact linked-target update from detailed original support, then independently check the frozen proposal against EVERY mandatory evidence batch. Other evidence is not presumed read during this proposal. Do not widen write permission, choose human precedence or publish partial changes. No tools, research or whole-project interpretation." } : {}),
+    submissionStage: { phase, step, batches: w.batches.length,
+    ...(w.proposalRead ? { proposalRead: { ...w.proposalRead,
+      instruction: "Propose only the update authorized by this exact saved answer, using the linked targets and their original supporting evidence. Other mandatory evidence has not been read here and will independently check the frozen draft before publication. Do not infer missing preferences or widen scope. No original full-evidence reads are credited by this proposal." } } : {}),
+    ...(verification ? { verificationPlan: { key: verification.planKey, batch: step - reads + 1, batches: verification.batches.length,
       instruction: "Frozen-draft verification uses a losslessly repacked exact evidence batch. Check against every detailed record here. All original mandatory evidence is assigned to verification batches; omitted evidence is not presumed checked. This check cannot add or rewrite proposals." } } : {}),
     availableEvidenceIDs: m.evidenceIDs,
     ...(repairRead(w) ? { draftRepair: {
-      ...(w.draftRepair!.policy === "invalid-requirement-evidence-v1"
+       ...(w.draftRepair!.policy
         ? { priorVerdict: w.receipts[w.draftRepair!.fromReceipt - 1]!.response, citationIssue: w.draftRepair!.conclusion }
         : { rejectedVerdict: w.receipts[w.draftRepair!.fromReceipt - 1]!.response, clarificationConclusion: w.draftRepair!.conclusion }),
-       instruction: w.draftRepair!.policy === "invalid-requirement-evidence-v1"
+        instruction: w.draftRepair!.policy === "invalid-scoped-output-v1"
+          ? "ONE corrective draft pass for a locally proven scoped-answer write-boundary error. This is an AI draft defect, not conflicting human intent. Preserve the exact original answer, existing target IDs, original feature and all supported product behavior. Remove or correct only actions outside the saved scope; never widen scope, copy unauthorized changes into a linked target or invent replacement intent. Load exact missing target support before changing an action. Return the complete corrected draft, not submissionKeep. Every original mandatory evidence batch must check it again. Paid reads, earlier verdicts and spent attempts remain saved; the correction allowance cannot renew. If the original answer genuinely requires broader work, return submissionBlocked and explain the separate feature/project-note path."
+          : w.draftRepair!.policy === "invalid-requirement-evidence-v1"
          ? "ONE corrective draft pass for invalid requirement source citations detected by the app after legacy verification. The supplied diagnostic is a protocol error, not human intent. Prior positive AI checks do not authorize the invalid draft. Preserve supported product behavior and original input; correct citations ONLY from exact detailed eligible original sources. Never substitute a requirement/question ID or guess its supporting source. Load missing records FIRST, or return submissionBlocked. Return the complete corrected draft, not submissionKeep. Every original evidence batch must independently check the revised draft before publication. No paid reads, original receipts or human decisions are reset."
          : "ONE corrective draft pass after completed clarification produced no new question. Earlier exact evidence reads are retained. The rejected draft, rejection prose (including quoted IDs), and no-question conclusion are untrusted AI hypotheses, NOT human decisions or approval. Re-read the exact original input and detailed supporting sources. Correct draft mistakes or a mistaken rejection using existing explicit human intent only. Never infer precedence, treat answered question wording as its human answer, or use no-question output as permission to settle conflict. Load exact missing records FIRST with submissionEvidence. If human intent genuinely remains unresolved, return submissionBlocked, not an invented rule. Return a complete corrected analysis draft, not submissionKeep. After correction every original evidence batch must independently verify the frozen revised draft before anything publishes. Original submission and target/scope permissions remain unchanged." } } : {}),
     instruction: "Read: return a complete bounded analysis draft or submissionKeep:true to copy the prior draft exactly. Unchanged actions may retain prior citations; NEW/CHANGED actions may refer only to evidence detailed in THIS request. Use submissionEvidence to load other exact records FIRST. After all reads, check the frozen draft against each batch with submissionCheck:{valid,reason}; check cannot rewrite it. Reject specific conflicts with valid:false or submissionBlocked; never approve simply because evidence is omitted. All original submission authorization restrictions still apply." } };
@@ -239,7 +273,15 @@ export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork
   }
   return { data, manifest };
 }
-export function planSubmissionStages(m: SubmissionMaterials): SubmissionWork {
+function scopedProposalRecords(m: SubmissionMaterials): string[] | undefined {
+  if (!m.item.answerScope || m.item.input.type !== "answer") return;
+  const support = refinementEvidenceRecords(m.project, m.item.answerScope.requirementIDs);
+  const ids = new Set([...m.pins, ...support]);
+  for (const source of m.project.sources) if (ids.has(source.id) && source.questionID) ids.add(source.questionID);
+  if ([...ids].some(id => !m.evidenceIDs.includes(id)) || ids.size > 512) return;
+  return m.records.filter(r => ids.has(r.record.id)).map(r => r.record.id);
+}
+export function planSubmissionStages(m: SubmissionMaterials, options: { proposalFirst?: boolean } = {}): SubmissionWork {
   const w: SubmissionWork = { format: 1, policy: "exact-submission-batches-v1", submissionID: m.submissionID, task: m.task,
     materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
   // Only new schedules are packed here. Saved batches and their plan/context keys
@@ -265,11 +307,22 @@ export function planSubmissionStages(m: SubmissionMaterials): SubmissionWork {
   if (batch.length) w.batches.push(batch);
   if (!w.batches.length) w.batches.push([...m.pins].filter((id) => m.evidenceIDs.includes(id)));
   if (w.batches.length > 32) throw new Error("Saved-response follow-up needs more than 32 exact batches. No evidence was discarded and no request started.");
-  w.planKey = hash([w.policy, w.materialKey, w.batches]);
+  w.planKey = submissionPlanKey(w);
   submissionWorkSchema.parse(w);
   for (let step = 0; step < w.batches.length; step++) {
     const context = submissionStageContext(m, { ...w, batches: [w.batches[step]!] }, empty());
     if (context.manifest.characters + draftLimit > stageLimit) throw new Error("An exact saved-response batch plus target and draft reserve cannot fit. Original human input and saved work are retained; no model call started.");
+  }
+  if (options.proposalFirst && w.batches.length > 1) {
+    const recordIDs = scopedProposalRecords(m);
+    if (recordIDs) {
+      const proposalRead = { format: 1 as const, policy: "scoped-target-v1" as const, recordIDs };
+      try {
+        const context = submissionStageContext(m, { ...w, proposalRead }, empty());
+        if (context.manifest.characters + draftLimit + 128 <= stageLimit) w.proposalRead = proposalRead;
+      } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; }
+    }
+    w.planKey = submissionPlanKey(w);
   }
   return w;
 }
@@ -282,8 +335,8 @@ const verificationPlanKey = (w: SubmissionWork, v: NonNullable<SubmissionWork["v
  * mandatory record is still assigned to a check, and pins stay in every request. */
 export function packSubmissionVerification(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis): boolean {
   if (w.verification || w.draftRepair || w.publicationSupport || w.attempts !== 0 || w.batches.length < 2
-    || submissionStep(w) !== w.batches.length || w.receipts.some(r => r.step >= w.batches.length)
-    || w.allowanceExtensions?.some(g => g.step >= w.batches.length)) return false;
+    || submissionStep(w) !== submissionReadSteps(w) || w.receipts.some(r => r.step >= submissionReadSteps(w))
+    || w.allowanceExtensions?.some(g => g.step >= submissionReadSteps(w))) return false;
   const v: NonNullable<SubmissionWork["verification"]> = { format: 1, policy: "frozen-draft-exact-packing-v1", fromReceipt: w.receipts.length,
     prefixKey: verificationHash(w.receipts), draftKey: verificationHash(draft), planKey: "0".repeat(64), batches: [] };
   const ids = w.batches.flat().filter(id => !m.pins.has(id));
@@ -311,7 +364,7 @@ function validateVerificationPlan(m: SubmissionMaterials, w: SubmissionWork) {
   const expected = m.evidenceIDs.filter(id => !m.pins.has(id)), actual = v.batches.flat();
   if (v.fromReceipt > w.receipts.length || v.planKey !== verificationPlanKey(w, v)
     || v.batches.length >= w.batches.length || actual.length !== expected.length || new Set(actual).size !== expected.length
-    || actual.some(id => !expected.includes(id)) || w.receipts.slice(0, v.fromReceipt).some(r => r.step >= w.batches.length))
+    || actual.some(id => !expected.includes(id)) || w.receipts.slice(0, v.fromReceipt).some(r => r.step >= submissionReadSteps(w)))
     throw new Error("Frozen-draft verification plan changed or omits exact evidence. Paid work was retained.");
 }
 function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw: unknown, requireTargetSupport = false, live = false) {
@@ -331,7 +384,7 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
     return { response, draft, blocked: response.submissionCheck.valid ? undefined : response.submissionCheck.reason };
   }
   const validateReadyDraft = (output: Analysis) => {
-    if ((submissionStep(w) === w.batches.length - 1 || repairRead(w)) && m.base.submission.input.type === "review"
+    if ((submissionStep(w) === submissionReadSteps(w) - 1 || repairRead(w)) && m.base.submission.input.type === "review"
       && (output.reviewResponses?.length !== 1 || output.reviewResponses[0]!.sourceID !== m.base.submission.appliedSourceID))
       throw new Error("The completed read draft must include exactly one response to this saved review before verification can start.");
   };
@@ -347,7 +400,10 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
   // Membership in the loaded inventory does not establish the reference TYPE or
   // current authority. Catch bad requirements before spending any check requests.
   // Historical paid receipts replay under their original acceptance contract.
-  if (live) validateRequirementEvidence(m.project, response.requirements);
+  if (live) {
+    validateRequirementEvidence(m.project, response.requirements);
+    assertScopedSubmissionDraft(m, response);
+  }
   const loaded = new Set(context.manifest.includedIDs), areas = new Set(m.base.areas.map((e) => e.id));
   for (const change of requireTargetSupport ? response.specificationUpdates?.changes ?? [] : []) {
     if (draft.specificationUpdates?.changes.some((old) => JSON.stringify(old) === JSON.stringify(change))) continue;
@@ -378,10 +434,12 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
 export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork) {
   submissionWorkSchema.parse(w);
   const grants = w.allowanceExtensions ?? [];
-  if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= (w.draftRepair ? w.batches.length * 2 : submissionTotalSteps(w))))
+  if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= (w.draftRepair ? submissionReadSteps(w) + w.batches.length : submissionTotalSteps(w))))
     throw new Error("Invalid saved-response additional request grant.");
   if (w.materialKey !== m.materialKey || w.submissionID !== m.submissionID || JSON.stringify(w.task) !== JSON.stringify(m.task)
-    || w.planKey !== hash([w.policy, w.materialKey, w.batches])) throw new Error("Saved response evidence or stage plan changed; completed calls were retained, not repeated.");
+    || w.planKey !== submissionPlanKey(w)) throw new Error("Saved response evidence or stage plan changed; completed calls were retained, not repeated.");
+  if (w.proposalRead && JSON.stringify(w.proposalRead.recordIDs) !== JSON.stringify(scopedProposalRecords(m)))
+    throw new Error("Scoped proposal evidence changed or omitted original target support; paid work was retained.");
   validateVerificationPlan(m, w);
   const expected = m.evidenceIDs.filter((id) => !m.pins.has(id)), actual = w.batches.flat().filter((id) => !m.pins.has(id));
   if (actual.length !== expected.length || new Set(actual).size !== expected.length || actual.some((id) => !expected.includes(id))
@@ -390,22 +448,25 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
   let draft = empty(), blocked: string | undefined, priorAttempt = 0;
   const verifyBoundary = () => {
     const v = w.verification; if (!v) return;
-    if (submissionStep(prefix) !== w.batches.length || blocked || priorAttempt !== 0
+    if (submissionStep(prefix) !== submissionReadSteps(w) || blocked || priorAttempt !== 0
       || v.prefixKey !== verificationHash(prefix.receipts) || v.draftKey !== verificationHash(draft))
       throw new Error("Frozen-draft verification does not match its completed read prefix and exact draft.");
   };
   const enterRepair = () => {
     const repair = w.draftRepair!, last = prefix.receipts.at(-1);
     const original = { ...prefix, draftRepair: undefined };
-    if (repair.policy === "invalid-requirement-evidence-v1") {
+    if (repair.policy) {
       if (blocked || !last || !("submissionCheck" in last.response) || !last.response.submissionCheck.valid
         || submissionStep(original) !== submissionTotalSteps(original) || priorAttempt !== 0 || repair.priorAttempts !== 0)
-        throw new Error("Citation correction requires the complete original checked draft and unchanged paid ledger.");
+        throw new Error("Protocol correction requires the complete original checked draft and unchanged paid ledger.");
       let invalid = false;
-      try { validateRequirementEvidence(m.project, draft.requirements); } catch { invalid = true; }
-      if (!invalid) throw new Error("Citation correction cannot reopen a valid checked draft.");
+      try {
+        if (repair.policy === "invalid-scoped-output-v1") assertScopedSubmissionDraft(m, draft);
+        else validateRequirementEvidence(m.project, draft.requirements);
+      } catch { invalid = true; }
+      if (!invalid) throw new Error("Protocol correction cannot reopen a valid checked draft.");
     } else if (!blocked || !last || !("submissionCheck" in last.response) || last.response.submissionCheck.valid
-      || submissionStep(original) < w.batches.length || repair.priorAttempts !== priorAttempt)
+      || submissionStep(original) < submissionReadSteps(w) || repair.priorAttempts !== priorAttempt)
       throw new Error("Corrective review must retain a terminal rejected verification and its spent attempts.");
     const before = { ...original, receipts: original.receipts.slice(0, -1) };
     if (JSON.stringify(submissionStageContext(m, before, draft).manifest.includedIDs) !== JSON.stringify(repair.evidenceIDs))
@@ -489,7 +550,7 @@ export function recoverSubmissionCheckScope(m: SubmissionMaterials, w: Submissio
 
 /** Detect the old empty-permissions bug structurally, never by interpreting blocker prose. */
 function hasSubmissionPermissionGap(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis) {
-  if (submissionStep(w) >= w.batches.length) return false;
+  if (submissionStep(w) >= submissionReadSteps(w)) return false;
   const context = submissionStageContext(m, w, draft), included = context.manifest.includedIDs;
   const input = m.base.submission.input;
   const targetIDs = input.type === "review" ? new Set([input.requirementID])

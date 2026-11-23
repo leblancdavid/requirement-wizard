@@ -10,6 +10,7 @@ import { requirementResolutionSchema } from "../core/requirement-resolution.js";
 import { processingPolicyChangeSchema } from "../core/processing-policy.js";
 import { answerGroupProgress, answerGroupClarificationView } from "../core/answer-group.js";
 import { ProjectStore } from "../storage/store.js";
+import { startWorkspaceTemporaryCleanup } from "../storage/workspace-temporary.js";
 import { readinessProgress } from "../core/readiness-stages.js";
 import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
 import { refinementStageProgress } from "../core/refinement-stages.js";
@@ -646,12 +647,15 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local app did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
+  const temporaryCleanup = startWorkspaceTemporaryCleanup(() => options.store.workspaceTemporaryDirectories());
   return { origin, token, close: () => {
     if (closePromise) return closePromise;
     closing = true;
+    const temporaryCleanupClosed = temporaryCleanup.close();
     for (const work of helpWork.values()) work.controller.abort();
     closePromise = (async () => {
       const cleanup = await Promise.allSettled([
+        temporaryCleanupClosed,
         ...[...helpWork.values()].map((work) => work.promise),
          implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(),
       ]);

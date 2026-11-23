@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { temporaryPrefix } from "./workspace-temporary.js";
 
 export type StagedArtifact = { path: string; hash: string; bytes: number };
 export const portableArtifactLimit = 64 * 1024 * 1024;
@@ -65,9 +66,10 @@ export function writePrettyJSON(value: unknown, write: (chunk: string) => void) 
   visit(value, 0); emit("\n"); if (buffer) write(buffer);
 }
 
-export function stageJSON(directory: string, value: unknown, limit = portableArtifactLimit): StagedArtifact {
+export function stageJSON(directory: string, value: unknown, limit = portableArtifactLimit, owner?: string): StagedArtifact {
+  const prefix = temporaryPrefix(owner);
   mkdirSync(directory, { recursive: true });
-  const path = join(directory, `.reqwizit-${randomUUID()}.tmp`), digest = createHash("sha256");
+  const path = join(directory, `${prefix}${randomUUID()}.tmp`), digest = createHash("sha256");
   let bytes = 0;
   const fd = openSync(path, "wx");
   try {
