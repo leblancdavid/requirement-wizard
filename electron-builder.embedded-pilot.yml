@@ -1,0 +1,8 @@
+# Explicit pilot only. Ordinary packaging does not include or select this helper.
+extends: ./electron-builder.yml
+extraResources:
+  - from: dist/embedded-helper
+    to: embedded-helper
+    filter:
+      - "**/*"
+artifactName: Reqwizit-${version}-${arch}-embedded-pilot-setup.${ext}

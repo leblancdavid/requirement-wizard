@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("reqwizitDesktop", {
   titleBarOverlay: process.platform === "win32",
+  readWorkspaceHistory: () => ipcRenderer.sendSync("reqwizit:workspace-history"),
+  saveWorkspaceHistory: (history: unknown): Promise<void> => ipcRenderer.invoke("reqwizit:save-workspace-history", history),
   setTitleBarColors: (color: string, symbolColor: string): Promise<void> => ipcRenderer.invoke("reqwizit:title-bar-colors", color, symbolColor),
   chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke("reqwizit:choose-directory"),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("reqwizit:open-external", url),

@@ -31,6 +31,7 @@ import { ConnectionManager, connectionError, type Connections } from "../provide
 import { ProviderError } from "../providers/chatgpt.js";
 import { CredentialStore } from "../providers/credentials.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
+import { createAppHelper, type AppHelper } from "../runtime/embedded/app-helper.js";
 import { ImplementationService } from "../service/implementation.js";
 import { inspectWorkspaceRepository } from "../service/git-delivery.js";
 import { executionConfigSchema } from "../core/execution.js";
@@ -59,7 +60,7 @@ import { definitionMixedPublicationPreviewQuerySchema, definitionMixedSaveReview
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
 
-export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; catalog?: CatalogSource; port?: number; staticDir?: string }) {
+export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; helper?: AppHelper; catalog?: CatalogSource; port?: number; staticDir?: string }) {
   options.store.enableBackgroundWorkspacePublication();
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
@@ -128,6 +129,21 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 403, { error: "Invalid local app session. Reload this app's page." }); return;
       }
       if (req.method !== "GET" && req.headers.origin !== origin) { json(res, 403, { error: "Same-origin request required." }); return; }
+      if (url.pathname === "/api/helper" || url.pathname.startsWith("/api/helper/")) {
+        try {
+          if (req.method === "GET" && url.pathname === "/api/helper") {
+            json(res, 200, options.helper ? await options.helper.status() : { available: false, enabled: false, process: "stopped", operation: "idle", result: "none", message: "Helper controls are unavailable in this setup." }); return;
+          }
+          if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+          const action = url.pathname.slice("/api/helper/".length);
+          if (!["check", "login", "stop"].includes(action)) { json(res, 404, { error: "Helper route not found." }); return; }
+          const input = await body(req);
+          if (action === "stop") z.object({}).strict().parse(input);
+          else z.object({ acceptSDKStorage: z.literal(true) }).strict().parse(input);
+          if (!options.helper) { json(res, 503, { error: "Helper controls are unavailable in this setup." }); return; }
+          json(res, 202, action === "stop" ? await options.helper.stop() : await options.helper.start(action as "check" | "login", true)); return;
+        } catch { json(res, 400, { error: "Helper request could not complete. Accept SDK storage, check the bundle and finish or stop any active operation. No fallback was attempted." }); return; }
+      }
       if (url.pathname.startsWith("/api/connections")) {
         try {
           if (req.method === "GET" && url.pathname === "/api/connections/opencode") {
@@ -657,14 +673,14 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const cleanup = await Promise.allSettled([
         temporaryCleanupClosed,
         ...[...helpWork.values()].map((work) => work.promise),
-         implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(),
+          implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(), options.helper?.close(),
       ]);
       cleanup.push(...await Promise.allSettled([options.adapter.close?.()]));
       server.closeAllConnections();
        await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
        await options.store.stopWorkspacePublication();
       // Help failures are already persisted by the service; teardown failures are actionable.
-      for (const result of cleanup.slice(-6)) if (result.status === "rejected") throw result.reason;
+       for (const result of cleanup.slice(-7)) if (result.status === "rejected") throw result.reason;
     })();
     return closePromise;
   } };
@@ -682,7 +698,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     store.recoverExpiredJobs();
     try {
       const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-      const app = await startApp({ store, connections, catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
+      const app = await startApp({ store, connections, helper: createAppHelper(directory, resolve("dist/embedded-helper")), catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
       console.log(`\nReqwizit is ready: ${app.origin}\nOpen this address in your browser. Existing CLI projects are available. Ctrl+C stops the app.\n`);
       let closing = false;
       const close = () => { if (closing) return; closing = true; void app.close().finally(() => store.close()); };

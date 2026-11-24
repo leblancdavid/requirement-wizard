@@ -2,6 +2,48 @@
 
 ## Confirmed product direction
 
+**Helper visibility in the app (2026-11-24).** The user requested app controls instead
+of terminal-only process management. Experimental Settings now shows safe lifecycle/
+connection observations and offers explicit-consent check/sign-in/stop. This does not
+select an account/model for coding, widen the helper protocol, launch it on page load
+or remove credentials. Reuse the explicitly authorized store in place, and surface
+unconfirmed cleanup rather than silently reset data or take over another worker.
+See [behavior and limits](embedded-helper-auth.md#app-controls-2026-11-24).
+
+**Embedded helper authentication slice (2026-11-24).** Continuing the approved helper
+pilot adds a separately consented, SDK-native ChatGPT authentication profile, not a
+coding enablement or default route switch. Source inspection found plaintext SDK
+SQLite credentials; developer login requires explicit storage acceptance and private
+Windows CurrentUser/LocalSystem ACLs. Existing direct-provider DPAPI/legacy OpenCode
+credentials are not copied. The metadata profile and saved work retain their original
+identity/capabilities. Manual authorization was user-reported and one OAuth connection
+persisted across two clean reopens without provider/model requests. Refresh, model
+access, remote revocation, coding safety and distribution eligibility remain
+unqualified. See [implementation and limits](embedded-helper-auth.md).
+
+**Embedded coding engine direction (2026-11-24).** The user approved evaluating
+direct providers for requirements work and the embedded OpenCode V2 SDK for coding,
+rather than immediately forking or replacing the agent engine. The offline spike
+passes under Electron's Node 24 but blocks on the shared Node 22 baseline; published
+dependency engines, packaging, authentication/session continuity and coding safety
+remain gates. No default route/runtime-baseline change, credential copying, session
+reset or live inference is authorized by the spike. See
+[findings and rollout gates](embedded-opencode.md).
+
+Follow-up proposal (not a shipping/default decision): an app-owned Node 26 helper
+can satisfy SDK 2.1.4's offline runtime/dependency checks without raising the shared
+Node 22 baseline. It retains a process and adds packaging weight, so lower overhead
+must still be measured. Keep the current SDK/client version as candidate; comparison
+2.4.1 did not resolve same-process compatibility. Helper IPC, packaging, credentials,
+session adoption and coding safety are not yet qualified.
+
+The user subsequently approved the opt-in helper transport/packaging pilot. Its
+implemented first slice is **metadata-only**, using the separately pinned private
+Node 26/SDK 2.1.4 graph without changing app runtime requirements or default routes.
+It has stable private-session identities and no prompt/tool/auth RPC. The measured
+uncompressed bundle is about 427.4 MiB; do not infer lower overhead or release
+readiness. See [implemented pilot and remaining gates](embedded-helper-pilot.md).
+
 **Project-focused responsibilities (2026-11-11).** Users answer questions, approve
 requirements only when needed and resolve conflicts with clear choices directly in
 their responsible tab. Internal batching, scheduling, checks and safe technical

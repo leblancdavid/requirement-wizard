@@ -1,5 +1,53 @@
 # Browser workspace, epics, and estimated completeness
 
+## Desktop restart continuity (2026-11-24)
+
+Desktop project history now survives a fallback loopback port through a validated,
+ID-only native history file. Browser-only history remains localStorage-based. Missing
+projects caused by an auxiliary `reqwizit` directory masking populated legacy data are
+resolved by project-aware default-root selection, not project import/reset. Both stores
+remain intact, and the existing helper grant is reused in its original location. See
+[recovery rules and verified restart checks](desktop.md#data-root-recovery-project-history-and-standalone-build-graph-2026-11-24).
+
+## Simpler AI Settings (2026-11-24)
+
+Settings separates **Project AI** from **Connected accounts**. The saved **Current
+project AI** is shown above the dropdowns. Editing creates a labelled **Pending
+selection — not saved**, with **Save model** and **Discard changes**; discarding only
+restores the saved fields, without an API write or model call. A disabled save now
+has an inline explanation when a model/provider is missing or project work blocks
+the change. New-project choices are labelled as choices for the future project.
+
+Account addition/reconnection/disconnection lives below the project selection, with
+each saved direct account explicitly named. **Add ChatGPT account** no longer looks
+like a required first step when an account is already available. The optional test
+names the selected account/model and warns that it tests the dropdown selection,
+which may differ from the saved project AI, and consumes allowance. Existing provider
+routing and explicit save semantics are unchanged.
+
+The separate helper is under collapsed **Experimental helper diagnostics**. No
+helper component/status polling is mounted until expanded. Collapsing does not cancel
+an active backend sign-in; expanding again recovers the pending view without another
+authorization flow. The normal account list does not import helper credentials.
+See [helper controls](embedded-helper-auth.md#app-controls-2026-11-24) and the
+[compatibility ledger](migrations.md#ai-settings-presentation-only-2026-11-24).
+
+Verification: the full `npm run test:browser` run, including all posttests, passed
+after this simplification. Focused model/helper browser checks, type/UI build,
+14 appearance/helper/API regression tests and diff checks also passed. These use
+deterministic fixtures, not live sign-in or inference; saved user accounts were
+not changed by verification.
+
+## Embedded helper visibility (2026-11-24)
+
+**Settings → Experimental helper diagnostics** shows the optional private helper's process
+state, dated connection observation and safe request counters. Explicit plaintext
+storage acceptance enables **Check saved helper connection** or **Sign in to helper**;
+**Stop helper** cancels only the current app-owned operation. Checks close the process
+afterward; a saved account can remain connected while its helper is stopped. Merely
+opening Settings never launches it or reads credentials. Existing project AI choices
+and coding routes are unchanged. See [setup, storage, lifecycle and limits](embedded-helper-auth.md#app-controls-2026-11-24).
+
 ## Direct scoped proposal admission
 
 Fresh scoped groups can now start from their exact permitted targets/support

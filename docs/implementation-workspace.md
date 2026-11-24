@@ -1,5 +1,25 @@
 # Implementation workspace
 
+The later [separate helper authentication slice](embedded-helper-auth.md) adds native
+ChatGPT OAuth with explicit storage consent, protected private roots and no inference
+RPC. It does not select an implementation account/model, replace old sessions, enable
+coding or establish delivery. Manual authorization was user-reported and signed-in
+persistence passed two clean reopens; refresh, model access and coding safety remain
+unqualified.
+
+The later 2026-11-24 [helper IPC/packaging pilot](embedded-helper-pilot.md) now stages
+SDK 2.1.4/private Node 26 with a metadata-only, explicitly selected transport. It
+has no prompt/tool/auth methods and is not wired into `OpenCodeExecution` or the UI.
+Existing coding sessions, runtime ownership and delivery checks remain unchanged.
+
+The 2026-11-24 [embedded-engine spike](embedded-opencode.md) investigates replacing
+the coding transport without forking OpenCode. It is not wired into implementation:
+existing saved sessions and the owned HTTP backend remain unchanged. Electron's
+offline lifecycle check passes but its declared dependency engines do not. A private
+Node 26 helper passes both offline checks while same-process Node 22/24 remains
+blocked. Helper transport/packaging and live coding safety remain unqualified.
+No coding/delivery milestone exit is established.
+
 Status: integrated pilot implemented October 18, 2026 (DEC-023). Deterministic tests
 use local Git repositories and injected model/GitHub responses. A bounded live
 ChatGPT/OpenCode sandbox check created a file and continued the same saved session

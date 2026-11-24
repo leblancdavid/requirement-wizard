@@ -1,5 +1,177 @@
 # Data migrations and upgrade compatibility
 
+## Desktop root and workspace-history recovery (2026-11-24)
+
+**Root routing:** directory presence is no longer enough to mask existing project
+work. Read-only `projects` identity-presence queries select a populated legacy store
+when the current store is absent/empty, preserving populated-current precedence.
+Unreadable/future stores are not reset or silently replaced with an empty store.
+The unchanged supported database version (87) is exported from a lightweight scalar
+module so path checks can reject future versions without loading migration code;
+no SQLite version bump or representation migration is introduced by that extraction.
+Legacy provider-only installations also survive an auxiliary current helper directory.
+No databases/account stores are copied, combined, rewritten or removed. Explicit
+`--data-dir` still overrides routing; two populated roots retain current precedence.
+The reported current=0/legacy=4 project counts were inspected read-only, not migrated.
+
+**Existing helper grant:** after this routing correction, an existing known current-root
+qualification marker/control location is retained in place when default legacy has no
+own marker. Legacy-owned helper state and explicit custom roots are not overridden.
+No new credential format/identity is manufactured and no equivalent-workflow change
+requires reauthorization; profile/location/ACL/future-format rejection remains intact.
+
+**UI history:** source is optional origin-local last-project/Recents keys; target is
+new ID-only `desktop/workspace-history.json` format 1. The first valid selection adopts
+available old keys if no native file exists. Native state then takes precedence across
+loopback origins/restarts; inaccessible prior origins are not scanned or guessed.
+Existing keys remain as browser fallback. One data-root-locked desktop main process
+writes through temporary-file/atomic rename. Schema format is not a project concurrency
+counter. Reads/writes are bounded to 32 KiB and 100 IDs. Damaged/future files refuse
+writes without reset; interrupted temporary output is not silently adopted. No project
+revision, assessment/check identity, selection, job or portable schema changes.
+
+Upgrade tests preserve both old SQLite file bytes over repeated path selection,
+exercise empty-current masking, dual populated/unreadable stores, provider-only roots,
+existing helper routing without credential copying, and repeated history reopen,
+future/malformed/oversized rejection without replacing evidence. Real Electron tests
+force a port/origin change and recover a non-newest project plus Recents order, while
+retaining project data. An older last selection unavailable at every accessible origin
+cannot be reconstructed: choose a restored saved project once, without model calls.
+
+**Build-only compatibility:** removed the desktop package's repository self-link and
+declared its actual hash dependency explicitly; regenerated the independent lock with
+no external/local link entries. Existing generated dependency installations are rebuilt
+when their lock/version check fails; project/history/credential files are untouched.
+Repeated builds reuse pinned dependencies and incremental compilation. Only the
+confirmed generated self-junction was removed during diagnosis, never its target.
+This addresses a circular build graph, not a proven cause of the OpenCode desktop crash.
+See [verification and remaining gaps](desktop.md#data-root-recovery-project-history-and-standalone-build-graph-2026-11-24).
+
+## AI Settings presentation only (2026-11-24)
+
+The Settings simplification changes presentation, not persisted formats, account
+stores or provider routing. Saved project connection/provider/model IDs stay intact;
+draft fields still require the existing expected-revision save. **Discard changes**
+restores those IDs locally with no write, assessment invalidation, sign-in or inference.
+Account management is separated visually and identifies each existing direct account;
+adding/reconnecting does not save a project selection. No saved credentials are
+copied/imported between direct ChatGPT, OpenCode and the embedded helper.
+
+The helper diagnostics disclosure is collapsed by default. Its UI/status polling is
+created on expansion, while backend operations retain the prior bounded lifecycle
+and survive disclosure close/reopen without replay. Disclosure, consent and draft
+choices add no new durable schema, settings migration, revision counter, freshness
+rule or portable field. Existing account/model choices need no reset or repeated
+assessment/model calls after upgrade. Browser checks exercise saved versus pending
+choices, local discard, save/reload, missing-model explanation, and collapsed helper
+recovery. See [UI behavior](browser-workspace.md#simpler-ai-settings-2026-11-24).
+
+## App helper Settings controls (2026-11-24)
+
+No new persisted format or conversion: Settings adds app-owned lifecycle controls
+over the unchanged auth IPC/state 2 profile. The data-root-relative
+`embedded-auth-live-qualification`/`embedded-auth-live-control` locations reuse the
+manually authorized qualification store and canonical workspace in place. Existing
+UUIDs, native connections/credentials, marker, leases and SDK database remain native;
+there is no credential copying, forced re-login, project revision/selection update,
+assessment/check fingerprint change or portable projection change. An explicit app
+`--data-dir` is an independent namespace; old custom CLI paths are not auto-adopted.
+
+Consent, pending URL, operation and dated safe observations live only in backend/
+renderer memory. Restart does not widen an older grant, restart sign-in, or retry
+work; viewing Settings is bundle-metadata-only. Existing profile/future-format,
+location and ACL checks still reject without resetting evidence. A single backend
+owner serializes tabs; another CLI lease is never stolen. Unconfirmed cleanup is
+surfaced and blocks new operations rather than being called stopped. The transport
+adds only an app-local cleanup error type, with no wire/store change.
+
+Older-store reopen/profile/ACL preservation tests still pass alongside new service,
+authenticated API, cancellation/shutdown and browser reload tests. UI tests use
+synthetic credentials/metadata; native API smoke used a fresh empty protected store
+and zero provider/model calls. The earlier real signed-in same-version reopens remain
+separate evidence, not a granted-account upgrade/refresh or installer qualification.
+See [controls and verification](embedded-helper-auth.md#app-controls-2026-11-24).
+
+## Embedded helper auth capability and credential boundary (2026-11-24)
+
+Source/target: new metadata clients accept bundle 1 and bundle 2. Bundle 2 adds a
+separate `chatgpt-auth-v1` entry using IPC 2; metadata remains IPC 1. Existing private
+state 1 (`metadata-only-v1`), UUID, canonical location, SDK database/native session IDs
+and namespace are preserved byte-for-byte on reopen. No SDK/model work is repeated
+to adopt the new equivalent metadata transport mechanics. Older clients reject a
+future bundle; archived old bundles remain available.
+
+New explicitly consented auth stores initialize state 2, bound to
+`chatgpt-auth-v1`/`sdk-owner-only-plaintext-v1`, the same pinned SDK and stable UUID.
+This is **not a conversion of state 1**: either profile refuses the other store
+without changing marker/evidence or granting capabilities. SDK credentials remain
+native SQLite JSON in that separate root; Windows CurrentUser/LocalSystem DACLs are
+established before first use and verified before reopen/SDK access. A damaged,
+weakened or unsupported future store is rejected, not repaired/reset. Roots overlapping
+the control workspace are rejected before permissions change. No legacy credential
+copy, main application schema/revision/settings/job/fingerprint or portable update.
+
+Auth attempt/connection handles have distinct kinds and store namespaces; raw/legacy,
+cross-store/kind, expired-process and future identities are not rebound. SDK-native
+attempts are not durable, so startup never restarts a saved authorization flow.
+Committed SDK credentials must remain durable under that SDK's semantics; later
+compatible upgrades must preserve IDs/original grants without asking users to repeat
+sign-in solely for a representation change. Real granted-account upgrade/refresh
+recovery is not qualified in this slice. Local credential removal requires explicit
+confirmation and does not assert remote revocation; cancellation does not assert
+rollback of a raced completed grant.
+
+Tests reopen old metadata fixtures without rewriting markers/evidence, preserve new
+auth UUID/markers and synthetic connection evidence over repeated startup, and cover
+future formats, profile mismatch, failed protection, overlapping roots, old bundles,
+redaction and native callback cancellation/invalid-state rejection. The native guard
+run authorized **zero accounts** and made zero provider/model requests. It does not
+establish real subscription access or in-flight credential-rotation recovery. Store
+leases still require confirmed owner exit or explicit recovery; no automatic takeover
+or inference retry. See [storage contract, commands and verification limits](embedded-helper-auth.md).
+
+Later same-version signed-in observation (2026-11-24): after user-reported manual
+authorization, two existing-store reopens preserved the store UUID and one opaque
+OAuth connection identity, with `needsAuth: false` and clean closes. Both recorded
+zero provider/socket/listener/prompt counts; no credential values were read by the
+check, rewritten to force expiry, or exported. This is reopen evidence, **not** an
+SDK-version upgrade, refresh or interrupted-rotation migration test. No schema,
+capability, optimistic revision or fingerprint changed, and no reassessment/relogin
+was requested.
+
+## Embedded helper local state and IPC pilot (2026-11-24)
+
+The new explicit metadata-only helper introduces three independent initial formats:
+bundle manifest 1, IPC 1 and private helper-store identity 1. No app SQLite, project
+JSON, settings, job, assessment, freshness/fingerprint, workspace artifact or portable
+format changes. Existing execution selections/session IDs keep their original HTTP
+backend. The helper is not wired into discovery/coding workers or model selection.
+
+Only an empty explicit directory can initialize a new helper store; existing app or
+OpenCode directories are not adopted. The atomic `helper-state.json` binds a stable
+store UUID to canonical workspace, SDK 2.1.4 and `metadata-only-v1`. Namespaced
+`reqwizit-embedded:v1:<store-id>:<native-id>` handles reject raw/legacy, other-store,
+other-workspace and future identities. A close/reopen uses the original SDK database
+and handles without rebasing or replay. These machine-local handles/state are not
+exported. There is no credential copying, legacy-store import or paid-work conversion.
+
+Unsupported future/damaged bundle/store/protocol formats fail closed without rewriting
+evidence or assigning a replacement identity. Marker creation uses an exclusive
+temporary file/rename; interruption retains the temporary evidence for investigation.
+Store leases use exclusive owner tokens, no expiry/automatic takeover. Confirmed
+helper exit releases only the matching owner's lease; uncertain cleanup or an owner
+crash retains it for explicit local recovery. No automatic startup/model retry.
+
+Tests preserve marker bytes/stable UUID and synthetic completed evidence over repeated
+open, reject future/damaged formats and workspace changes without overwriting them,
+and exercise concurrent owners, cancellation, timeout, failure and lease ownership.
+Real packaged SDK empty sessions reopen over IPC from relocated bundles under Node
+22 and Electron Node 24 owner Workers, using private Node 26.4.0. This is initial
+helper-format/reopen qualification, not migration of legacy coding sessions, model
+authentication or in-flight coding recovery. Any future coding profile/SDK/store
+upgrade needs a forward migration preserving these identities and original evidence.
+See [pilot, recovery and exact checks](embedded-helper-pilot.md).
+
 ## Direct scoped proposal admission without unused reads (2026-11-24)
 
 The latest supplied cycle retained individual processing for all five answers:
@@ -52,6 +224,32 @@ the build retained its existing large-chunk warning. No live model calls were ma
 production savings are not qualified. Mixed scoped/broad member proposals with
 shared final verification remain a separate follow-up protocol, not enabled by
 this admission fix; mixed answers still cannot exchange permissions.
+
+## Embedded engine spike (2026-11-24)
+
+Follow-up compatibility tooling adds explicit comparison-version/Worker options and
+an isolated-installation engine/license inventory with lock identity. The private
+Node 26 helper is an offline candidate only; it is not a new persisted execution
+backend. Production SDK/client pins, supported app runtime, SQLite/settings/jobs,
+freshness identities and all saved sessions remain unchanged. New top-level probe
+success requires both lifecycle and declared-engine checks; historical lifecycle
+observations are retained, not retroactively called dependency-qualified. These
+disposable diagnostic reports are not project/export evidence or a schema upgrade.
+
+Compatibility decision: **no persisted-data migration or backend adoption in this
+slice**. The standalone `spike:embedded` probe installs no production dependency and
+uses a separate disposable SDK database/config/home. It cannot adopt, overwrite,
+rebase or invalidate existing SQLite records, assessments, fingerprints, portable
+state, saved jobs, credentials or coding sessions. Schema versions and optimistic
+revision counters are unchanged; no work/model calls must be repeated on upgrade.
+
+Synthetic empty SDK sessions are created and reopened only inside the printed
+temporary artifact directory. A failed/interrupted probe leaves those disposable
+artifacts for inspection; rerunning uses a fresh directory, not a retry of inference.
+Before eventual adoption, explicitly design backend/session identity and credential
+ownership compatibility; existing HTTP-session IDs must not be silently opened
+against a new SDK store. Native/tool execution and real saved-session upgrade/recovery
+remain unqualified. See [observations and gates](embedded-opencode.md).
 
 ## Smaller answer cohorts and scoped group proposals (SQLite 86 → 87; portable 58)
 

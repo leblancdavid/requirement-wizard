@@ -1,0 +1,12 @@
+{
+  "name": "reqwizit-embedded-helper-pilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent Windows x64 offline SDK helper staging graph; not the application dependency graph",
+  "dependencies": {
+    "@opencode/sdk": "2.1.4",
+    "node-win-x64": "26.4.0",
+    "zod": "3.24.2"
+  }
+}

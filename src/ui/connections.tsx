@@ -6,8 +6,8 @@ import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { OpenCodeModels } from "./opencode-models.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
-export function AIConnections({ request, accountID, providerID, modelID, onSelect: select, children, disabled = false }: {
-  request: Request; accountID: string; providerID: string; modelID: string; onSelect: (accountID: string, modelID: string, providerID: string) => void; children?: React.ReactNode; disabled?: boolean;
+export function AIConnections({ request, accountID, providerID, modelID, onSelect: select, current, children, disabled = false }: {
+  request: Request; accountID: string; providerID: string; modelID: string; onSelect: (accountID: string, modelID: string, providerID: string) => void; current?: React.ReactNode; children?: React.ReactNode; disabled?: boolean;
 }) {
   const onSelect = (account: string, model: string) => select(account, model, "openai");
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -70,7 +70,7 @@ export function AIConnections({ request, accountID, providerID, modelID, onSelec
             await reload();
             if (stopped) return;
             if (!localStorage.getItem(`reqwizit-plan-confirmed:${result.accountID}`)) setWelcome(result.accountID!);
-            setMessage("ChatGPT account connected. Choose a model below, then save the selection for this project or use it when creating a project.");
+            setMessage("ChatGPT account connected. Choose a model above, then save the selection for this project or use it when creating a project.");
             onSelect(result.accountID!, "");
             // Reconnecting the same account also refreshes its catalog.
             if (selection.current === result.accountID) void catalog(result.accountID);
@@ -107,15 +107,14 @@ export function AIConnections({ request, accountID, providerID, modelID, onSelec
   }
   const account = accounts.find((item) => item.id === accountID);
   return <ActionScope reason={testing ? "Wait for the connection test to finish." : activeLogin ? "Complete or cancel the current ChatGPT sign-in first." : loadingModels ? "Wait for the model catalog to finish loading." : !available ? "Direct ChatGPT sign-in is unavailable. Check the connection service status." : busy ? "Wait for the current connection request to finish." : "Select a connected account and an available model first."}><section className="ai-connections" aria-label="AI connections">
-    <div className="connection-heading"><div><h2>AI connections</h2><p>Choose a connection, provider and model. Use your ChatGPT plan directly or a provider connected through OpenCode.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
+    <h2>Project AI</h2>
+    {current}
+    <p>Choose the AI for requirements work. Changing these fields does not switch an existing project until you save.</p>
     {error && <DiagnosticNotice detail={error} summary="Your AI connection needs attention." next="Check your account and selected AI, or reconnect. If this continues, see Technical details." alert />}
     {!activeLogin && (working || testing || loadingModels) && <ActivityFeedback label={activityLabel} />}
     {message && <p role="status" className="connection-notice">{message}</p>}
     {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`reqwizit-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
-    <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your sign-in details are kept on this computer, separate from your project.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
-    {loaded && !available && <p>ChatGPT sign-in is not available in this setup. You can use an existing OpenCode connection instead.</p>}
     {!loaded && !error && <ActivityFeedback label="Loading saved connections…" />}
-    {activeLogin && <div className="connection-notice" role="status"><strong><Spinner />{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><ActivityBar label="Account authorization progress" /><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
     <label>AI connection<select aria-label="AI connection" value={accountID} disabled={busy || testing || activeLogin} onChange={(event) => { onSelect(event.target.value, event.target.value ? "" : "gpt-6.1-sol"); }}>
       <option value="">OpenCode · existing connection</option>
       {accountID && !account && <option value={accountID}>Disconnected account · reconnect or choose another</option>}
@@ -129,14 +128,27 @@ export function AIConnections({ request, accountID, providerID, modelID, onSelec
         {models.filter((item) => item.id === modelID || `${item.name} ${item.id}`.toLowerCase().includes(modelQuery.trim().toLowerCase())).map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
       </select></label>
       {modelQuery && <small>The list shows matching models and your current selection.</small>}
-      <p className="plan-label">Uses your ChatGPT plan. Web research is not available with this connection yet.</p>
+      <p className="plan-label">Selected connection: uses your ChatGPT plan. Web research is not available with this connection yet.</p>
       <div className="button-row">
         <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>{loadingModels && <Spinner />}Refresh models</button>
-        <button className="secondary" disabled={busy || testing || activeLogin || !account || !models.some((model) => model.id === modelID)} onClick={() => { setTesting(true); void act(async () => { await request("connections/test", { accountID, modelID }); setMessage("Connection test passed. The selected model returned a valid response."); }).finally(() => { if (mounted.current) setTesting(false); }); }}>Test connection</button>
-        {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
-        {account && <><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => signIn(accountID)}>Reconnect</button><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID }); await reload(); setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button></>}
-      </div><small>Testing asks your selected AI for a short response and uses some of your plan’s usage. Looking through the AI choices does not use that allowance.</small>
+      </div>
     </> : <OpenCodeModels request={request} providerID={providerID} modelID={modelID} disabled={busy || testing || activeLogin} onSelect={(provider, model) => select("", model, provider)} />}
     {children}
+    <section className="connected-accounts" aria-label="Connected accounts">
+      <div className="connection-heading"><h3>Connected accounts</h3><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
+      <p>Manage saved direct ChatGPT accounts here. Adding or reconnecting an account does not change the project’s saved AI. OpenCode accounts are managed in OpenCode; the experimental helper uses its own separate store.</p>
+      {accounts.length ? <ul className="saved-account-list">{accounts.map(item => <li key={item.id}><span>{item.label}</span><div className="button-row">
+        <button className="quiet" disabled={!available || busy || testing || activeLogin} onClick={() => signIn(item.id)}>Reconnect</button>
+        <button className="quiet" disabled={!available || busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID: item.id }); await reload(); if (item.id === accountID) setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button>
+      </div></li>)}</ul> : loaded && <p>No direct ChatGPT accounts saved.</p>}
+      <button className="secondary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Add ChatGPT account</button>
+      {loaded && !available && <p>Direct sign-in is unavailable in this setup. You can still use a saved OpenCode connection.</p>}
+      {activeLogin && <div className="connection-notice" role="status"><strong><Spinner />{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><ActivityBar label="Account authorization progress" /><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
+      {accountID && <div className="connection-test"><p>Test selection: {account?.label ?? "Unavailable account"} · {modelID || "Choose a model above"}. This tests the dropdown selection, not necessarily the project’s current AI.</p>
+        <button className="secondary" disabled={busy || testing || activeLogin || !account || !models.some((model) => model.id === modelID)} onClick={() => { setTesting(true); void act(async () => { await request("connections/test", { accountID, modelID }); setMessage("Connection test passed. The selected model returned a valid response."); }).finally(() => { if (mounted.current) setTesting(false); }); }}>Test connection</button>
+        {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
+        <p><small>Testing sends a short request and uses your plan’s allowance. Browsing model choices does not run inference.</small></p>
+      </div>}
+    </section>
   </section></ActionScope>;
 }

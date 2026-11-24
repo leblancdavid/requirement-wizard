@@ -206,8 +206,11 @@ work, with an explicit provider/model and bounded timeout. Use the commands in
 `docs/runtime-spike.md`; do not repeat paid probes without a concrete verification
 need. Deterministic fixtures do not establish live subscription compatibility.
 
-Application data defaults to the user's local `reqwizit` directory, reusing an existing
-`requirement-wizard` directory when the new directory does not exist. Use
+Application data defaults to the user's local `reqwizit` directory, but auxiliary
+folders or an empty new project store must not mask a populated legacy
+`requirement-wizard` store. `src/storage/paths.ts` makes a bounded read-only selection;
+explicit data directories remain authoritative and stores are never silently merged.
+See `docs/desktop.md` for ID-only desktop restart history and helper-store routing. Use
 `--data-dir .reqwizit-state` for repository-local development; it is ignored by Git.
 Keep demonstration projects and model-call outputs out of committed fixtures unless
 they are deliberately curated and free of credentials. Expired-job recovery must

@@ -50,6 +50,8 @@ import { ReviewUpdateNotice, SpecificationChanges } from "./review-update.js";
 import { AppearanceSettings } from "./appearance-settings.js";
 import { AnnotatedText, QuestionHelp, type HelpControls } from "./question-help.js";
 import { AIConnections } from "./connections.js";
+import { workspaceHistory } from "./workspace-history.js";
+import { EmbeddedHelperSettings } from "./embedded-helper.js";
 import { WorkspacePicker, WorkspaceConnection, WorkspaceScan, ImplementationProgress } from "./workspace-files.js";
 import type { Workspace } from "../storage/workspace.js";
 import type { FolderPreview } from "../core/folder-preview.js";
@@ -107,7 +109,7 @@ function App() {
   const [implementationFooter, setImplementationFooter] = useState<HTMLDivElement | null>(null);
   const [projects, setProjects] = useState<Item[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [id, setID] = useState<string | null>(localStorage.getItem("reqwizit-project"));
+  const [id, setID] = useState<string | null>(() => workspaceHistory().lastProjectID);
   const selected = useRef(id); selected.current = id;
   const [data, setData] = useState<Snapshot | null>(null);
   const refresh = useRef(new SnapshotRefresh<Snapshot>());
@@ -324,7 +326,7 @@ function App() {
   useEffect(() => { localStorage.setItem("reqwizit-research", String(research)); }, [research]);
   useEffect(() => {
     setData(null); setItemErrors({}); setEpicID("all"); setTab("discover"); setQuestionFilter("open"); setExpandedQuestion(null); setReviewNavigation(undefined); setNoteReviewID(undefined); setSavedMessage(null); setError("");
-    if (id) { setLoading(true); localStorage.setItem("reqwizit-project", id); void load(id).catch((error: Error) => { setError(error.message); }).finally(() => setLoading(false)); }
+    if (id) { setLoading(true); void load(id).catch((error: Error) => { setError(error.message); }).finally(() => setLoading(false)); }
   }, [id]);
   useEffect(() => {
     if (!id) return;
@@ -747,9 +749,17 @@ function App() {
       {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {(showSettings || logState.open && logsReturn.current?.settings) && <section hidden={!showSettings} id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
-        {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}>
-          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !providerID || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
+        {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}
+          current={project && !creating ? <div className="connection-notice" aria-label="Current project AI"><p><strong>Current project AI:</strong> {activeConnection}</p><p>This saved choice is used for requirements discovery and question help.</p></div> : <p>This choice will be used when you create a project.</p>}>
+          {project && !creating && <div className="connection-notice" aria-label="Project AI changes">
+            {connectionChanged ? <><p><strong>Pending selection — not saved:</strong> {connectionID ? "Direct ChatGPT" : `OpenCode · ${providerID || "Choose a provider"}`} · {model || "Choose a model"}</p><p>Your project still uses the current AI shown above.</p></> : <p>No pending changes.</p>}
+            <div className="button-row"><button title={busyReason || (!providerID ? "Choose a provider first." : !model ? "Choose a model first." : !connectionChanged ? "This selection is already saved." : undefined)} disabled={busy || !providerID || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button>
+              {connectionChanged && <button className="secondary" disabled={pending} onClick={() => { setConnectionID(project.model.connectionID ?? ""); setProviderID(project.model.providerID); setModel(project.model.modelID); }}>Discard changes</button>}
+            </div>
+            {connectionChanged && (busy || !providerID || !model) && <p role="status">{busyReason || (!providerID ? "Choose a provider before saving." : !model ? "Choose a model before saving." : "Wait for the current project operation to finish before saving.")}</p>}
+          </div>}
         </AIConnections> : <ActivityFeedback label="Loading saved AI selection…" />}
+        <EmbeddedHelperSettings request={api} />
         {project && !creating ? <><h2>Project settings</h2>
           <ProcessingSettings key={project.id} policy={data?.processingPolicy} configurePolicy={async (change) => { let saved = false; await act(async () => { await api(`projects/${project.id}/processing-policy`, { revision: project.revision, ...change }); saved = true; }); return saved; }} workflow={data?.workflow} maintenance={data?.maintenance} auto={auto} setAuto={setAuto} disabled={busy || connectionChanged || needsInitialization} pending={pending}
             configureWorkflow={configureWorkflow} configureMaintenance={configureMaintenance} openQueue={openProcessingQueue} />

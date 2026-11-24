@@ -15,4 +15,12 @@
 .ai-connections .button-row { flex-wrap: wrap; margin: 12px 0; }
 .plan-label { color: #285e4b; }
 .connection-summary { font-size: 13px; margin-bottom: 14px; }
+.connected-accounts { border-top: 1px solid #dfe5dd; padding-top: 16px; margin-top: 22px; }
+.saved-account-list { padding: 0; list-style: none; }
+.saved-account-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
+.saved-account-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.connection-test { margin-top: 16px; }
+.helper-diagnostics { margin: 18px 0; }
+.helper-diagnostics > summary { cursor: pointer; font-weight: 600; }
+.helper-diagnostics .ai-connections { margin-top: 16px; }
 @media(max-width:600px) { .connection-heading, .connection-card { flex-direction: column; align-items: stretch; gap: 8px; } .connection-heading a { align-self: start; } .connection-card button { align-self: start; } }

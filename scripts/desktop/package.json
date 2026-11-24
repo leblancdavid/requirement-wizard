@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@noble/hashes": "1.8.0",
     "@opencode/client": "2.1.4",
     "better-sqlite3": "13.0.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "reqwizit": "file:../..",
     "zod": "3.24.2",
     "zod-to-json-schema": "3.24.5"
   }

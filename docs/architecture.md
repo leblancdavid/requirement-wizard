@@ -1,5 +1,37 @@
 # Architecture outline
 
+Desktop continuity now keeps bounded ID-only last-project/Recents state in a
+data-root-owned file, accessed through fixed trusted-frame preload methods rather
+than relying on the loopback port's Chromium localStorage. Project-aware default-root
+selection prevents auxiliary helper folders/empty current stores from masking legacy
+projects. No project/provider data is copied or merged. Desktop staging is a standalone
+locked production graph, rejects repository self-links and reuses matching installs.
+See [boundaries, upgrade and verification](desktop.md#data-root-recovery-project-history-and-standalone-build-graph-2026-11-24).
+
+The [helper Settings controls](embedded-helper-auth.md#app-controls-2026-11-24) add a
+backend-owned `AppHelperManager` over the fixed auth client, not a generic SDK bridge.
+The renderer requests explicit check/login/stop actions and observes safe in-memory
+state. Viewing Settings never opens the account store or starts the helper. Browser
+and desktop own its shutdown; concurrent tabs share one operation. Existing auth
+state/identities are reused in place, without new persistence or project selections.
+
+The [separate authentication helper](embedded-helper-auth.md) uses a new fixed
+ChatGPT-only entry/IPC 2, protected explicitly consented state 2 and SDK-owned OAuth
+without copying tokens. Metadata keeps IPC/state 1. `transport.ts` shares only process
+mechanics; both clients/workers enforce closed capability protocols. The new bundle
+reader accepts old metadata bundles and refuses auth fallback. No coding/default
+selection or main application data format changes. Manual authorization was
+user-reported and signed-in persistence passed two clean reopens; refresh/model access
+remain unqualified. Native cancellation/invalid-state callback guards also pass.
+
+The opt-in [embedded helper pilot](embedded-helper-pilot.md) adds an independent
+`src/runtime/embedded/` boundary: strict bounded IPC/client lifecycle, private store
+identity/leases and a Node 26/SDK 2.1.4 metadata worker. It exposes only health and
+empty-session lifecycle operations, not a generic SDK proxy or coding adapter.
+`scripts/embedded-helper/` pins a separate staging graph; the root/desktop graph
+and normal owned HTTP routes are unchanged. Node 22/Electron owner Workers pass
+relocated-package checks. SDK/tool/auth adoption and installer release remain gated.
+
 New scoped proposal-first admission now precedes unused all-read preflight. Its
 existing plan representation retains the complete mandatory inventory in one
 catalogue batch, while verification pages use the real frozen draft. The proposal

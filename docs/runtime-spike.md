@@ -1,5 +1,85 @@
 # OpenCode runtime spike
 
+## Desktop startup crash report and build isolation (2026-11-24)
+
+The user reported OpenCode desktop stalling/eventually crashing when running
+`npm run desktop` for Reqwizit. No shared-service restart, live prompt, provider probe
+or crash reproduction was performed. Inspection found a concrete circular desktop
+dependency junction back into the repository (`reqwizit: file:../..`), which was
+removed from the managed build graph. Standalone pins, self-link rejection,
+incremental compilation and unchanged-dependency reuse reduce unnecessary build/
+watcher churn. The exact generated junction was removed without touching its target.
+Watcher pressure is a plausible contributor, **not established crash causation**.
+
+Independent real Electron tests passed with the OpenCode runtime deliberately
+unavailable, including normal startup, occupied-port fallback/restart, last-project/
+Recents retention, close during startup and owned shutdown. Root selection also now
+restores the populated legacy Reqwizit store rather than an accidentally initialized
+empty newer root. This is not qualification of the reported large-data startup or
+of any new OpenCode SDK/provider behavior. See [findings and remaining gaps](desktop.md#data-root-recovery-project-history-and-standalone-build-graph-2026-11-24).
+
+The later [helper Settings controls](embedded-helper-auth.md#app-controls-2026-11-24)
+wrap the fixed auth profile with explicit-consent check/login/stop and safe process/
+connection observations. They reuse existing auth state in place and do not expose
+model calls or coding. No SDK credential values are projected to the renderer, and
+viewing Settings does not start an engine. A native empty-store authenticated API
+check/start/inspect/close passed with zero auth/socket/listener/prompt counters.
+
+## Separate app-owned authentication helper (2026-11-24)
+
+The helper now has an explicit-consent `chatgpt-auth-v1` entry/protocol alongside,
+not inside, metadata IPC 1. The pinned SDK's native `openai/chatgpt-token-sharing`
+flow owns credentials in a separate Windows-protected SQLite root. SDK storage is
+plaintext JSON, not DPAPI; the direct-provider DPAPI store is unchanged. The native
+flow may be branded OpenCode. No prompt/tool/model-request RPC is exposed.
+
+Native no-provider-request guards pass: begin/cancel, reject an invalid-state callback,
+close/reopen the same protected empty store, with zero authorized accounts/provider
+requests/prompts. This does not qualify live grant, refresh, browser keepalive cleanup,
+coding or delivery. A later manual authorization was user-reported; two signed-in
+reopens then preserved one OAuth connection (`needsAuth: false`) and the same store/
+connection identities, with clean closes and zero provider/socket/listener/prompt
+counts per reopen. No token values/URLs were captured. Refresh and subscription/model
+access were not exercised, and the connection was retained. This does not qualify
+arbitrary granted-browser keepalive behavior or interrupted token rotation.
+Initial failed guard attempts were not counted as passes; unrelated
+native provider discovery was disabled rather than allowed through the network guard.
+See [scope, commands, migration and remaining checks](embedded-helper-auth.md).
+
+## Opt-in helper IPC and independent packaging pilot (2026-11-24)
+
+`src/runtime/embedded/` now implements a strict metadata-only IPC helper using
+SDK 2.1.4/private Node 26.4.0, with explicit bundle/store selection, stable local
+session namespaces, exclusive leases and bounded cancellation/shutdown. There is
+no prompt/tool/auth RPC or default coding route switch. Independent pinned staging
+and an opt-in installer configuration keep the SDK/runtime out of ordinary app
+dependencies/packaging. The uncompressed pilot is about 427.4 MiB; lower overhead
+is not established.
+
+Real relocated-bundle checks passed with Node 22 and Electron/Node 24 owner Workers:
+health, deny-all empty-session create/get, close, same-store/session reopen and
+removal. Zero prompts and observed network/listener attempts. The installer recipe,
+authentication, native coding tools and live coding remain unqualified. See
+[scope, commands, compatibility and verification](embedded-helper-pilot.md).
+
+## Embedded engine investigation (2026-11-24)
+
+Follow-up engine auditing and actual Worker checks identify private Node 26.4.0
+as an offline-compatible helper candidate for SDK 2.1.4, without changing the app's
+Node 22 baseline. Registry latest stable 2.4.1 does not fix the Node 22 syntax or
+Electron/Node 24 dependency mismatch. The strengthened probe reports those engine
+failures separately from lifecycle success. At that investigation stage helper IPC
+was not implemented; the later metadata pilot above adds it without default routing
+or live coding. See [follow-up findings](embedded-opencode.md#runtime-and-dependency-follow-up).
+
+The new offline `npm run spike:embedded` check exercises `@opencode/sdk@2.1.4`
+in isolated temporary state without production dependencies, credentials or prompts.
+Node 22.23.4 fails at import (`await using` syntax); Electron 44.8.0's Node 24.22.0
+passes health, deny-all empty-session save/close/reopen/removal with no observed
+network/listener attempts. A transitive TUI dependency declares Node >=26.4.0,
+so this is not complete dependency or coding qualification. The owned HTTP backend
+remains unchanged. See [results, license review and rollout gates](embedded-opencode.md).
+
 ## Catalog transport race before prompt dispatch (2026-11-23)
 
 Discovery can now replace its owned server once and repeat only the initial

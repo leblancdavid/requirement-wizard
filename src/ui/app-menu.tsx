@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import "./app-menu.css";
+import { rememberWorkspace, workspaceHistory } from "./workspace-history.js";
 
 type ProjectItem = { id: string; name: string };
-const recentKey = "reqwizit-recent-workspaces";
-function savedRecents(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(recentKey) ?? "[]");
-    return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string"))].slice(0, 100) : [];
-  } catch { return []; }
-}
 
 export function AppMenu({ projects, activeID, newProject, openProject, selectProject, settings, logs, reportError }: {
   projects: ProjectItem[]; activeID: string | null;
@@ -17,19 +11,14 @@ export function AppMenu({ projects, activeID, newProject, openProject, selectPro
 }) {
   const [open, setOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
-  const [recents, setRecents] = useState(savedRecents);
+  const [recents, setRecents] = useState(() => workspaceHistory().recentProjectIDs);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!activeID) return;
-    setRecents((previous) => {
-      return [activeID, ...previous.filter((id) => id !== activeID)].slice(0, 100);
-    });
-  }, [activeID]);
-  useEffect(() => {
-    try { localStorage.setItem(recentKey, JSON.stringify(recents)); } catch { /* Session-only ordering if storage is unavailable. */ }
-  }, [recents]);
+    if (!activeID || !projects.some(project => project.id === activeID)) return;
+    setRecents(rememberWorkspace(activeID, reportError).recentProjectIDs);
+  }, [activeID, projects]);
   function close(restore = true) {
     setOpen(false); setRecentOpen(false);
     if (restore) trigger.current?.focus({ preventScroll: true });

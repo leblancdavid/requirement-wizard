@@ -1,5 +1,85 @@
 # Electron desktop application
 
+## Data-root recovery, project history and standalone build graph (2026-11-24)
+
+A startup regression selected a newly created `reqwizit` folder merely because it
+existed, masking an older `requirement-wizard` project database. Read-only metadata
+inspection in the reported environment found zero projects in the current database
+and four in the legacy database. No project JSON, revisions or credentials were read
+for that diagnosis, and neither user store was migrated/moved/reset for verification.
+
+`defaultDataDirectory()` now checks project presence through bounded read-only SQLite
+queries before choosing. A populated current store retains precedence. If the current
+store is missing/empty and legacy contains projects, the legacy root is reused in
+place. Unreadable selected stores are not silently replaced/reset. Legacy provider-only
+storage also survives a helper-only current folder. When both stores contain projects,
+current precedence is unchanged; explicit `--data-dir` chooses the other root. Stores,
+projects and account catalogs are not automatically merged. A damaged/current future
+store remains selected for normal validation rather than being hidden by fallback.
+
+Correcting the default app root does not force the helper's recent successful sign-in
+to repeat: if the default legacy root has no qualification marker and the known current
+root does, the existing current helper/control paths are reused **in place**. Existing
+legacy-owned helper stores and explicit custom roots retain precedence. Only known
+marker existence is checked; existing profile/location/ACL validation still runs after
+explicit helper consent. No credential values are copied/imported or reinterpreted.
+
+Desktop last-project and Recents order now persist as ID-only format 1 in
+`<data-dir>/desktop/workspace-history.json`, independently of Chromium's loopback
+origin. Missing files adopt the current origin's old `reqwizit-project` and
+`reqwizit-recent-workspaces` values on the first valid project selection. Other
+origins' inaccessible state is not guessed: restored saved projects are available
+in the menu and selecting one establishes future continuity. Browser-only sessions
+still use their own localStorage. Appearance preferences remain origin-specific.
+
+The desktop main process (single-instance locked per data root) owns small atomic
+history writes. Fixed, owning-window/main-frame/origin-checked preload methods expose
+only validated IDs, never filesystem paths or credentials. Future/damaged/oversized
+files are retained and block writes; the UI falls back to session/browser history
+with a visible warning rather than resetting them. No project schema/revision,
+assessment fingerprint, provider choice or portable continuation changes.
+
+The reported OpenCode stall/crash is **not reproduced or fully attributed**. A
+concrete independent build defect was found: `reqwizit: file:../..` in desktop
+dependencies created a junction from the staged node_modules back into this repository,
+and thus a circular path into its own build output. That generated junction alone was
+removed after checking its exact target; the repository and user data were preserved.
+The manifest/lock now contain standalone production packages, with `@noble/hashes`
+explicitly pinned rather than obtained indirectly from the source tree. Build guards
+reject self/local/external links before staging. File-watcher/indexer pressure is a
+plausible crash contributor, not proven causation or an OpenCode compatibility result.
+
+Desktop compilation is incremental, and an unchanged validated lock/installed version
+set reuses the independently installed dependencies instead of running npm ci on every
+launch. A lock change, missing/mismatched package, or old self-junction requires a clean
+managed staging install. `REQWIZIT_DESKTOP_APP_DIRECTORY` also supports a separate
+empty/recognized output stage; unfamiliar output directories are rejected. Normal
+`npm run desktop` still builds before launching, but does not start/stop shared OpenCode.
+No unrelated process was restarted/killed and no provider/model calls were made.
+
+Checks actually run: ten path/history/packaging tests, 44 migration/runtime/backend
+regressions, type/UI build checks, full `npm run test:browser` including all posttests,
+and two independent desktop builds passed (first installed 13 packages; second reused them).
+Real Electron continuity passed in the isolated stage with a deliberately occupied old
+port, a different restart origin, restoration of a non-newest last-used project and
+Recents order, future-history rejection, native IPC and owned shutdown. Close-during-
+startup/relaunch checks also passed. The user-sized legacy database was not opened
+through ProjectStore or upgraded by these tests. Large-store startup performance,
+actual OpenCode-crash reproduction, and installer upgrade/uninstall remain unqualified.
+See [migration ledger](migrations.md#desktop-root-and-workspace-history-recovery-2026-11-24).
+
+## Optional helper controls (2026-11-24)
+
+Settings now includes [experimental embedded-helper controls](embedded-helper-auth.md#app-controls-2026-11-24).
+The backend Worker owns the helper through the same fixed auth client as the browser
+backend, including shutdown/cancellation. Development resolves the staged helper
+beside `desktop-app`; the opt-in installer resolves `resources/embedded-helper`.
+Ordinary installers do not bundle it and show unavailable instead of downloading or
+falling back. Viewing the panel does not launch it. Existing data-root-relative
+qualification stores are reused in place only after explicit storage acceptance.
+No model/coding selection changes; installer install/upgrade and live browser OAuth
+through the new desktop panel remain unqualified.
+
 ## Indexed startup history checks (2026-11-04)
 
 Reported logs entered `opening-data` at 1,183 ms, `upgrading-data` at 1,225 ms and
@@ -212,8 +292,8 @@ dependencies: a process holding a native SQLite module can block `npm ci`.
   event loop, and retains the same authenticated
   loopback API. It prefers `127.0.0.1:4318`, falling back to an available port if busy.
   The normal browser server can continue using port 4317. Chromium preferences are
-  origin-specific, so fallback ports can show default UI preferences; project data
-  does not depend on that port.
+  origin-specific, so fallback ports can show default appearance preferences; project
+  data and the later ID-only desktop last-project/Recents history do not depend on that port.
 
 ### Responsiveness during checkpoint publication
 
@@ -257,7 +337,7 @@ outside renderer APIs and project exports.
 
 The renderer is sandboxed, context-isolated, and has no Node integration. Its
 CommonJS preload exposes directory selection, opening HTTP(S) links, Quit, text copying, strictly
-validated title-bar colors and a platform capability flag. It does not expose
+validated title-bar colors, ID-only workspace-history methods and a platform capability flag. It does not expose
 arbitrary window operations or IPC channels.
 IPC checks the owning window, main frame, and local origin. Web permissions and
 webviews are disabled; new windows and external navigation are intercepted.

@@ -1,5 +1,12 @@
 # Direct provider migration
 
+The later [SDK-helper authentication pilot](embedded-helper-auth.md) is a separate
+explicitly consented coding-engine preparation path. It never imports this direct
+store's credentials. SDK credentials use owner-protected plaintext SQLite, not this
+direct provider's DPAPI protection; metadata-only native callback guard results do
+not qualify either route's live sign-in/inference. Existing project selections and
+direct/OpenCode dispatch remain unchanged.
+
 The later [mixed-consistency provider bridge](definition-mixed-providers.md) now supports
 explicit mixed requests on the selected direct account, with exact context preflight before
 credential access and no ordinary-profile fallback. It reuses `scoped-no-tools-v1` strict
@@ -89,30 +96,36 @@ suite is not recorded as passing. A metadata-only live owned-runtime catalog che
 returned eight connected providers, including `openai/gpt-6-luna`. No inference,
 Copilot probe, new sign-in or billing/access verification was performed.
 
-Run `npm run app`, open the printed address, and choose **Settings → AI connections**.
+Run `npm run app`, open the printed address, and choose **Settings → Project AI**.
 Settings is available before creating a project as well as inside a project.
 
-1. Select **Continue with ChatGPT**, authorize in the new browser tab, and return.
+1. Under **Connected accounts**, select **Add ChatGPT account**, authorize in the new
+   browser tab, and return. Skip this step if the account is already saved.
    If the popup is blocked, use **Open sign-in tab**. Pending sign-in has a three-minute
    bound and a **Cancel sign-in** action. Reloading the same tab can recover its
    pending attempt; restarting the service requires a fresh attempt.
 2. Select the saved account and choose a model from its account-specific catalog.
    Use **Refresh models** after account/model availability changes.
-3. Optionally choose **Test connection**: one bounded inference request that uses
-   plan allowance. **Stop test** cancels it locally. Catalog browsing is not inference.
+3. Optionally choose **Test connection** under **Connected accounts**: one bounded
+   inference request for the dropdown selection, which may differ from the saved
+   project AI, using plan allowance. **Stop test** cancels it locally. Catalog browsing
+   is not inference.
 4. In an existing project choose **Save model**; for a new project, the selection is
    used by **Create & explore**. Project connection references are revisioned and
    contain no tokens. Saving does not automatically start inference.
    Signing in only connects the account; it does not switch an existing project's
    saved execution route. The header shows the active route/model, Settings labels
-   unsaved selections, and **Explore next gaps** is disabled until pending changes
-   are saved. The save action sits beside the connection controls.
-5. **Reconnect** reauthorizes the selected identity. **Disconnect** revokes the saved
+   **Current project AI** separately from **Pending selection — not saved**, and
+   **Explore next gaps** is disabled until pending changes are saved or discarded.
+   **Discard changes** restores the saved fields without an API write/model call;
+   a blocked save explains why inline.
+5. Each saved account has its own **Reconnect** and **Disconnect** actions under
+   **Connected accounts**. **Reconnect** reauthorizes that identity. **Disconnect** revokes the saved
    renewable session before removing the connection and stops this service's active
    requests for it. Projects retain the missing selection and do not fall back.
 
-The header identifies direct-plan use. Settings shows the active selected account,
-plan usage, a usage-management link, and a first-sign-in confirmation remembered by
+The header identifies direct-plan use. Settings separates current AI, draft selection
+and saved accounts, with a usage-management link and a first-sign-in confirmation remembered by
 this browser. Credentials never enter browser storage; only the pending attempt ID,
 confirmation preference, and ordinary project selection state live there.
 

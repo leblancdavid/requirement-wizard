@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { ProjectStore } from "../storage/store.js";
+import { createServer } from "node:http";
 
 // Real Electron + real SQLite, isolated data, no provider calls or credentials.
 await mkdir(resolve(".reqwizit-state"), { recursive: true });
 const directory = await mkdtemp(resolve(".reqwizit-state/desktop-check-"));
 const seed = new ProjectStore(join(directory, "projects.sqlite"));
+const other = seed.create("Older last-used fixture", "Restore a project other than the newest", { providerID: "openai", modelID: "fixture" });
 const project = seed.create("Desktop continuity fixture", "Keep my saved requirements", { providerID: "openai", modelID: "fixture" });
 const failed = seed.beginJob(project.id, project.revision).job;
 seed.claimJob(failed.id, Date.now() + 60000);
@@ -22,6 +24,7 @@ const launch = () => _electron.launch({
   env: environment, timeout: 30000,
 });
 let desktop: Awaited<ReturnType<typeof launch>> | undefined;
+const reservedOrigin = createServer((_req, res) => res.writeHead(503).end());
 try {
   desktop = await launch();
   let page = await desktop.firstWindow();
@@ -118,15 +121,33 @@ try {
   }), true);
   const origin = new URL(page.url()).origin;
   await page.screenshot({ path: resolve(".reqwizit-state/desktop.png"), fullPage: true });
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("button", { name: /Recent workspaces/ }).click();
+  await page.getByRole("button", { name: other.name, exact: true }).click();
+  await expect(page.getByRole("heading", { name: other.name, exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const state = window.reqwizitDesktop!.readWorkspaceHistory();
+    return state.status === "ready" ? state.history?.lastProjectID : null;
+  })).toBe(other.id);
+  assert.equal(await page.evaluate(async () => {
+    try { await window.reqwizitDesktop!.saveWorkspaceHistory({ format: 99 } as never); return false; } catch { return true; }
+  }), true, "Future history formats are rejected without reset");
   const exited = desktop.waitForEvent("close");
   await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
   await exited;
   desktop = undefined;
   await assert.rejects(fetch(origin));
+  // Force a different loopback origin: Chromium localStorage alone cannot restore it.
+  await new Promise<void>((accept, reject) => { reservedOrigin.once("error", reject); reservedOrigin.listen(Number(new URL(origin).port), "127.0.0.1", accept); });
   // Relaunch must reuse the same Node-created store without automatic inference.
   desktop = await launch();
   page = await desktop.firstWindow();
-  await expect(page.getByRole("heading", { name: project.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: other.name, exact: true })).toBeVisible();
+  assert.notEqual(new URL(page.url()).origin, origin);
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("button", { name: /Recent workspaces/ }).click();
+  await expect(page.locator("#recent-workspaces button").first()).toHaveText(other.name);
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
   const state = await page.evaluate(async () => {
     const token = document.querySelector<HTMLMetaElement>('meta[name="reqwizit-token"]')!.content;
     return (await fetch("/api/projects", { headers: { "X-Reqwizit-Token": token } })).json();
@@ -142,8 +163,9 @@ try {
   const reopened = new ProjectStore(join(directory, "projects.sqlite"));
   assert.equal(reopened.get(project.id).name, project.name);
   reopened.close();
-  console.log("Desktop checks passed: branded assets, Windows draggable title bar/native window states/theme IPC, real SQLite continuity/relaunch, isolated renderer, native IPC, web-link restrictions, window-close and menu Quit process exit/backend shutdown, saved project retention. Screenshot: .reqwizit-state/desktop.png");
+  console.log("Desktop checks passed: branded assets, native window/theme IPC, SQLite retention, last-project/recent-order recovery across a forced origin change, future-history rejection, isolated renderer, web-link restrictions, close/Quit owned shutdown. Screenshot: .reqwizit-state/desktop.png");
 } finally {
   await desktop?.close();
+  if (reservedOrigin.listening) await new Promise<void>((accept, reject) => reservedOrigin.close(error => error ? reject(error) : accept()));
   await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

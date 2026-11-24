@@ -7,6 +7,7 @@ import { ConnectedDiscovery } from "../providers/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { startApp } from "../web/server.js";
+import { createAppHelper } from "../runtime/embedded/app-helper.js";
 import type { StartupPhase } from "../core/startup.js";
 
 if (!parentPort) throw new Error("Desktop backend requires an owning worker.");
@@ -23,7 +24,7 @@ async function start() {
   store.recoverExpiredJobs();
   progress("starting-workspace");
   const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-  const options = { store, connections, catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir };
+  const options = { store, connections, helper: createAppHelper(directory, join(staticDir, "..", "..", "embedded-helper")), catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir };
   try { backend = await startApp({ ...options, port: 4318 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;

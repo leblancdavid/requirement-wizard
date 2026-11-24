@@ -6,6 +6,7 @@ import { defaultDataDirectory } from "../storage/paths.js";
 import { DesktopBackend } from "./backend-host.js";
 import { desktopSplash } from "./splash.js";
 import { startupLabels, type StartupPhase } from "../core/startup.js";
+import { DesktopWorkspaceHistory } from "./workspace-history.js";
 
 app.setName("Reqwizit");
 const args = process.argv.slice(1);
@@ -17,6 +18,7 @@ function argument(name: string) {
   return value;
 }
 const directory = resolve(argument("--data-dir") ?? defaultDataDirectory());
+const workspaceHistory = new DesktopWorkspaceHistory(join(directory, "desktop", "workspace-history.json"));
 // Keep Chromium profiles separate from portable project files; one instance per data directory.
 app.setPath("userData", join(directory, "desktop"));
 let window: BrowserWindow | undefined;
@@ -93,9 +95,18 @@ else {
     const origin = await backend.ready;
     if (shuttingDown) return;
     progress("loading-interface");
-    const trusted = (event: Electron.IpcMainInvokeEvent) => {
+    const trusted = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent) => {
       if (!window || shuttingDown || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error("Invalid desktop request.");
     };
+    ipcMain.on("reqwizit:workspace-history", (event) => {
+      try { trusted(event); event.returnValue = workspaceHistory.read(); }
+      catch { event.returnValue = { status: "unavailable" }; }
+    });
+    ipcMain.handle("reqwizit:save-workspace-history", (event, history: unknown) => {
+      trusted(event);
+      try { workspaceHistory.save(history); }
+      catch { throw new Error("Desktop workspace history could not be saved; existing data was retained."); }
+    });
     ipcMain.handle("reqwizit:choose-directory", async (event) => {
       trusted(event);
       const result = await dialog.showOpenDialog(window!, { title: "Choose project folder", properties: ["openDirectory", "createDirectory"] });

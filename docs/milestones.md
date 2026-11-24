@@ -1,5 +1,22 @@
 # Milestone backlog
 
+The 2026-11-24 [helper Settings controls](embedded-helper-auth.md#app-controls-2026-11-24)
+add explicit-consent check/sign-in/stop and safe lifecycle observations in browser and
+desktop backends. Deterministic UI/API/lifecycle checks and a native empty-store API
+smoke pass without provider/model calls. This is visibility/control of the existing
+auth pilot, not account/model selection, refresh qualification or coding enablement.
+
+The 2026-11-24 [embedded helper IPC/packaging pilot](embedded-helper-pilot.md) verifies
+private-runtime metadata/session continuity from Node 22 and Electron owner Workers.
+Its metadata profile exposes no prompt/tool/auth operations and does not change coding
+routes. A later [separate authentication profile](embedded-helper-auth.md) adds explicit
+storage consent and SDK-native sign-in controls; no-provider-request cancellation and
+invalid-state callback guards pass from Node/Electron relocated owner Workers. Later
+manual authorization was user-reported and signed-in persistence passed two clean
+reopens with zero provider/model requests. Refresh, model access, installer release,
+coding safety and reduced overhead remain unqualified; no implementation or delivery
+milestone exit is established.
+
 The 2026-11-15 follow-up schedules eligible growing-feature checks within new explicit
 Continue permission and the existing request allowance, preserving manual mode and
 older grants. Unchanged outcomes and reviewed child maps suppress churn; all splits

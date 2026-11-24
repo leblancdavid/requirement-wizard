@@ -14,7 +14,26 @@ Windows, Reqwizit discovers the desktop-installed V2 CLI instead of preferring a
 stale npm V1 executable. Provider sign-ins stay in OpenCode's V2 store; no token
 copying or project reset is needed. See [runtime compatibility](docs/runtime-spike.md).
 
+A developer-only [embedded helper IPC/packaging pilot](docs/embedded-helper-pilot.md)
+can be built with `npm run build:embedded-helper`. It uses a private runtime and
+metadata-only sessions, makes no model calls and does not replace existing coding
+routes. Live coding, installer release and reduced overhead remain unqualified.
+Its later [explicit ChatGPT authentication profile](docs/embedded-helper-auth.md)
+uses a separate protected SDK store and requires storage consent; no credentials
+are copied and coding is still disabled. Manual authorization was user-reported and
+signed-in persistence passed two reopens; refresh and model access remain unqualified.
+**Settings → Experimental helper diagnostics** provides explicit-consent check/sign-in/stop
+controls plus process and connection observations when the optional bundle is present.
+Settings separates saved **Project AI**, pending changes and **Connected accounts**;
+helper diagnostics remain collapsed unless you open them.
+
 ## Project status
+
+Desktop restart recovery now preserves populated legacy project stores even when an
+auxiliary newer folder exists, and remembers the last project/Recents across port
+changes. Desktop builds no longer create a circular repository self-dependency or
+reinstall unchanged dependencies on every launch. The reported OpenCode stall/crash
+is not yet reproduced or fully attributed. See [recovery and verification](docs/desktop.md#data-root-recovery-project-history-and-standalone-build-graph-2026-11-24).
 
 Fresh scoped groups no longer need an unused background-read schedule to fit
 before their target-first proposal can start. Every original still requires full

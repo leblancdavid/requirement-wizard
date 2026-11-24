@@ -33,8 +33,9 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 import { answerCohortSearchSchema } from "../core/answer-integration-diagnostics.js";
+import { databaseSchemaVersion } from "./schema-version.js";
 
-export const databaseSchemaVersion = 87;
+export { databaseSchemaVersion } from "./schema-version.js";
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;

@@ -394,7 +394,7 @@ try {
   await page.keyboard.press("Escape");
   await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
   const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
-  await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
+   await expect(connectionPanel.getByRole("button", { name: "Add ChatGPT account" })).toBeEnabled();
   await expect(connectionPanel.getByLabel("AI provider", { exact: true })).toBeEnabled();
   await connectionPanel.getByLabel("OpenCode model", { exact: true }).selectOption("gpt-6-luna");
   await expect(connectionPanel.getByLabel("OpenCode model", { exact: true })).toHaveValue("gpt-6-luna");
@@ -420,7 +420,7 @@ try {
     headerSizes.set(width, await headerGeometry());
   }
   const firstPopup = page.waitForEvent("popup");
-  await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
+   await connectionPanel.getByRole("button", { name: "Add ChatGPT account" }).click();
   const cancelledPopup = await firstPopup;
   await expect(connectionPanel.getByText("Waiting for ChatGPT sign-in…", { exact: true })).toBeVisible();
   await expect(page.locator(".header-activity .activity-spinner")).toBeVisible();
@@ -439,7 +439,7 @@ try {
   }
   await cancelledPopup.close();
   const secondPopup = page.waitForEvent("popup");
-  await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
+   await connectionPanel.getByRole("button", { name: "Add ChatGPT account" }).click();
   const signedInPopup = await secondPopup;
   loginComplete = true;
   await expect(connectionPanel.getByText("Your ChatGPT plan is connected", { exact: true })).toBeVisible();
