@@ -2001,6 +2001,7 @@ export class ProjectStore {
         json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
         CASE WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN json_object(
           'verificationPolicy', json_extract(payload, '$.answerGroupWork.verificationPolicy'),
+          'proposalRead', CASE WHEN json_type(payload, '$.answerGroupWork.proposalRead') IS NOT NULL THEN json('true') ELSE NULL END,
           'unionPageCapacity', CASE WHEN json_type(payload, '$.answerGroupWork.unionPageCapacity') IS NOT NULL THEN
             json_object('fromReceipt', json_extract(payload, '$.answerGroupWork.unionPageCapacity.fromReceipt')) ELSE NULL END,
           'batches', json_object('length', json_array_length(payload, '$.answerGroupWork.batches')),

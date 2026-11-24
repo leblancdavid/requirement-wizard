@@ -16,6 +16,19 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Fresh scoped groups no longer need an unused background-read schedule to fit
+before their target-first proposal can start. Every original still requires full
+frozen-draft verification, and started work stays unchanged. A reproduced fit
+failure now completes in fixtures; production speed and publication-memory
+qualification remain open. See [behavior and limits](docs/browser-workspace.md#direct-scoped-proposal-admission).
+
+Fresh processing now tries smaller compatible answer cohorts after fit failures.
+Fitting scoped groups propose from exact targets/support before full mandatory
+verification; paid schedules remain unchanged. A fixture used three actual shared
+requests versus six individual requests, not a production latency claim. Planning
+also checks stable-ID evidence changes before historical repacking. See
+[behavior and limits](docs/browser-workspace.md#smaller-cohorts-and-target-first-shared-proposals).
+
 Compatible new scoped answers can now share processing without combining their
 target permissions. A two-answer fixture used five shared requests versus a
 twelve-request individual schedule estimate;

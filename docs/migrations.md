@@ -1,5 +1,146 @@
 # Data migrations and upgrade compatibility
 
+## Direct scoped proposal admission without unused reads (2026-11-24)
+
+The latest supplied cycle retained individual processing for all five answers:
+81 adapter attempts / 494.8 seconds, with 475.6 seconds inside adapter requests.
+Three selection runs reported evidence-unit failures; one also hit the batch limit
+and the soft search deadline. A two-response tail had no attempted cohort because
+its scoped and broad answers use different policies. Ten discovery runs used 55
+requests / 681.4 seconds and produced five questions. These are measurements of
+the supplied runs, not predictions of this fix's benefit. The Logs export also
+reports a newer publisher heap exhaustion during `continuation` at revision 4031;
+its 142,264,324 heap-byte sample is not a peak. The exported publication timing
+record remains stale revision 3694. That separate production failure stays open.
+
+**Implemented:** new scoped groups now attempt their exact target/support proposal
+before validating an all-read background layout. The old ordering could reject an
+unused background read because it reserved 24,000 characters of possible draft
+growth beside every unit—even though proposal-first groups never perform those
+reads. Admission still measures the actual one-page proposal encoder with full
+output/metadata headroom. It retains every mandatory original in a single catalogue
+batch, then independently pages complete verification against the actual frozen
+draft. No background is credited as read, no check is skipped, no original support
+is separated from an indispensable joint comparison, and the 96,000-character cap,
+page/usage/storage bounds and per-answer permissions are unchanged. A truly
+oversized actual check stops before dispatch and keeps the paid proposal. An
+explicit retry does not repeat it or send the same oversized check.
+
+**Compatibility decision: no new persisted-data format or migration.** This uses
+the existing SQLite-87 / portable-58 `scoped-group-targets-v1` representation and
+cursor, which already support a catalogue batch and paged whole-union checks.
+The existing plan key binds the exact new catalogue and proposal packet; replay
+still requires every mandatory original exactly once in that catalogue. No schema,
+assessment fingerprint, semantic checkpoint, optimistic revision or allowance is
+changed. Already-started all-read and proposal-first groups retain their original
+batches, contexts, receipts, attempts and identities; no startup action repacks
+them or invokes inference. Older supported work needs neither reset nor repeated
+model requests. Existing future-format and portable-downgrade checks remain.
+
+Verification: a regression with large exact human pins and background originals
+reproduced the old `evidence-unit` rejection, then completed through one proposal
+and four actual verification requests, checking every mandatory original. A
+larger frozen-draft variant stopped before any verification call, retained the
+proposal across explicit retry and published nothing. Catalogue-coverage and
+repair tests preserve all originals despite changed physical grouping. The wider
+answer-group, workflow/resilience, specification, diagnostics, portable-storage
+and migration suite passed 319/319 tests. The direct-admission tests also passed
+after adding the cohort-routing assertion, which guards against reintroducing the
+unused-read gate through cost forecasting. Shared-answer and portable browser
+smoke checks, TypeScript checking, the UI build and `git diff --check` passed;
+the build retained its existing large-chunk warning. No live model calls were made;
+production savings are not qualified. Mixed scoped/broad member proposals with
+shared final verification remain a separate follow-up protocol, not enabled by
+this admission fix; mixed answers still cannot exchange permissions.
+
+## Smaller answer cohorts and scoped group proposals (SQLite 86 → 87; portable 58)
+
+Latest supplied runs: seven processed answers used 99 adapter attempts / 688.2
+seconds; ten discovery runs used 68 attempts / 809.5 seconds and retained ten
+questions. No answer used shared processing; four runs reported shared fit
+fallbacks. Discovery planning still took 131.3 seconds. These totals precede the
+changes below. Adapter time is not pure inference time. Publication metrics in the
+export still describe revision 3694 and cannot qualify current publication saves.
+
+**New-work selection.** The queue now tries bounded alternative cohorts rather
+than giving up after one preferred group. It tries same-feature/scoped-policy
+cohorts, compatible cross-feature cohorts, smaller adjacent pairs (including later
+pairs) and shorter prefixes. Each cohort contains two to five fresh eligible
+answers; scoped and unscoped inputs never mix. There are at most sixteen probes,
+with a five-second soft local deadline checked between probes (an in-progress
+probe can exceed it). This is not an exhaustive/best-price search. No model call,
+grant, receipt or group checkpoint is created by probing. Started individual and
+shared work bypasses selection and keeps its original members/attempts. If no
+acceptable group is found, the existing complete individual schedule remains.
+
+Numeric `answerIntegration.cohortSearch` diagnostics distinguish pinned-input,
+indivisible-unit, evidence-batch-limit, unknown-fit and higher-estimated-cost stops,
+attempted groups, selected answer count, elapsed local time and search exhaustion.
+They contain no record IDs, text, error prose, paths or credentials. Successful
+preflight is not a guarantee that every future draft/lookup will fit. Unknown
+historical diagnostics remain absent. Cost forecasting now explicitly enables the
+individual scoped proposal-first schedule; the previous call site omitted that
+option and could overestimate individual cost. Forecasts still reserve full draft
+growth and do not grant verification or reprice already paid work.
+
+**Scoped group proposal-first.** New fitting oversized scoped groups can save
+`answerGroupWork.proposalRead` (`scoped-group-targets-v1`, format 1). It binds the
+exact original answers, permitted targets and complete original support to the
+plan key. The actual paged encoder, full draft reserve and metadata headroom must
+fit one proposal packet; otherwise the original all-read schedule is retained.
+Every original batch stays in the saved mandatory inventory, but the new cursor
+has one proposal read followed by full frozen union verification. Background is
+not presumed read during proposal. Every original and every draft-referenced
+support unit must still be checked; indispensable joint comparisons remain atomic.
+No partial publication, combined target authority, new requirements or widened
+human permissions are introduced. Repair retains the paid proposal and restarts
+every check, never giving old verdicts to a corrected draft. Loaded-evidence and
+per-answer scope validation remain mandatory. Diagnostic cursor projections use
+the same new read-step count without exporting target IDs.
+
+**Bounded negative content prefilter.** Completed record-staged planning can now
+compare the exact current mandatory record bodies with up to four immutable
+historical revisions before packing old layouts, including changes under stable
+IDs. The worker retains at most its existing two historical snapshot objects and
+small invocation-local negative proof hashes across lazy retries. Unknown/missing
+speculative history falls back to the original validator; it does not abort local
+planning or qualify work as reusable. Equal bodies are not a positive freshness
+proof: original context/equivalence checks still apply. Unfinished work retains its
+normal validation. Negative checks are bound to exact current inputs, original
+job/revision and the mandatory inventory; no paid fingerprints, verdicts or layouts
+are rewritten. Completed-equivalence diagnostics include these exact negative
+content checks, not extra model inference or semantic approval.
+
+**Forward compatibility.** SQLite 87 transactionally adds partial startup indexes
+and a reader-capability boundary. It validates bounded saved group proposals and
+cohort diagnostics, rejecting future formats without overwriting them. Existing
+projects, scopes, assessments, paid replies, attempts and all-read schedules are
+unchanged; upgrades/startup make no inference calls and never retrofit a proposal
+onto paid work. Interrupted migrations roll back and can reopen/retry. Portable
+58 is required only when retained continuation carries a group proposal or cohort
+diagnostic; older continuations retain their previous minimum. Downgraded new
+capabilities are rejected. Proposal-target/support tampering cannot resume.
+
+Focused checks passed for smaller fitting-pair selection after a five-answer
+batch overflow, search bounds/failure classification, price fallback, immutable
+scope, proposal cursor/repair/check coverage, old all-read preservation, repeated
+reopen, failed-upgrade rollback, future-policy rejection and portable continuation
+without rereading the proposal. A same-project portable fixture used **three actual
+shared requests versus six actual individual requests** to verify the same target
+drafts. Individual publication still retained its normal shared-dependency review
+holds; the comparison is request work, not identical final publication state or
+live latency. The older twelve-request individual forecast was not an actual
+baseline; the corrected forecast is eight in this fixture, while actual frozen
+packing used six. A stable-ID content-change fixture needed one historical-policy
+preparation versus nineteen, selecting identical next-package bytes. The wider
+answer/workflow/planning/repair/submission/diagnostic/migration/portable run passed
+**493/493** tests. Latest focused proposal/upgrade checks and the additional
+diagnostic privacy/future-policy regression passed too. Shared-answer and epic
+browser smoke checks, `npm run check`, UI build and `git diff --check` passed;
+the build retains its large-chunk warning and Git reports line-ending warnings.
+No live model calls were made;
+production savings and the separate publication-memory failure remain unqualified.
+
 ## Scoped answer cohorts and negative planning inventories (SQLite 85 → 86; portable 57)
 
 The latest supplied completed cycle used 113 adapter attempts / 789.5 seconds for

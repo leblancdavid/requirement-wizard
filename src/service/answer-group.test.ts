@@ -23,11 +23,49 @@ import { startApp } from "../web/server.js";
 import { workflowInputKey } from "../core/workflow.js";
 import { estimateAnswerIntegrationCost } from "../core/answer-integration-cost.js";
 import { answerGroupClarificationPreview, adoptAnswerGroupPlay, answerGroupClarifications, legacyAnswerGroupBatchOverflow } from "../core/answer-group.js";
+import { selectAnswerCohort } from "../core/answer-cohorts.js";
+import { AnswerGroupFitError } from "../core/answer-group.js";
 
 const empty = (): Analysis => ({ summary: "Shared answer integration", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
-function scopedFixture(store: ProjectStore, large = false, crossFeature = false) {
-  let p = store.create("Scoped shared answers", "Keep original target permissions", { providerID: "openai", modelID: "fixture" });
+test("bounded cohort search tries smaller later pairs, classifies failures and never mixes scoped/broad permissions", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 5), calls: string[][] = [];
+    const manifest = answerGroupContext(answerGroupMaterials(p, items), planAnswerGroup(answerGroupMaterials(p, items), true)).manifest;
+    const selected = selectAnswerCohort(p, items, group => {
+      calls.push(group.map(s => s.id));
+      if (group.length > 2) throw new AnswerGroupCapacityError("evidence batches", 33, 32);
+      if (group.includes(items[0]!)) throw new AnswerGroupFitError(manifest, "pinned-input");
+      return undefined;
+    });
+    assert.deepEqual(selected.items, items.slice(1, 3)); assert.equal(selected.search.attemptedGroups, 3);
+    assert.equal(selected.search.batchLimit, 1); assert.equal(selected.search.pinnedInput, 1);
+    assert.equal(selected.search.selectedAnswers, 2); assert.equal(store.jobs(p.id).filter(j => j.answerGroupWork).length, 0);
+    let failures = 0;
+    const exhausted = selectAnswerCohort(p, items, () => { failures++; throw new AnswerGroupFitError(manifest, "evidence-unit"); });
+    assert.equal(exhausted.items.length, 0); assert.equal(exhausted.search.evidenceUnit, failures); assert.ok(failures <= 16);
+    const mixed = items.map((s, i) => i % 2 ? { ...s, answerScope: { format: 1 as const, questionID: (s.input as { questionID: string }).questionID, requirementIDs: ["fixture-only"] } } : s);
+    selectAnswerCohort(p, mixed, group => { assert.equal(new Set(group.map(s => !!s.answerScope)).size, 1); return undefined; });
+    assert.throws(() => selectAnswerCohort(p, [{ ...items[0]!, jobID: "paid" }, items[1]!]), /Started/);
+    assert.throws(() => selectAnswerCohort(p, items, () => { throw new Error("Unexpected planner defect"); }), /Unexpected planner defect/);
+    const capped = selectAnswerCohort(p, Array.from({ length: 30 }, (_, i) => ({ ...mixed[i % mixed.length]!, id: `trial-${i}` })), () => { throw new ContextBudgetError(manifest); });
+    assert.equal(capped.search.attemptedGroups, 16); assert.equal(capped.search.searchLimitReached, true);
+  } finally { store.close(); }
+});
+
+test("cohort routing continues after a higher-cost forecast without repricing paid work", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 3);
+    const selected = selectAnswerCohort(p, items, group => ({ policy: "complete-evidence-estimate-v1", sharedReadRequests: group.length,
+      sharedVerificationProxyRequests: 1, individualRequests: 2, selected: group.length > 2 ? "individual" : "shared", uncertainty: "draft-lookups-and-repairs-unknown" }));
+    assert.equal(selected.search.higherEstimatedCost, 1); assert.equal(selected.items.length, 2); assert.equal(selected.costs.get(items[0]!.id)!.selected, "shared");
+  } finally { store.close(); }
+});
+
+function scopedFixture(store: ProjectStore, large = false, crossFeature = false, bulkyPins = false) {
+  let p = store.create("Scoped shared answers", bulkyPins ? randomBytes(4200).toString("hex") : "Keep original target permissions", { providerID: "openai", modelID: "fixture" });
   if (crossFeature) p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "reports", title: "Reports", purpose: "Report behavior", dependencies: [] }]);
   const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
   store.finishJob(seed.id, { ...empty(), requirements: [0, 1].map(i => ({ epicID: crossFeature && i ? "reports" : "inbox",
@@ -35,13 +73,13 @@ function scopedFixture(store: ProjectStore, large = false, crossFeature = false)
   p = store.get(p.id);
   for (const r of p.requirements) p = store.review(p.id, p.revision, r.id, "accepted", "Keep this original target");
   const questions = store.beginJob(p.id, p.revision).job; store.claimJob(questions.id, Date.now() + 60000);
-  store.finishJob(questions.id, { ...empty(), questions: p.requirements.map(r => ({ epicID: r.epicID, text: `Which recovery for ${r.statement}?`,
+  store.finishJob(questions.id, { ...empty(), questions: p.requirements.map(r => ({ epicID: r.epicID, text: bulkyPins ? randomBytes(4200).toString("hex") : `Which recovery for ${r.statement}?`,
     whyItMatters: "Settle this existing target", evidenceIDs: [r.id, p.sources[0]!.id], updateTargets: { format: 1 as const, requirementIDs: [r.id] },
     options: [{ label: "Retry", consequence: "Retry the operation" }, { label: "Stop", consequence: "Keep saved state" }] })) });
   p = store.get(p.id);
   if (large) for (let i = 0; i < 70; i++) p = store.note(p.id, p.revision, `Exact shared constraint ${i}: ${randomBytes(1000).toString("hex")}`, "project");
   const saved = p.questions.map(q => store.enqueue(p.id, { id: randomUUID(), auto: false, research: false,
-    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Retry this operation without losing saved state" } } }));
+    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: bulkyPins ? randomBytes(4200).toString("hex") : "Retry this operation without losing saved state" } } }));
   store.applyQueued(p.id, saved.map(s => s.id)); p = store.get(p.id);
   const items = saved.map(s => store.submissions(p.id).find(item => item.id === s.id)!);
   assert.ok(items.every(item => !!item.answerScope));
@@ -52,6 +90,81 @@ function scopedFixture(store: ProjectStore, large = false, crossFeature = false)
   }) } }, answers: items.map(item => ({ submissionID: item.id, outcome: "integrated", explanation: "Preserved its individual target permission" })) };
   return { p, items, draft };
 }
+
+test("scoped proposal cursor retains the complete check union, authenticates targets and restarts every check after repair", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items, draft } = scopedFixture(store, true), material = answerGroupMaterials(p, items), work = planAnswerGroup(material, true);
+    const old = planAnswerGroup(material, true, true, true, false);
+    assert.ok(work.proposalRead); assert.equal(old.proposalRead, undefined);
+    assert.deepEqual([...work.batches.flat()].sort(), [...old.batches.flat()].sort(), "Catalogue regrouping retains every mandatory original");
+    assert.notEqual(work.planKey, old.planKey);
+    const job = store.beginJob(p.id, p.revision).job;
+    boundAnswerGroupEvidence(material, work); work.attempts++;
+    acceptAnswerGroup(material, work, undefined, { answerGroupDraft: draft }, job);
+    assert.equal(answerGroupProgress(work).completed, 1); assert.equal(answerGroupProgress(work).phase, "check");
+    const check = boundAnswerGroupEvidence(material, work, draft); work.attempts++;
+    acceptAnswerGroup(material, work, draft, { answerGroupCheck: { valid: false, reason: "One acceptance scenario needs a faithful correction" } }, job);
+    assert.equal(answerGroupProgress(work).phase, "repair");
+    const repaired = structuredClone(draft); repaired.analysis.specificationUpdates!.changes.forEach(c => { if (c.type === "revise") c.acceptance.push("The retry retains all saved state"); });
+    work.attempts++;
+    const repairContext = answerGroupContext(material, work, draft);
+    assert.ok(repaired.analysis.specificationUpdates!.changes.every(c => repairContext.manifest.includedIDs.includes(c.requirementID)));
+    acceptAnswerGroup(material, work, draft, { answerGroupRepair: repaired }, job);
+    assert.equal(answerGroupProgress(work).completed, 1); assert.equal(answerGroupProgress(work).phase, "check");
+    const seen = new Set<string>();
+    while (answerGroupProgress(work).phase !== "complete") {
+      const context = boundAnswerGroupEvidence(material, work, repaired); context.manifest.includedIDs.forEach(id => seen.add(id)); work.attempts++;
+      acceptAnswerGroup(material, work, repaired, { answerGroupCheck: { valid: true, reason: "This exact unit agrees with the corrected complete draft" } }, job);
+    }
+    for (const id of material.evidenceIDs) assert.ok(seen.has(id), id);
+    const tampered = structuredClone(work); tampered.proposalRead!.recordIDs.pop();
+    assert.throws(() => replayAnswerGroup(material, tampered), /targets\/support changed/);
+    assert.throws(() => replayAnswerGroup(material, { ...work, proposalRead: undefined }), /inputs changed|step|evidence|receipt|attempt/i);
+    assert.ok(check.manifest.characters <= check.manifest.budget);
+  } finally { store.close(); }
+});
+
+for (const oversizedDraft of [false, true]) test(`direct scoped admission bypasses unused background reads, retaining actual frozen-draft verification bounds (oversized draft: ${oversizedDraft})`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = scopedFixture(store, false, false, true); let p = f.p; const evidence: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      p = store.note(p.id, p.revision, `Exact background original ${i}: ${randomBytes(5900).toString("hex")}`, "inbox");
+      evidence.push(p.sources.at(-1)!.id);
+    }
+    const m = answerGroupMaterials(p, f.items);
+    assert.throws(() => planAnswerGroup(m, true, true, true, false), error => error instanceof AnswerGroupFitError && error.kind === "evidence-unit");
+    const w = planAnswerGroup(m, true); assert.ok(w.proposalRead); assert.equal(w.batches.length, 1);
+    const selected = selectAnswerCohort(p, f.items);
+    assert.deepEqual(selected.items.map(item => item.id), f.items.map(item => item.id), "Queue routing must not reintroduce the unused read-size gate through its forecast");
+    assert.equal(selected.search.evidenceUnit, 0);
+    assert.ok(evidence.every(id => !w.proposalRead!.recordIDs.includes(id)), "Unrelated background is not silently pulled into proposal admission");
+    const checked = new Set<string>(); let reads = 0, checks = 0;
+    const draft = structuredClone(f.draft);
+    if (oversizedDraft) for (const change of draft.analysis.specificationUpdates!.changes) if (change.type === "revise") change.rationale = randomBytes(4500).toString("hex");
+    const done = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      assert.ok(context.manifest.characters <= 96000); assert.deepEqual(store.get(p.id).requirements, p.requirements);
+      if (context.manifest.answerGroupStage!.phase === "read") { reads++; return { answerGroupDraft: draft }; }
+      checks++; context.manifest.includedIDs.forEach(id => checked.add(id));
+      return { answerGroupCheck: { valid: true, reason: "This complete original and all its support agree with both scoped target changes" } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id), research: false });
+    assert.equal(reads, 1);
+    if (oversizedDraft) {
+      assert.equal(done.status, "failed", done.diagnostic); assert.match(done.diagnostic!, /cannot fit|input budget/);
+      assert.equal(checks, 0, "An oversized actual check must stop before dispatch, not drop a background unit");
+      assert.deepEqual(store.get(p.id).requirements, p.requirements);
+      const original = structuredClone(done);
+      const retry = await new DiscoveryService(store, { async analyze() { assert.fail("No repeated proposal or oversized verification call"); } })
+        .analyze(p.id, p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id), research: false });
+      assert.equal(retry.status, "failed"); assert.deepEqual(retry.answerGroupWork!.receipts, original.answerGroupWork!.receipts);
+      assert.deepEqual(store.getJob(done.id), original); return;
+    }
+    assert.equal(done.status, "completed", done.diagnostic); assert.ok(checks > 0);
+    for (const id of [...m.evidenceIDs, ...evidence]) assert.ok(checked.has(id), id);
+    console.log(JSON.stringify({ fixtureOnly: true, rejectedUnusedAllReadSchedule: true, proposalRequests: reads, verificationRequests: checks }));
+  } finally { store.close(); }
+});
 
 for (const crossFeature of [false, true]) test(`scoped shared answers retain per-source target permissions, not union authority (cross-feature: ${crossFeature})`, () => {
   const store = new ProjectStore(":memory:");
@@ -99,11 +212,48 @@ for (const crossFeature of [false, true]) test(`workflow shares fresh scoped ans
     workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous"); await workflow.wait(p.id);
     const job = store.jobs(p.id).find(j => j.answerGroupWork)!;
     assert.equal(job?.status, "completed", job?.diagnostic); assert.equal(job.discoveryMetrics!.answerIntegration!.reason, "shared");
-    for (const id of m.evidenceIDs) { assert.ok(reads.has(id), id); assert.ok(checks.has(id), id); }
+    assert.ok(job.answerGroupWork!.proposalRead, "New oversized scoped groups propose from exact target support only");
+    assert.ok(reads.size < m.evidenceIDs.length, "Background is not redundantly read before full verification");
+    for (const id of job.answerGroupWork!.proposalRead!.recordIDs) assert.ok(reads.has(id), id);
+    for (const id of m.evidenceIDs) assert.ok(checks.has(id), id);
+    const diagnostics = store.discoveryDiagnostics(p.id, [job.id]).runs[0]!;
+    assert.equal(diagnostics.savedWork!.remainingSteps, 0); assert.equal(diagnostics.savedWork!.totalSteps, 2);
     assert.ok(requests < cost.individualRequests, `${requests} shared versus ${cost.individualRequests} scoped individual`);
     assert.ok(items.every(item => store.submissions(p.id).find(s => s.id === item.id)!.status === "completed"));
     console.log(JSON.stringify({ fixtureOnly: true, scopedAnswers: items.length, sharedRequests: requests, individualRequests: cost.individualRequests }));
   } finally { await workflow?.close(); store.close(); }
+});
+
+test("measured scoped shared processing uses fewer actual requests than sequential individual processing of the same portable fixture", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "scoped-actual-baseline-")); const store = new ProjectStore(":memory:"), clone = new ProjectStore(":memory:");
+  try {
+    const { p, items, draft } = scopedFixture(store, true); store.connectWorkspace(p.id, p.revision, directory); clone.openWorkspace(directory, p.model);
+    let individualRequests = 0, sharedRequests = 0;
+    for (const item of items) {
+      const target = p.requirements.find(r => item.answerScope!.requirementIDs.includes(r.id))!;
+      const result = await new DiscoveryService(clone, { async analyze(_p, { context }) {
+        individualRequests++; assert.ok(context.manifest.submissionStage);
+        if (context.manifest.submissionStage.phase === "check") return { submissionCheck: { valid: true, reason: "Exact original agrees with this one target change" } };
+        return { ...empty(), specificationUpdates: { format: 1, changes: draft.analysis.specificationUpdates!.changes.filter(c => c.requirementID === target.id) } };
+      } }).analyze(p.id, clone.projectRevision(p.id), { isolatedTask: true, requiredEpicIDs: [target.epicID],
+        recordIDs: [item.appliedSourceID!, item.answerScope!.questionID, ...item.answerScope!.requirementIDs], submissionIDs: [item.id], research: false });
+      assert.equal(result.status, "completed", result.diagnostic);
+      assert.deepEqual(result.result!.specificationUpdates!.changes, draft.analysis.specificationUpdates!.changes.filter(c => c.requirementID === target.id),
+        "Each individual schedule fully verifies the same exact target draft; normal pending-input publication holds remain in force");
+    }
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      sharedRequests++;
+      return context.manifest.answerGroupStage!.phase === "read" ? { answerGroupDraft: draft }
+        : { answerGroupCheck: { valid: true, reason: "Every supplied original agrees with the entire independently authorized draft" } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.ok(sharedRequests < individualRequests, `${sharedRequests} shared vs ${individualRequests} actual individual requests`);
+    assert.deepEqual(result.result!.specificationUpdates!.changes, draft.analysis.specificationUpdates!.changes);
+    assert.equal(clone.get(p.id).refinements.filter(r => r.status === "pending").length, 2,
+      "Individual processing retains shared-dependency publication holds rather than silently treating the other waiting answer as processed");
+    console.log(JSON.stringify({ fixtureOnly: true, scopedAnswers: 2, actualSharedRequests: sharedRequests, actualIndividualRequests: individualRequests }));
+  } finally { clone.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("85 to 86 preserves scoped paid reads, rejects future permissions transactionally and resumes portable 57 without replay", async () => {
@@ -159,6 +309,98 @@ test("paid individual scoped work cannot be regrouped or gain fresh attempts", a
     assert.equal(rejected.status, "failed"); assert.match(rejected.diagnostic!, /Already-started/);
     assert.deepEqual(store.getJob(paid.id), original); assert.deepEqual(store.get(p.id), p);
   } finally { store.close(); }
+});
+
+test("86 to 87 preserves paid all-read scoped schedules instead of adopting target-first proposals", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "old-scoped-reads-")), file = join(directory, "state.sqlite"); let store = new ProjectStore(file);
+  try {
+    const { p, items } = scopedFixture(store, true), m = answerGroupMaterials(p, items), work = planAnswerGroup(m, true, true, true, false);
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const context = boundAnswerGroupEvidence(m, work); work.attempts++;
+    const draft = answerGroupDraftSchema.parse({ analysis: empty(), answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Already represented" })) });
+    acceptAnswerGroup(m, work, undefined, { answerGroupDraft: draft }, job);
+    store.checkpointAnswerGroup(job.id, work, context.manifest); store.failJob(job.id, "interrupted", "Retain this original paid read");
+    const paid = structuredClone(store.getJob(job.id)); assert.equal(paid.answerGroupWork!.proposalRead, undefined);
+    store.close(); const db = new Database(file); db.exec("DELETE FROM migration_history WHERE version>=87; PRAGMA user_version=86"); db.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), paid); store.close(); }
+    store = new ProjectStore(file); let reads = 0;
+    const done = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      if (context.manifest.answerGroupStage!.phase === "read") { reads++; return { answerGroupKeep: true }; }
+      return { answerGroupCheck: { valid: true, reason: "Every mandatory original agrees with the unchanged draft" } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
+    assert.equal(done.status, "completed", done.diagnostic); assert.ok(reads > 0, "The original unpaid reads remain mandatory");
+    assert.equal(done.answerGroupWork!.proposalRead, undefined); assert.deepEqual(done.answerGroupWork!.receipts[0], paid.answerGroupWork!.receipts[0]);
+  } finally { try { store.close(); } catch { /* Closed fixture */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("87 upgrade retains target-first paid progress and usage across reopen/portable 58, rolls back future policies and resumes only checks", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "proposal-group-upgrade-")), file = join(directory, "state.sqlite"); let store = new ProjectStore(file);
+  try {
+    const { p, items, draft } = scopedFixture(store, true), job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const paused = await runAnswerGroup(store, { async analyze() { return { answerGroupDraft: draft }; } }, p, job, items,
+      { signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted"); assert.ok(paused.answerGroupWork!.proposalRead);
+    const original = structuredClone(paused), wire = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), r => store.get(p.id, r)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 58);
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 57 }) }, p.model), /format 58/);
+    const folder = join(directory, "portable"); mkdirSync(folder); store.connectWorkspace(p.id, p.revision, folder);
+    const clone = new ProjectStore(":memory:");
+    try {
+      const adopted = clone.openWorkspace(folder, p.model), checked = new Set<string>();
+      const completed = await new DiscoveryService(clone, { async analyze(_p, { context }) {
+        assert.equal(context.manifest.answerGroupStage!.phase, "check"); context.manifest.includedIDs.forEach(id => checked.add(id));
+        return { answerGroupCheck: { valid: true, reason: "Every complete original agrees with the full frozen target draft" } };
+      } }).analyze(adopted.id, adopted.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
+      assert.equal(completed.status, "completed", completed.diagnostic);
+      assert.deepEqual(completed.answerGroupWork!.receipts[0], original.answerGroupWork!.receipts[0]);
+      for (const id of answerGroupMaterials(p, items).evidenceIDs) assert.ok(checked.has(id));
+    } finally { clone.close(); }
+    store.close(); let db = new Database(file);
+    db.exec("DELETE FROM migration_history WHERE version>=87; PRAGMA user_version=86; CREATE TRIGGER fail_proposal_upgrade BEFORE INSERT ON migration_history WHEN NEW.version=87 BEGIN SELECT RAISE(ABORT, 'interrupted proposal migration'); END;"); db.close();
+    assert.throws(() => new ProjectStore(file), /interrupted proposal migration/);
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 86); db.exec("DROP TRIGGER fail_proposal_upgrade");
+    const future = JSON.parse(JSON.stringify(original)); future.answerGroupWork.proposalRead.policy = "future-group-proposal";
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close(); assert.throws(() => new ProjectStore(file));
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 86);
+    assert.equal((db.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id) as { payload: string }).payload, JSON.stringify(future));
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); db.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), original); store.close(); }
+  } finally { try { store.close(); } catch { /* Failed startup closes its connection */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cohort diagnostics remain numeric/private and future policies roll back startup without altering completed work", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "cohort-diagnostics-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file), workflow: ProjectWorkflow | undefined;
+  try {
+    const { p, items } = scopedFixture(store);
+    workflow = new ProjectWorkflow(store, { async analyze(_p, { context }) {
+      if (!context.manifest.answerGroupStage) throw new Error("Fixture stops after input completion");
+      return context.manifest.answerGroupStage.phase === "read"
+        ? { answerGroupDraft: { analysis: empty(), answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Already represented" })) } }
+        : { answerGroupCheck: { valid: true, reason: "Original decisions remain unchanged" } };
+    } });
+    workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous"); await workflow.wait(p.id);
+    const original = structuredClone(store.jobs(p.id).find(j => j.answerGroupWork)!);
+    assert.equal(original.status, "completed", original.diagnostic);
+    const diagnostic = original.discoveryMetrics!.answerIntegration!.cohortSearch!;
+    assert.equal(diagnostic.attemptedGroups, 1); assert.equal(diagnostic.selectedAnswers, 2); assert.ok(Number.isFinite(diagnostic.elapsedMs));
+    const exported = JSON.stringify(store.discoveryDiagnostics(p.id, [original.id]));
+    for (const secret of [p.id, p.name, ...p.questions.map(q => q.text), ...items.map(s => s.appliedSourceID!)]) assert.ok(!exported.includes(secret));
+    assert.ok(exported.includes("bounded-cohorts-v1"));
+    await workflow.close(); workflow = undefined; store.close();
+    const db = new Database(file), future = structuredClone(original);
+    (future.discoveryMetrics!.answerIntegration!.cohortSearch as { policy: string }).policy = "future-cohort-search";
+    db.exec("DELETE FROM migration_history WHERE version>=87; PRAGMA user_version=86");
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), original.id); db.close();
+    assert.throws(() => new ProjectStore(file)); const repair = new Database(file);
+    assert.equal(repair.pragma("user_version", { simple: true }), 86);
+    assert.equal((repair.prepare("SELECT payload FROM jobs WHERE id=?").get(original.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), original.id); repair.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(file); assert.deepEqual(store.getJob(original.id), original); store.close(); }
+  } finally { await workflow?.close(); try { store.close(); } catch { /* Closed fixture */ } rmSync(directory, { recursive: true, force: true }); }
 });
 
 for (const outcome of ["malformed", "cancelled", "stale", "repair-swap"] as const) test(`scoped shared ${outcome} keeps paid evidence and cannot publish partial or widened changes`, async () => {
@@ -254,7 +496,7 @@ test("legacy batch-overflow recovery cannot turn paid history with a missing sub
   } finally { await workflow?.close(); store.close(); }
 });
 
-test("fresh shared schedules above 32 batches fall back to individual work before inference, without changing saved answers", async () => {
+test("fresh oversized shared cohorts try a smaller fitting group before individual fallback, without changing saved answers", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "batch-overflow-")), file = join(directory, "state.sqlite");
   let store = new ProjectStore(file), workflow: ProjectWorkflow | undefined;
@@ -281,17 +523,20 @@ test("fresh shared schedules above 32 batches fall back to individual work befor
     }
     let calls = 0;
     workflow = new ProjectWorkflow(store, { async analyze(_project, { context }) {
-      calls++; assert.equal(context.manifest.answerGroupStage, undefined);
-      assert.equal(context.manifest.submissionIDs?.length, 1);
-      throw new Error("Fixture transport stop after proving individual dispatch");
+      calls++; assert.ok(context.manifest.answerGroupStage);
+      assert.equal(context.manifest.submissionIDs?.length, 2);
+      throw new Error("Fixture transport stop after proving smaller-cohort dispatch");
     } });
     workflow.view(p.id);
     assert.equal(calls, 0); assert.ok(store.submissions(p.id).every(item => item.status === "needs-attention"), "Inspection/startup does not recover or start work");
     workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous"); await workflow.wait(p.id);
     assert.equal(calls, 1);
     const jobs = store.jobs(p.id).filter(job => job.context?.submissionIDs?.length);
-    assert.equal(jobs.length, 1); assert.equal(jobs[0]!.answerGroupWork, undefined);
-    assert.equal(jobs[0]!.discoveryMetrics!.answerIntegration!.reason, "context-budget");
+    assert.equal(jobs.length, 1); assert.equal(jobs[0]!.answerGroupWork!.submissionIDs.length, 2);
+    assert.ok(jobs[0]!.answerGroupWork!.batches.length <= 32);
+    assert.equal(jobs[0]!.discoveryMetrics!.answerIntegration!.reason, "shared");
+    assert.ok(jobs[0]!.discoveryMetrics!.answerIntegration!.cohortSearch!.batchLimit > 0);
+    assert.equal(jobs[0]!.discoveryMetrics!.answerIntegration!.cohortSearch!.attemptedGroups, 2);
     assert.deepEqual(store.submissions(p.id).map(item => item.input), items.map(item => item.input));
     assert.deepEqual(store.get(p.id).requirements, p.requirements);
   } finally { await workflow?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }

@@ -1,5 +1,19 @@
 # Architecture outline
 
+New scoped proposal-first admission now precedes unused all-read preflight. Its
+existing plan representation retains the complete mandatory inventory in one
+catalogue batch, while verification pages use the real frozen draft. The proposal
+still needs full output headroom; no schema/version or paid-layout changes are
+required. See [compatibility and qualification](migrations.md#direct-scoped-proposal-admission-without-unused-reads-2026-11-24).
+
+Fresh answer routing uses `src/core/answer-cohorts.ts` for bounded local cohort
+search and redacted fit/cost diagnostics. New fitting scoped groups can propose
+once from exact targets/support and then verify the complete mandatory union;
+SQLite 87 / conditional portable 58 fence that cursor. Historical all-read work
+is not converted. Record-staged planning also has a bounded negative content
+prefilter over immutable historical revisions, never a positive freshness cache.
+See [compatibility and checks](migrations.md#smaller-answer-cohorts-and-scoped-group-proposals-sqlite-86--87-portable-58).
+
 Fresh scoped answer cohorts use explicit per-answer target authority rather than
 transferring the union of member permissions. SQLite 86 / conditional portable 57
 fence the new protocol; old paid schedules retain their identities. Record-staged

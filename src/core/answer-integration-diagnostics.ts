@@ -21,9 +21,15 @@ export const answerIntegrationCostSchema = z.object({ policy: z.literal("complet
   sharedReadRequests: requests, sharedVerificationProxyRequests: requests, individualRequests: requests,
   selected: z.enum(["shared", "individual"]), uncertainty: z.literal("draft-lookups-and-repairs-unknown") }).strict();
 export type AnswerIntegrationCost = z.infer<typeof answerIntegrationCostSchema>;
+export const answerCohortSearchSchema = z.object({ policy: z.literal("bounded-cohorts-v1"),
+  attemptedGroups: z.number().int().min(0).max(16), pinnedInput: requests, evidenceUnit: requests, batchLimit: requests,
+  unknownFit: requests, higherEstimatedCost: requests, selectedAnswers: z.number().int().min(0).max(5), searchLimitReached: z.boolean(),
+  elapsedMs: z.number().finite().nonnegative().optional() }).strict();
+export type AnswerCohortSearch = z.infer<typeof answerCohortSearchSchema>;
 export const answerIntegrationSchema = z.object({ format: z.literal(1), reason: z.enum(Object.keys(answerIntegrationReasons) as [keyof typeof answerIntegrationReasons, ...(keyof typeof answerIntegrationReasons)[]]),
   selectedResponses: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), compatibleAnswers: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   groupedAnswers: z.number().int().min(0).max(5),
   cost: answerIntegrationCostSchema.optional(),
+  cohortSearch: answerCohortSearchSchema.optional(),
 }).strict();
 export type AnswerIntegrationDiagnostic = z.infer<typeof answerIntegrationSchema>;

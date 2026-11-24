@@ -246,7 +246,9 @@ Working evidence batch: ${JSON.stringify(context.data)}`;
     const featureAuthority = expandedEvidence(context.data).featureAuthority;
     const crossFeature = Array.isArray(featureAuthority);
     const scoped = Array.isArray(expandedEvidence(context.data).scopedAuthority);
+    const targetFirst = !!(expandedEvidence(context.data).answerGroup as { proposalRead?: unknown } | undefined)?.proposalRead;
     return `SHARED SAVED-ANSWER INTEGRATION (${stage.phase}). Return ONLY JSON matching the schema. No tools, research, scans, coding or general discovery.
+${targetFirst ? "TARGET-FIRST SCOPED GROUP: The proposal reads the pinned original answers, exact permitted targets and their complete original support, NOT all background evidence. Make only faithful target changes; do not assume omitted originals were reviewed. Every mandatory original remains scheduled for full frozen-draft verification before any publication. Corrections invalidate every previous check, never the saved proposal. Specific indispensable missing comparisons must still be loaded or blocked." : ""}
 ${scoped ? "SCOPED ANSWER AUTHORITY overrides PLAY and same-feature guidance. The app-owned scopedAuthority maps each original source to its own immutable requirementIDs. Each change must cite its own answer and stay within THAT answer's targets, not the union of member permissions. No new requirements, feature/global changes, retirements or unrelated proposals. Linked clarifications/refinements must fit one original answer's target set. Sharing reads never combines authorization; block genuinely conflicting human choices. Every mandatory original still requires reading and frozen verification." : ""}
 ${plainLanguagePolicy}
 ${requirementWritingPolicy}

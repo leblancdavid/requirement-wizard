@@ -4,9 +4,9 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
-import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup, AnswerGroupCapacityError } from "../core/answer-group.js";
-import { answerIntegrationReasons, type AnswerIntegrationDiagnostic, type AnswerIntegrationCost } from "../core/answer-integration-diagnostics.js";
-import { estimateAnswerIntegrationCost } from "../core/answer-integration-cost.js";
+import { eligibleGroupAnswer } from "../core/answer-group.js";
+import { answerIntegrationReasons, type AnswerIntegrationDiagnostic, type AnswerIntegrationCost, type AnswerCohortSearch } from "../core/answer-integration-diagnostics.js";
+import { selectAnswerCohort } from "../core/answer-cohorts.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -1014,6 +1014,7 @@ export class DiscoveryQueue {
         let sharedAnswers = false;
         let compatibleAnswers = 0, overflowAnswers: Set<string> | undefined;
         const estimatedCosts = new Map<string, AnswerIntegrationCost>();
+        let cohortSearch: AnswerCohortSearch | undefined;
         let resolutionJobs: ReturnType<typeof this.service.store.specificationWorkflowJobs> | undefined;
         const coordinated = !!this.coordinator && !!this.service.store.workflow(id).inputBatchPolicy;
         const groupResearch = manual?.research ?? saved.some(s => s.research);
@@ -1028,33 +1029,11 @@ export class DiscoveryQueue {
             && !this.service.store.submissionHasJob(id, s.id)
             && s.input.type === "answer" && !resolutionTaskForAnswer(project, s.input.questionID, resolutionJobs!));
           compatibleAnswers = candidates.length;
-          // A lone answer in the first feature must not hide a compatible group
-          // later in the same explicitly submitted set.
-          const groups = new Map<string | undefined, Submission[]>();
-          for (const item of candidates) {
-            const epicID = JSON.stringify([submissionEpic(project, item), !!item.answerScope]), group = groups.get(epicID) ?? [];
-            if (group.length < 5) group.push(item);
-            groups.set(epicID, group);
-          }
-          // Preserve the preferred same-feature cohort; otherwise share a bounded
-          // cross-feature evidence pass with per-answer source authority.
-          const cohort = [candidates.filter(s => !!s.answerScope), candidates.filter(s => !s.answerScope)].find(items => items.length >= 2) ?? [];
-          const group = [...groups.values()].find(items => items.length >= 2) ?? cohort.slice(0, 5);
-          if (group.length >= 2) {
-            try {
-              const material = answerGroupMaterials(project, group), plan = planAnswerGroup(material, true);
-              const cost = estimateAnswerIntegrationCost(project, group, material, plan);
-              if (cost) for (const item of group) estimatedCosts.set(item.id, cost);
-              if (cost?.selected !== "individual") { batch.push(...group); sharedAnswers = true; }
-            }
-            catch (error) {
-              // Fit is measured before dispatch. Failed/started groups never use
-              // this fallback and can never acquire fresh individual allowances.
-              if (!(error instanceof ContextBudgetError) && !(error instanceof AnswerGroupCapacityError && error.kind === "evidence batches")) throw error;
-              overflowAnswers = new Set(group.map(s => s.id));
-              report("These answers cannot fit a shared evidence schedule. Keeping their individual processing paths; no shared request was started.");
-            }
-          }
+          const selected = selectAnswerCohort(project, candidates);
+          cohortSearch = selected.search; overflowAnswers = selected.overflow;
+          for (const [key, cost] of selected.costs) estimatedCosts.set(key, cost);
+          if (selected.items.length) { batch.push(...selected.items); sharedAnswers = true; }
+          else if (selected.overflow.size) report("No fitting shared cohort was found within the bounded local search. Keeping individual processing paths; no shared request was started.");
         }
         for (const item of batch.length ? [] : saved) {
           try {
@@ -1103,6 +1082,7 @@ export class DiscoveryQueue {
                         : item.answerScope ? "scoped-answer" : saved.length === 1 ? "single-answer" : compatibleAnswers >= 2 ? "different-features" : "single-compatible-answer";
           answerIntegration = { format: 1, reason, selectedResponses: saved.length, compatibleAnswers,
             groupedAnswers: sharedAnswers ? batch.length : 0,
+            ...(cohortSearch ? { cohortSearch } : {}),
             ...(estimatedCosts.has(item.id) ? { cost: estimatedCosts.get(item.id)! } : {}) };
           report(answerIntegrationReasons[reason]);
         }

@@ -21,10 +21,10 @@ export function estimateAnswerIntegrationCost(project: Project, items: Submissio
     const pages = (ids: string[]) => {
       // This transient layout is only a size probe. It has no fabricated model
       // receipts and is never persisted, replayed or used to discharge a check.
-      const probe = { ...work, batches: [ids] };
+      const probe = { ...work, proposalRead: undefined, batches: [ids] };
       return planAnswerGroupEvidencePages(material, probe, undefined, 9)?.pages.length ?? 1;
     };
-    const sharedReadRequests = work.batches.reduce((sum, ids) => sum + pages(ids), 0);
+    const sharedReadRequests = work.proposalRead ? 1 : work.batches.reduce((sum, ids) => sum + pages(ids), 0);
     const sharedVerificationProxyRequests = work.verificationPolicy ? pages([...new Set(work.batches.flat())]) : sharedReadRequests;
     let individualRequests = 0;
     for (const item of items) {
@@ -35,7 +35,7 @@ export function estimateAnswerIntegrationCost(project: Project, items: Submissio
       try { planExactTaskContext(project, task); individualRequests++; }
       catch (error) {
         if (!(error instanceof ContextBudgetError)) throw error;
-        individualRequests += submissionTotalSteps(planSubmissionStages(submissionMaterials(project, item, task, error)));
+        individualRequests += submissionTotalSteps(planSubmissionStages(submissionMaterials(project, item, task, error), { proposalFirst: true }));
       }
     }
     // Preserve shared behavior on ties/near ties. Only clearly higher predicted

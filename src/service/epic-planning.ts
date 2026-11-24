@@ -111,7 +111,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
       if (settled) return;
       pulse = setInterval(report, 500);
       timer = setTimeout(() => fail(new PlanningTimeoutError(latest)), options.timeoutMs ?? 120_000);
-      worker.on("message", (message: { type: string; value?: unknown; key?: string; revision?: number; scope?: "equivalence"; message?: string; manifest?: ContextBudgetError["manifest"] }) => {
+      worker.on("message", (message: { type: string; value?: unknown; key?: string; revision?: number; scope?: "equivalence" | "content"; message?: string; manifest?: ContextBudgetError["manifest"] }) => {
         if (settled) return;
         try {
           if (message.type === "progress") {
@@ -132,7 +132,13 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
           else if (message.type === "result") { report(); if (!settled) { settled = true; resolve(message.value as EpicPlan); } }
           else if (message.type === "revision") {
             if (!Number.isSafeInteger(message.revision) || message.revision! < 1) throw new Error("Invalid immutable planning revision.");
-            worker.postMessage({ revision: message.revision, project: options.readRevision(message.revision!), scope: message.scope });
+            let source: Project;
+            try { source = options.readRevision(message.revision!); }
+            catch (error) {
+              if (message.scope !== "content") throw error;
+              worker.postMessage({ revision: message.revision, unavailable: true, scope: "content" }); return;
+            }
+            worker.postMessage({ revision: message.revision, project: source, scope: message.scope });
           } else if (message.type === "failure") fail(message.manifest ? new ContextBudgetError(message.manifest) : new Error(message.message ?? "Local workflow planning failed."));
         } catch (error) { fail(error); }
       });

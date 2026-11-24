@@ -1,5 +1,33 @@
 # Browser workspace, epics, and estimated completeness
 
+## Direct scoped proposal admission
+
+Fresh scoped groups can now start from their exact permitted targets/support
+without first proving that unused background read packets fit. Every background
+original is still checked against the full frozen draft before publication. The
+actual proposal and every check retain their existing size bounds; an oversized
+check preserves its saved proposal instead of repeating it. Started groups are
+never repacked. A regression that previously rejected the group completed with
+one proposal and four verification calls; live savings still need measurement.
+Mixed scoped/broad grouping remains separate follow-up work. See
+[compatibility and tests](migrations.md#direct-scoped-proposal-admission-without-unused-reads-2026-11-24).
+
+## Smaller cohorts and target-first shared proposals
+
+When a fresh answer group cannot fit, processing now tries bounded smaller/later
+compatible cohorts before using individual paths. Scope permissions stay separate;
+started work is never regrouped. Logs export numeric cohort fit/cost/search timings
+so an oversized answer, indivisible evidence unit or batch limit is distinguishable.
+
+Fitting new scoped groups can propose once from their exact targets and original
+support, then check the frozen draft against every mandatory original. Background
+is not assumed reviewed, and genuine human conflicts still stop. A deterministic
+portable fixture used three actual shared requests versus six individual requests
+for the same target drafts; separate publication holds still apply normally.
+Discovery planning can also reject incompatible completed record bodies before
+packing, even when record IDs are unchanged. This is not permission to reuse old
+verdicts. Restart the backend to load these changes. See [migration and limits](migrations.md#smaller-answer-cohorts-and-scoped-group-proposals-sqlite-86--87-portable-58).
+
 ## Scoped answers can share work
 
 New explicitly submitted batches can now group compatible scoped answers, including

@@ -938,6 +938,33 @@ test("new mandatory originals reject completed record-policy history before pack
   } finally { store.close(); }
 });
 
+test("changed record contents reject historical packing with stable IDs; speculative snapshots are bounded and missing history falls back", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 30), job = await new DiscoveryService(store, { async analyze() { return empty(); } }).analyze(p.id, p.revision,
+      { gapMode: "epic", focusEpicID: "orders", candidateFirst: true, research: false });
+    assert.equal(job.status, "completed", job.diagnostic); const original = structuredClone(job);
+    const changed = structuredClone(p); changed.revision++; changed.sources[0]!.text += " A changed exact original constraint";
+    let optimized = 0, baseline = 0, activity = "catalog";
+    const next = planEpicReview(changed, [job], "orders", [], rev => store.get(p.id, rev), { targetFirst: true,
+      onActivity(value) { activity = value; }, onPrepare() { if (activity === "saved-policy") optimized++; } });
+    const full = planEpicReview(changed, [job], "orders", [], rev => store.get(p.id, rev), { targetFirst: true,
+      readContentRevision: () => undefined, onActivity(value) { activity = value; }, onPrepare() { if (activity === "saved-policy") baseline++; } });
+    assert.deepEqual(next.task!.review, full.task!.review); assert.deepEqual(next.task!.batches, full.task!.batches);
+    assert.ok(optimized < baseline, `${optimized} content-prefilter preparations versus ${baseline} full-policy preparations`);
+    let snapshotReads = 0;
+    const unavailable = await prepareEpicReview(changed, [job], "orders", [], { targetFirst: true,
+      signal: new AbortController().signal, onProgress() {}, readRevision() { snapshotReads++; throw new Error("Historical snapshot unavailable"); } });
+    assert.deepEqual(unavailable.task!.review, full.task!.review); assert.equal(snapshotReads, 1);
+    const history = Array.from({ length: 12 }, (_, i) => ({ ...job, id: `content-${i}`, expectedRevision: p.revision + i + 10 }));
+    let boundedReads = 0;
+    planEpicReview(changed, history, "orders", [], revision => { boundedReads++; return { ...p, revision }; }, { targetFirst: true });
+    assert.equal(boundedReads, 4, "Only four speculative immutable revisions may be examined before normal validation resumes");
+    assert.deepEqual(store.getJob(job.id), original);
+    console.log(JSON.stringify({ fixtureOnly: true, stableIDContentPreparations: optimized, fullPolicyPreparations: baseline, speculativeRevisionLimit: boundedReads }));
+  } finally { store.close(); }
+});
+
 for (const targets of [1, 2]) test(`repeated incompatible paid-policy history probes each representation once while preserving the identical next task: ${targets} targets`, () => {
   const store = new ProjectStore(":memory:");
   try {

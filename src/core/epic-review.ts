@@ -16,6 +16,7 @@ import { epicPlanningProjectKey } from "./epic-planning-input.js";
 import { completedRecordStagesEquivalent, recordStagePolicy } from "./epic-stage-reuse.js";
 import { questionAnswerUnitIndex, pendingQuestionIDs, planLinkedEvidenceRecovery, pendingEvidenceCompatible } from "./epic-linked-evidence.js";
 import { digestJSONArray } from "./json-digest.js";
+import { canonicalJSON } from "./assessment-identity.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -91,6 +92,10 @@ export type EpicPlanningOptions = {
   cache?: Map<string, Candidate>;
   /** Invocation-local proof results survive the worker's lazy history retries. */
   completedEquivalence?: Map<string, boolean>;
+  /** Invocation-local budget survives lazy worker revision requests. Never saved
+   * as evidence, and never permits more than four speculative snapshot reads. */
+  contentPrefilterRevisions?: Set<number>;
+  readContentRevision?: (revision: number) => Project | undefined;
   readEquivalenceRevision?: (revision: number) => Project;
   onPackage?: (examined: number, states: { reviewed: number; waiting: number; blocked: number; pending: number }, blockers: PlanningBlockers) => void;
   onPrepare?: () => void;
@@ -620,6 +625,18 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   // Avoid packing every historical representation just to discover that mismatch.
   // Pending/failed jobs, unknown protocols and equal inventories retain full replay.
   const policyInventories = new Map<string, Set<string>>();
+  const contentRevisions = options.contentPrefilterRevisions ?? new Set<number>();
+  const currentRecords = new Map([...project.sources, ...project.questions, ...project.requirements, ...project.research].map(r => [r.id, r]));
+  const currentRecordKeys = new Map<string, string>();
+  const previousRecordIndexes = new WeakMap<Project, Map<string, unknown>>();
+  const contentJobKey = (job: Job) => hash(["negative-record-job-v1", exactProjectKey ??= digestJSONArray([project]), historyProof(job)]);
+  const rememberContentRejection = (job: Job, changed: boolean) => {
+    if (changed) {
+      const key = contentJobKey(job);
+      if (!equivalentCompleted.has(key)) { equivalentCompleted.set(key, true); options.onEquivalence?.(false); }
+    }
+    return changed;
+  };
   const inventoryRejects = (group: Job[], policy: EpicReview, records: Record[]) => {
     if (!recordStagePolicy(policy.contextPolicy) || !group.every(j => j.status === "completed"
       && j.retrievalWork?.epicStages?.phase === "complete")) return false;
@@ -639,7 +656,33 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       // A historical last-page manifest retains the rest as omitted navigation.
       // Count both lists for this negative identity test, never as read evidence.
       const available = new Set([...j.context!.includedIDs, ...j.context!.omittedIDs]);
-      return [...inventory].some(id => !available.has(id));
+      if ([...inventory].some(id => !available.has(id))) return true;
+      if (!readRevision || j.expectedRevision === project.revision) return false;
+      const proofKey = hash(["negative-record-content-v1", exactProjectKey ??= digestJSONArray([project]), j.expectedRevision,
+        j.context!.epicReview, [...inventory].sort()]);
+      if (equivalentCompleted.has(proofKey)) return rememberContentRejection(j, equivalentCompleted.get(proofKey)!);
+      if (!contentRevisions.has(j.expectedRevision) && contentRevisions.size >= 4) return false;
+      contentRevisions.add(j.expectedRevision);
+      // Read outside any catch: the worker can request this immutable revision
+      // and resume with the same bounded budget. Unknown history is not rejection.
+      const previous = options.readContentRevision ? options.readContentRevision(j.expectedRevision) : (() => {
+        try { return readRevision(j.expectedRevision); } catch { return undefined; }
+      })();
+      if (!previous) { equivalentCompleted.set(proofKey, false); return false; }
+      if (previous.id !== project.id || previous.revision !== j.expectedRevision) throw new Error("Historical planning snapshot identity mismatch.");
+      let before = previousRecordIndexes.get(previous);
+      if (!before) {
+        before = new Map([...previous.sources, ...previous.questions, ...previous.requirements, ...previous.research].map(r => [r.id, r]));
+        previousRecordIndexes.set(previous, before);
+      }
+      const changed = [...inventory].some(id => {
+        if (!before.has(id) || !currentRecords.has(id)) return true;
+        let current = currentRecordKeys.get(id);
+        if (!current) { current = hash(canonicalJSON(currentRecords.get(id))); currentRecordKeys.set(id, current); }
+        return current !== hash(canonicalJSON(before.get(id)));
+      });
+      equivalentCompleted.set(proofKey, changed);
+      return rememberContentRejection(j, changed);
     });
   };
   const policyIdentityKey = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[], policy: EpicReview) =>
@@ -687,6 +730,8 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID) return false;
+    if (contentRevisions.size && j.status === "completed" && recordStagePolicy(j.context.epicReview.contextPolicy)
+      && equivalentCompleted.get(contentJobKey(j)) === true) return false;
     if (!pendingCompatible(j, candidate)) return false;
     if (j.context.epicReview.inputKey !== review.inputKey) {
       if (!readRevision || !candidate.batches || j.status !== "completed" || !j.result || !j.retrievalWork?.final

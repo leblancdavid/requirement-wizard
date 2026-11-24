@@ -32,6 +32,9 @@ export class AnswerGroupCapacityError extends Error {
     super(`Shared answer work reached its bounded ${kind} limit (${used} / ${limit}). This is a work-capacity stop, not proof that human constraints exceed the input budget. No additional model call was made; original answers, completed work and spent attempts are retained.`);
   }
 }
+export class AnswerGroupFitError extends ContextBudgetError {
+  constructor(manifest: ContextPack["manifest"], public readonly kind: "pinned-input" | "evidence-unit") { super(manifest); }
+}
 /** The historical queue surfaced this local planner overflow as a raw Zod issue.
  * Classification alone grants nothing: callers must independently prove that no
  * job/paid work exists and require explicit user continuation of current input. */
@@ -114,6 +117,8 @@ const humanClarificationSchema = z.object({ format: z.literal(1), fromReceipt: z
 const repairClarificationSchema = humanClarificationSchema.extend({ format: z.literal(2), draftKey: key });
 export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-answer-group-v1"),
   scopePolicy: z.literal("per-answer-targets-v1").optional(),
+  proposalRead: z.object({ format: z.literal(1), policy: z.literal("scoped-group-targets-v1"),
+    recordIDs: z.array(z.string().min(1)).min(1).max(512).refine(ids => new Set(ids).size === ids.length) }).strict().optional(),
   featurePolicy: z.object({ format: z.literal(1), epicIDs: z.array(z.string().min(1)).min(2).max(5)
     .refine(ids => new Set(ids).size === ids.length) }).strict().optional(),
   verificationPolicy: z.literal("union-v1").optional(),
@@ -267,13 +272,15 @@ type ProgressResponse = { answerGroupDraft: unknown } | { answerGroupKeep: boole
   | { answerGroupCheck: { valid: boolean } } | { answerGroupEvidence: unknown } | { answerGroupBlocked: unknown } | { answerGroupLoadPlan: unknown }
   | {answerGroupInspection:unknown}|{answerGroupComparisons:unknown}|{answerGroupBlockerReview:unknown};
 export type AnswerGroupProgressInput = { batches: { length: number }; receipts: { step: number; response: ProgressResponse }[];
+  proposalRead?: unknown;
   verificationPolicy?: "union-v1";
   unionPageCapacity?: { fromReceipt: number };
   evidencePages?: { fromReceipt: number; step: number; phase: string; pages: { length: number } }[] };
 const completes = (response: ProgressResponse) => "answerGroupDraft" in response || "answerGroupKeep" in response
   || "answerGroupRepair" in response || "answerGroupCheck" in response && response.answerGroupCheck.valid;
-export const answerGroupTotalSteps = (w: Pick<AnswerGroupProgressInput, "batches" | "verificationPolicy">) =>
-  w.batches.length + (w.verificationPolicy ? 1 : w.batches.length);
+export const answerGroupReadSteps = (w: Pick<AnswerGroupProgressInput, "batches" | "proposalRead">) => w.proposalRead ? 1 : w.batches.length;
+export const answerGroupTotalSteps = (w: Pick<AnswerGroupProgressInput, "batches" | "verificationPolicy" | "proposalRead">) =>
+  answerGroupReadSteps(w) + (w.verificationPolicy ? 1 : w.batches.length);
 /** Play adoption only; no new requests, page spend or repair allowance. */
 export function adoptAnswerGroupUnionPageCapacity(w: AnswerGroupWork) {
   if (w.unionPageCapacity || !w.verificationPolicy || !answerGroupPlayActive(w)
@@ -281,24 +288,24 @@ export function adoptAnswerGroupUnionPageCapacity(w: AnswerGroupWork) {
   w.unionPageCapacity = { format: 1, fromReceipt: w.receipts.length, prefixKey: receiptPrefixKey(w.receipts) };
   return true;
 }
-const answerGroupBatch = (w: AnswerGroupWork, step: number) => w.verificationPolicy && step >= w.batches.length
-  ? w.batches.flat() : w.batches[step % w.batches.length]!;
-const answerGroupPlanKey = (w: Pick<AnswerGroupWork, "policy" | "materialKey" | "submissionIDs" | "batches" | "verificationPolicy" | "packingPolicy">) =>
-  hash([w.policy, w.materialKey, w.submissionIDs, w.batches, ...(w.verificationPolicy ? [w.verificationPolicy] : []), ...(w.packingPolicy ? [w.packingPolicy] : [])]);
+const answerGroupBatch = (w: AnswerGroupWork, step: number) => w.verificationPolicy && step >= answerGroupReadSteps(w)
+  ? w.batches.flat() : w.proposalRead ? w.proposalRead.recordIDs : w.batches[step % w.batches.length]!;
+const answerGroupPlanKey = (w: Pick<AnswerGroupWork, "policy" | "materialKey" | "submissionIDs" | "batches" | "verificationPolicy" | "packingPolicy" | "proposalRead">) =>
+  hash([w.policy, w.materialKey, w.submissionIDs, w.batches, ...(w.verificationPolicy ? [w.verificationPolicy] : []), ...(w.packingPolicy ? [w.packingPolicy] : []), ...(w.proposalRead ? [w.proposalRead] : [])]);
 /** Reads remain paid evidence; a changed draft invalidates every earlier check, not the reads. */
 export function answerGroupProgress(w: AnswerGroupProgressInput) {
   let completed = 0, repairs = 0, rejection = false;
   for (const [index, { response }] of w.receipts.entries()) {
-    if ("answerGroupRepair" in response) { completed = w.batches.length; repairs++; rejection = false; }
+    if ("answerGroupRepair" in response) { completed = answerGroupReadSteps(w); repairs++; rejection = false; }
     else if ("answerGroupCheck" in response && !response.answerGroupCheck.valid) rejection = true;
     else if (completes(response)) {
-      const phase = completed < w.batches.length ? "read" : "check";
+      const phase = completed < answerGroupReadSteps(w) ? "read" : "check";
       const plan = activeEvidencePages(w, completed, phase, index);
       if (!plan || evidencePageIndex(w, plan, index) === plan.pages.length - 1) completed++;
     }
   }
   const result = { completed, total: answerGroupTotalSteps(w), repairs,
-    phase: rejection ? "repair" as const : completed >= answerGroupTotalSteps(w) ? "complete" as const : completed < w.batches.length ? "read" as const : "check" as const };
+    phase: rejection ? "repair" as const : completed >= answerGroupTotalSteps(w) ? "complete" as const : completed < answerGroupReadSteps(w) ? "read" as const : "check" as const };
   const plan = activeEvidencePages(w, completed, result.phase);
   return { ...result, ...(plan ? { evidencePage: { completed: evidencePageIndex(w, plan), total: plan.pages.length } } : {}) };
 }
@@ -335,7 +342,7 @@ export function assertAnswerGroupPageCapacity(w: AnswerGroupProgressInput, pendi
  * legacy/unadopted groups retain 64; all earlier paid pages still count globally. */
 export function answerGroupPageStepLimit(w: AnswerGroupProgressInput): number {
   return w.verificationPolicy && w.unionPageCapacity && w.receipts.length >= w.unionPageCapacity.fromReceipt
-    && answerGroupProgress(w).completed === w.batches.length ? answerGroupLimits.completedPages : answerGroupLimits.pagesPerStep;
+    && answerGroupProgress(w).completed === answerGroupReadSteps(w) ? answerGroupLimits.completedPages : answerGroupLimits.pagesPerStep;
 }
 export const answerGroupStep = (w: AnswerGroupWork) => answerGroupProgress(w).completed;
 const supportActive = (w: AnswerGroupWork) => !!w.sourceSupport && w.receipts.length >= w.sourceSupport.fromReceipt;
@@ -432,11 +439,11 @@ export function authorizeAnswerGroupRecovery(m: AnswerGroupMaterials, w: AnswerG
   sourceSupportSchema.parse(next.sourceSupport);
   const replay = replayAnswerGroup(m, next);
   answerGroupContext(m, next, replay.draft); // Exact fit before recording consent; never truncate support.
-  for (let batch = 0; batch < answerGroupTotalSteps(w) - w.batches.length; batch++) {
+  for (let batch = 0; batch < answerGroupTotalSteps(w) - answerGroupReadSteps(w); batch++) {
     // Layout forecast only, not a check receipt or a semantic verdict. Use the
     // exact saved draft: lossless sharing is non-monotonic when it is omitted.
     // Every actual corrected-draft request must still independently fit its cap.
-    renderAnswerGroupContext(m, next, replay.draft, { completed: w.batches.length + batch, phase: "check" });
+    renderAnswerGroupContext(m, next, replay.draft, { completed: answerGroupReadSteps(w) + batch, phase: "check" });
   }
   return next;
 }
@@ -937,7 +944,7 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
   const repairContext = activeRepairContext(w);
   const extra = w.receipts.slice(repairContext?.fromReceipt ?? pagePlan?.fromReceipt ?? 0).filter(r => r.step === step).flatMap(r => "answerGroupEvidence" in r.response ? r.response.answerGroupEvidence.recordIDs : []);
   const ids = new Set([...m.pins, ...(packing?.ids ?? [...(repairContext?.recordIDs ?? (pagePlan ? pagePlan.pages[page]!
-    : progress.phase === "repair" ? w.batches[step % w.batches.length]! : answerGroupBatch(w, step))), ...extra])]);
+    : progress.phase === "repair" ? w.proposalRead?.recordIDs ?? w.batches[step % w.batches.length]! : answerGroupBatch(w, step))), ...extra])]);
   const support = supportRecords(m, w), catalog = [...m.records, ...support];
   for (const c of activeClarifications(w)) for (const r of originalEvidenceClosure(catalog, [c.source.id, ...c.conflictIDs])) ids.add(r.record.id);
   if (answerGroupPlayActive(w) && progress.phase === "repair" && !repairContext) {
@@ -992,6 +999,8 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
   let data: unknown = { ...m.base, ...Object.fromEntries(["sources", "questions", "requirements", "research"]
     .map(field => [field, records.filter(r => r.field === field).map(r => r.record)])), draft: draft ?? null,
     answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: available,
+      ...(w.proposalRead ? { proposalRead: { policy: w.proposalRead.policy,
+        instruction: "Propose only the exact linked-target changes from the original pinned answers and complete target support. Omitted background is NOT presumed read. The frozen draft must then pass every mandatory original verification unit, including background not needed for this proposal. Sharing a proposal never combines member permissions." } } : {}),
       ...(w.verificationPolicy ? { verificationPolicy: w.verificationPolicy,
         verificationInstruction: "One whole-phase verification covers the union of EVERY original read batch and EVERY draft-referenced original with complete recursive support. All pages check the SAME frozen full draft and EVERY pinned answer. A page approves only its detailed units; every scheduled unit must pass before publication. Indispensable joint comparisons remain atomic. A correction invalidates ALL previous verification, never the saved reads." } : {}),
       ...(conflictEvidence.length ? { priorConflictEvidence: conflictEvidence.length === 1 ? conflictEvidence[0] : { reviews: conflictEvidence } } : {}),
@@ -1279,7 +1288,25 @@ export function authorizeAnswerGroupVerification(m: AnswerGroupMaterials, w: Ans
   replayAnswerGroup(m, next);
   return next;
 }
-export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = false, compactPacking = unionVerification, measuredPacking = compactPacking): AnswerGroupWork {
+function scopedGroupProposalRecords(m: AnswerGroupMaterials, w: AnswerGroupWork) {
+  return originalEvidenceClosure([...m.records, ...supportRecords(m, w)],
+    [...m.pins, ...m.items.flatMap(item => item.answerScope?.requirementIDs ?? [])]).map(r => r.record.id);
+}
+function withScopedProposal(m: AnswerGroupMaterials, w: AnswerGroupWork): AnswerGroupWork | undefined {
+  const recordIDs = scopedGroupProposalRecords(m, w);
+  if (recordIDs.length > 512) return;
+  const proposalRead = { format: 1 as const, policy: "scoped-group-targets-v1" as const, recordIDs };
+  try {
+    const candidate = { ...w, proposalRead }, pagePlan = planAnswerGroupEvidencePages(m, candidate, undefined, 9);
+    if (pagePlan && pagePlan.pages.length !== 1) return;
+    const context = renderAnswerGroupContext(m, candidate, undefined, undefined, { unbounded: true, ...(pagePlan ? { pagePlan } : {}) });
+    if (context.manifest.characters + answerGroupLimits.draft + 128 > answerGroupLimits.characters) return;
+    candidate.planKey = answerGroupPlanKey(candidate);
+    answerGroupWorkSchema.parse(candidate);
+    return candidate;
+  } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; }
+}
+export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = false, compactPacking = unionVerification, measuredPacking = compactPacking, proposalFirst = true): AnswerGroupWork {
   const w: AnswerGroupWork = { format: 1, policy: "exact-answer-group-v1", submissionIDs: m.items.map(s => s.id), epicID: m.epicID,
     ...(m.items[0]!.answerScope ? { scopePolicy: "per-answer-targets-v1" as const } : {}),
     ...(m.epicIDs.length > 1 ? { featurePolicy: { format: 1 as const, epicIDs: m.epicIDs } } : {}),
@@ -1297,10 +1324,23 @@ export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = fal
   if (batch.length) w.batches.push(batch);
   if (!w.batches.length) w.batches.push([...m.pins]);
   if (support.length) w.sourceSupport = { format: 1, fromReceipt: 0, prefixKey: hash([]), records: support, targets: [] };
+  if (proposalFirst && w.scopePolicy && w.verificationPolicy && (w.batches.length > 1
+    || renderAnswerGroupContext(m, w, undefined, undefined, { unbounded: true }).manifest.characters + answerGroupLimits.draft > answerGroupLimits.characters)) {
+    // Fresh scoped work does not execute background read packets. Admit only the
+    // exact target/support proposal with full output headroom, retaining EVERY
+    // mandatory original in one catalogue batch for subsequent paged checks.
+    // Actual verification is independently packed against the real frozen draft.
+    const catalogue = m.records.filter(r => !m.pins.has(r.record.id)).map(r => r.record.id);
+    const direct = withScopedProposal(m, { ...w, batches: [catalogue.length ? catalogue : [...m.pins]] });
+    if (direct) return direct;
+  }
+  const pinned = renderAnswerGroupContext(m, { ...w, batches: [[]] }, undefined, undefined, { unbounded: true });
+  if (pinned.manifest.characters + answerGroupLimits.draft > answerGroupLimits.characters)
+    throw new AnswerGroupFitError({ ...pinned.manifest, characters: pinned.manifest.characters + answerGroupLimits.draft }, "pinned-input");
   const fit = (ids: string[]): string[][] => {
     const c = renderAnswerGroupContext(m, { ...w, batches: [ids] }, undefined, undefined, { unbounded: true });
     if (c.manifest.characters + answerGroupLimits.draft <= answerGroupLimits.characters) return [ids];
-    if (ids.length < 2) throw new ContextBudgetError({ ...c.manifest, characters: c.manifest.characters + answerGroupLimits.draft });
+    if (ids.length < 2) throw new AnswerGroupFitError({ ...c.manifest, characters: c.manifest.characters + answerGroupLimits.draft }, "evidence-unit");
     const middle = Math.ceil(ids.length / 2);
     return [...fit(ids.slice(0, middle)), ...fit(ids.slice(middle))];
   };
@@ -1335,6 +1375,10 @@ export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = fal
   // draft reserve. Saved schedules are never repacked or assigned a different key.
   if (w.batches.length > answerGroupLimits.batches)
     throw new AnswerGroupCapacityError("evidence batches", w.batches.length, answerGroupLimits.batches);
+  if (proposalFirst && w.scopePolicy && w.verificationPolicy && w.batches.length > 1) {
+    const proposed = withScopedProposal(m, w);
+    if (proposed) return proposed;
+  }
   w.planKey = answerGroupPlanKey(w);
   answerGroupWorkSchema.parse(w);
   return w;
@@ -1505,6 +1549,8 @@ export function acceptAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork, d
 }
 export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): { draft: AnswerGroupDraft | undefined; blocked: string | undefined } {
   answerGroupWorkSchema.parse(w);
+  if (w.proposalRead && (!w.scopePolicy || !w.verificationPolicy || JSON.stringify(w.proposalRead.recordIDs) !== JSON.stringify(scopedGroupProposalRecords(m, w))))
+    throw new Error("Scoped group proposal targets/support changed; original work and attempts were retained.");
   if (!!w.scopePolicy !== !!m.items[0]!.answerScope) throw new Error("Shared answer target permissions changed; paid work was retained.");
   if (JSON.stringify(w.featurePolicy?.epicIDs) !== JSON.stringify(m.epicIDs.length > 1 ? m.epicIDs : undefined))
     throw new Error("Shared answer feature permissions changed; paid work was retained.");

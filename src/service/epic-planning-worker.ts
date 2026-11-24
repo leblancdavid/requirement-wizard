@@ -20,6 +20,8 @@ const snapshots = new Map<number, Project>();
 const equivalenceSnapshots = new Map<number, Project>();
 const loadedRevisions = new Set<number>();
 const completedEquivalence = new Map<string, boolean>();
+const contentPrefilterRevisions = new Set<number>();
+const unavailableContentRevisions = new Set<number>();
 const cache: NonNullable<EpicPlanningOptions["cache"]> = new Map();
 let contextPreparations = 0, examinedPackages = 0, checkpoints = 0, reusedGroups = 0, resolvedGroups = 0;
 let reusedContexts = 0, preparedContexts = 0;
@@ -45,7 +47,7 @@ const progress = (next: PlanningProgress["phase"]) => {
     completedEquivalenceChecks, equivalentCompletedPackages,
     memory: { heapUsedBytes: memory.used_heap_size, heapPeakBytes, heapLimitBytes: memory.heap_size_limit }, continuation: input.continuation } });
 };
-class MissingRevision extends Error { constructor(readonly revision: number, readonly scope?: "equivalence") { super("Historical revision required."); } }
+class MissingRevision extends Error { constructor(readonly revision: number, readonly scope?: "equivalence" | "content") { super("Historical revision required."); } }
 function run() {
   try {
     progress("indexing");
@@ -59,12 +61,18 @@ function run() {
       const snapshot = snapshots.get(revision);
       if (!snapshot) throw new MissingRevision(revision);
       return snapshot;
-    }, { firstPending: true, cache, completedEquivalence, resolved: input.resolved, contexts: input.contexts,
+    }, { firstPending: true, cache, completedEquivalence, contentPrefilterRevisions, resolved: input.resolved, contexts: input.contexts,
       skippedPackageIDs: input.skippedPackageIDs, revisitReview: input.revisitReview, targetFirst: input.targetFirst,
       readEquivalenceRevision: revision => {
         if (revision === input.project.revision) return input.project;
         const source = equivalenceSnapshots.get(revision);
         if (!source) throw new MissingRevision(revision, "equivalence");
+        return source;
+      },
+      readContentRevision: revision => {
+        if (unavailableContentRevisions.has(revision)) return undefined;
+        const source = equivalenceSnapshots.get(revision);
+        if (!source) throw new MissingRevision(revision, "content");
         return source;
       },
       onClosure: (reused) => { if (reused) reusedClosures++; else closureRenderAttempts++; progress("context"); },
@@ -93,12 +101,14 @@ function run() {
       ...(error instanceof ContextBudgetError ? { manifest: error.manifest } : {}) });
   }
 }
-port.on("message", (message: { revision: number; project: Project; scope?: "equivalence" }) => {
+port.on("message", (message: { revision: number; project?: Project; scope?: "equivalence" | "content"; unavailable?: boolean }) => {
+  if (message.unavailable && message.scope === "content") { unavailableContentRevisions.add(message.revision); run(); return; }
+  if (!message.project) { port.postMessage({ type: "failure", message: "Missing immutable planning snapshot." }); return; }
   if (message.project.id !== input.project.id || message.project.revision !== message.revision) {
     port.postMessage({ type: "failure", message: "Historical planning snapshot does not match its immutable revision." }); return;
   }
   loadedRevisions.add(message.revision);
-  if (message.scope === "equivalence") {
+  if (message.scope === "equivalence" || message.scope === "content") {
     equivalenceSnapshots.set(message.revision, message.project);
     while (equivalenceSnapshots.size > 2) equivalenceSnapshots.delete(equivalenceSnapshots.keys().next().value!);
   } else {
