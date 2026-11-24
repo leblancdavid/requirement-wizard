@@ -21,7 +21,7 @@ import { definitionPublicationSchema, definitionRequestWitnessSchema, definition
 import { definitionJointRunSchema, definitionJointPayloadBytes } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema } from "../core/definition-joint-review.js";
 import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
-import { projectSchema } from "../core/model.js";
+import { projectSchema, savedResponseSourceResolutionSchema } from "../core/model.js";
 import { readCombinationPublication } from "./definition-combination-apply.js";
 import { definitionScopeRunBytes, readDefinitionScopeRun } from "./definition-scope-review.js";
 import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
@@ -34,6 +34,7 @@ import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema 
 import { epicReviewSchema } from "../core/epic-review-types.js";
 import { answerCohortSearchSchema } from "../core/answer-integration-diagnostics.js";
 import { databaseSchemaVersion } from "./schema-version.js";
+import { savedResponseResolutionSchema } from "../core/submission-resolution.js";
 
 export { databaseSchemaVersion } from "./schema-version.js";
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
@@ -461,6 +462,17 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader boundary only. No repacking of started groups or inference on startup.
   db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_proposal_reads ON jobs ((1)) WHERE instr(payload, '"proposalRead"') > 0`);
   db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_cohort_search ON jobs ((1)) WHERE instr(payload, '"cohortSearch"') > 0`);
+} }, { version: 88, name: "explicit-headerless-sse-attempt-recovery", apply(db: Database.Database) {
+  // Reader fence only: never reset counters, infer consent or replay on startup.
+  db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_transport_recovery ON jobs ((1)) WHERE instr(payload, '"transportRecovery"') > 0`);
+} }, { version: 89, name: "saved-response-original-target-support", apply(db: Database.Database) {
+  db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_original_support ON jobs ((1)) WHERE instr(payload, '"supportPolicy"') > 0 OR instr(payload, '"supportRecovery"') > 0`);
+} }, { version: 90, name: "target-support-corrective-submission-context", apply() {
+  // Reader fence only. Never rewrite paid corrective layouts or renew allowances.
+} }, { version: 91, name: "explicit-saved-response-human-resolution", apply(db: Database.Database) {
+  db.exec(`CREATE INDEX IF NOT EXISTS startup_submissions_resolutions ON submissions ((1)) WHERE instr(payload, '"resolutions"') > 0;
+    CREATE INDEX IF NOT EXISTS startup_jobs_human_resolution ON jobs ((1)) WHERE instr(payload, '"humanResolution"') > 0`);
+  for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_response_decisions ON ${table} ((1)) WHERE instr(payload, '"savedResponseResolution"') > 0`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -548,6 +560,41 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       WHERE instr(payload, '"cohortSearch"') > 0 AND json_type(payload, '$.discoveryMetrics.answerIntegration.cohortSearch') IS NOT NULL`).iterate() as Iterable<{ search: string | null }>) {
       if (!row.search) throw new Error("Unsupported or oversized answer cohort diagnostic. Nothing was overwritten.");
       answerCohortSearchSchema.parse(JSON.parse(row.search));
+    }
+    for (const table of ["projects", "revisions"]) for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(s.value, '$.savedResponseResolution') AS BLOB)) <= 4096
+      THEN json_extract(s.value, '$.savedResponseResolution') END AS marker FROM ${table} INDEXED BY startup_${table}_response_decisions, json_each(${table}.payload, '$.sources') s
+      WHERE instr(${table}.payload, '"savedResponseResolution"') > 0 AND json_type(s.value, '$.savedResponseResolution') IS NOT NULL`).iterate() as Iterable<{ marker: string | null }>) {
+      if (!row.marker) throw new Error("Unsupported saved-response decision source. Original evidence was retained.");
+      savedResponseSourceResolutionSchema.parse(JSON.parse(row.marker));
+    }
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.resolutions') AS BLOB)) <= 2097152
+      THEN json_extract(payload, '$.resolutions') END AS resolutions FROM submissions INDEXED BY startup_submissions_resolutions
+      WHERE instr(payload, '"resolutions"') > 0`).iterate() as Iterable<{ resolutions: string | null }>) {
+      if (!row.resolutions) throw new Error("Unsupported saved-response decision history. Original input was retained.");
+      z.array(savedResponseResolutionSchema).max(64).parse(JSON.parse(row.resolutions));
+    }
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.humanResolution') AS BLOB)) <= 4096
+      THEN json_extract(payload, '$.submissionWork.humanResolution') END AS marker FROM jobs INDEXED BY startup_jobs_human_resolution
+      WHERE instr(payload, '"humanResolution"') > 0 AND json_type(payload, '$.submissionWork.humanResolution') IS NOT NULL`).iterate() as Iterable<{ marker: string | null }>) {
+      if (!row.marker) throw new Error("Unsupported saved-response resolution continuation. Original work was retained.");
+      submissionWorkSchema.shape.humanResolution.unwrap().parse(JSON.parse(row.marker));
+    }
+    for (const row of db.prepare(`SELECT json_extract(payload, '$.submissionWork.supportPolicy') AS policy,
+      CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.supportRecovery') AS BLOB)) <= 4096
+      THEN json_extract(payload, '$.submissionWork.supportRecovery') END AS recovery,
+      json_type(payload, '$.submissionWork.supportRecovery') AS recoveryType FROM jobs INDEXED BY startup_jobs_original_support
+      WHERE instr(payload, '"supportPolicy"') > 0 OR instr(payload, '"supportRecovery"') > 0`).iterate() as Iterable<{ policy: string | null; recovery: string | null; recoveryType: string | null }>) {
+      if (row.policy !== null) submissionWorkSchema.shape.supportPolicy.unwrap().parse(row.policy);
+      if (row.recoveryType !== null) {
+        if (!row.recovery) throw new Error("Unsupported original-support recovery. Saved work was not overwritten.");
+        submissionWorkSchema.shape.supportRecovery.unwrap().parse(JSON.parse(row.recovery));
+      }
+    }
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.transportRecovery') AS BLOB)) <= 4096
+      THEN json_extract(payload, '$.submissionWork.transportRecovery') END AS recovery FROM jobs INDEXED BY startup_jobs_transport_recovery
+      WHERE instr(payload, '"transportRecovery"') > 0 AND json_type(payload, '$.submissionWork.transportRecovery') IS NOT NULL`).iterate() as Iterable<{ recovery: string | null }>) {
+      if (!row.recovery) throw new Error("Unsupported saved-response transport recovery. Saved work was not overwritten.");
+      submissionWorkSchema.shape.transportRecovery.unwrap().parse(JSON.parse(row.recovery));
     }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.proposalRead') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.submissionWork.proposalRead') END AS proposal FROM jobs

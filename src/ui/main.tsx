@@ -23,6 +23,8 @@ import { ProcessingQueue } from "./processing-queue.js";
 import { SharedAnswerClarification } from "./shared-answer-clarification.js";
 import { currentSharedConflicts, sharedReviewCards, sharedConflictJob, type ClarificationOutcome } from "./shared-answer-decision.js";
 import { SharedConflictNotice } from "./shared-conflict-notice.js";
+import { SavedResponseConflictCard, type SavedResponseDecisionOutcome } from "./saved-response-conflict.js";
+import type { SavedResponseChoice } from "../core/submission-resolution.js";
 import type { MaintenanceAction } from "./maintenance-controls.js";
 import { LegacyWorkflowControls, type WorkflowConfigure } from "./workflow-controls.js";
 import { ProcessingPreferences, ProcessingSettings } from "./processing-settings.js";
@@ -66,7 +68,7 @@ import { DesktopTitleBar } from "./desktop-titlebar.js";
 import { Logs } from "./logs.js";
 import { automaticInputPermission, type ProcessingPolicy } from "../core/processing-policy.js";
 import { closeLogs, LogLink, LogProject, openLogs, recordLog, useLogs } from "./log-access.js";
-import { additionalReview, ProjectReviewPermission } from "./project-review-permission.js";
+import { additionalReview, ProjectReviewPermission, savedResponseReviewRequest } from "./project-review-permission.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; exploration?: ExplorationProgress; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; processingPolicy?: ProcessingPolicy; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -361,11 +363,13 @@ function App() {
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, ...(target === undefined ? {} : { questionTarget: target }), research: project.model.connectionID ? false : research, savedEvidencePolicy: evidencePilot ? "prefix-aux-v1" : "prefix", ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function reviewEpic() {
+    if (data && focusSavedConflict(data.submissions.map(s => s.id))) return;
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before reviewing.");
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic", questionTarget, collectQuestionBatch: true,
       research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function resumeDiscovery() {
+    if (data && focusSavedConflict(data.submissions.map(s => s.id))) return;
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before resuming.");
     const saved = pausedClarification(data?.jobs ?? []);
     const unfinished = !!project && clarificationHasWaitingInput(project, data?.submissions ?? [], saved?.context?.readinessQuestions);
@@ -522,27 +526,37 @@ function App() {
     }
   };
 
+  const focusSavedConflict = (ids: string[]) => {
+    const conflict = data?.jobs.find(j => j.submissionConflict && ids.includes(j.submissionConflict.submissionID))?.submissionConflict;
+    if (!conflict) return false;
+    closeLogs(); setIssue(undefined); navigate("workspace");
+    window.requestAnimationFrame(() => { const card = document.getElementById(`saved-conflict-${conflict.submissionID}`); card?.scrollIntoView({ block: "start" }); card?.focus(); });
+    return true;
+  };
   const processBlocking = (ids: string[]) => {
-    const permission = project && data ? additionalReview(project, data.submissions, data.jobs) : undefined;
-    if (permission && ids.includes(permission.item.id)) { openIssue(permission.item.id); return; }
+    if (focusSavedConflict(ids)) return;
     const blocked = data?.submissions.find(s => ids.includes(s.id) && data.jobs.some(j => j.id === s.jobID && j.answerGroupClarification && !j.answerGroupClarification.savedText));
     if (blocked) { openIssue(blocked.id); return; }
     void act(async () => {
       if (!project || !data) return;
       if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
-      await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: ids, research: project.model.connectionID ? false : research });
+      await api(`projects/${project.id}/process-responses`, savedResponseReviewRequest(project, data.submissions, data.jobs, ids, project.model.connectionID ? false : research));
     });
   };
   const processSavedResponses = () => void act(async () => {
     if (!project || !data) return;
-    await api(`projects/${project.id}/process-responses`, { revision: project.revision,
-      submissionIDs: processableSavedResponses(project, data.submissions).slice(0, 128).map((s) => s.id), research: false });
+    const ids = processableSavedResponses(project, data.submissions).slice(0, 128).map(s => s.id);
+    if (focusSavedConflict(ids)) return;
+    if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
+    await api(`projects/${project.id}/process-responses`, savedResponseReviewRequest(project, data.submissions, data.jobs,
+      ids));
   }, "Processing saved answers without new research…");
   const extendSavedResponse = (submissionID: string, resumeJobID: string) => void act(async () => {
     if (!project) return;
+    if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
     await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: [submissionID], research: false,
       resumeJobID, additionalRequests: 4, confirmAdditionalRequests: true });
-  }, "Continuing the saved step with four explicitly authorized additional requests…");
+  }, "Reviewing the saved response with up to four additional requests…");
   const renderClarification = (question: Project["questions"][number]) => {
     if (!project || !data) return null;
     const submission = [...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status)
@@ -573,7 +587,10 @@ function App() {
   }
   const renderReview = (focusRequirementID?: string) => {
     if (!project || !data) return null;
-    return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} navigation={focusRequirementID ? undefined : reviewNavigation} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => focusRequirementID ? processBlocking(data.submissions.filter((s) => s.input.type === "review" && s.input.requirementID === focusRequirementID && s.status === "needs-attention" && !s.conflict).map((s) => s.id)) : void act(explore)}
+    return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} navigation={focusRequirementID ? undefined : reviewNavigation} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => {
+      const ids = processableSavedResponses(project, data.submissions).filter(s => s.input.type === "review" && (!focusRequirementID || s.input.requirementID === focusRequirementID)).map(s => s.id);
+      if (ids.length) processBlocking(ids); else if (!focusRequirementID) void act(explore);
+    }}
       processBlocking={processBlocking} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
       renderInputConflict={(ids, onBegin) => renderInputConflict(ids, onBegin)}
       clarifyDefinition={clarifyDefinition}
@@ -605,6 +622,13 @@ function App() {
     });
     await load().catch((cause: Error) => setError(cause.message));
     return result;
+  }
+  async function saveSavedResponseDecision(input: { requestID: string; jobID: string; conflictKey: string; choice: SavedResponseChoice }) {
+    if (!project) throw new Error("Refresh before saving your decision.");
+    if (connectionChanged) throw new Error("Save your connection and model selection before continuing review.");
+    setPending(true); setActionLabel("Saving your decision and continuing review…");
+    try { return await api<SavedResponseDecisionOutcome>(`projects/${project.id}/resolve-saved-response`, { revision: project.revision, ...input, continueReview: true, confirmAIUsage: true }); }
+    finally { await load().catch(() => {}); setPending(false); }
   }
   async function continueConflictReview() {
     if (!project || !data?.workflow) throw new Error("Refresh before continuing review.");
@@ -744,12 +768,16 @@ function App() {
           }, "Exploring this scope again…")} />}
       </ProjectProgress>}
       {!showSettings && !creating && project && data && tab !== "review" && <SharedConflictNotice conflicts={currentSharedConflicts(project, data.jobs, data.submissions)} open={openIssue} />}
+      {!showSettings && !creating && project && data && data.submissions.filter(item => data.jobs.some(j => j.id === item.jobID && j.submissionConflict)
+        || !!item.resolutions?.length && ["saved", "processing", "needs-attention"].includes(item.status)).map(item => <SavedResponseConflictCard key={`${project.id}:${item.id}`}
+          item={item} conflict={data.jobs.find(j => j.id === item.jobID)?.submissionConflict} disabled={busy || connectionChanged}
+          working={item.status === "processing"} save={saveSavedResponseDecision} resume={() => processBlocking([item.id])} />)}
       {pending && <ActivityFeedback label="Working on your project…" />}
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {(showSettings || logState.open && logsReturn.current?.settings) && <section hidden={!showSettings} id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
-        {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}
+        {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} currentAccountID={!creating ? project?.model.connectionID : undefined} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}
           current={project && !creating ? <div className="connection-notice" aria-label="Current project AI"><p><strong>Current project AI:</strong> {activeConnection}</p><p>This saved choice is used for requirements discovery and question help.</p></div> : <p>This choice will be used when you create a project.</p>}>
           {project && !creating && <div className="connection-notice" aria-label="Project AI changes">
             {connectionChanged ? <><p><strong>Pending selection — not saved:</strong> {connectionID ? "Direct ChatGPT" : `OpenCode · ${providerID || "Choose a provider"}`} · {model || "Choose a model"}</p><p>Your project still uses the current AI shown above.</p></> : <p>No pending changes.</p>}

@@ -2,11 +2,15 @@ import { decisionAvailability } from "./decision-availability.js";
 import { requirementEvidenceIDs, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { proposeRefinements } from "./refinement.js";
 import { refinementIsStale } from "./resolution.js";
+import { currentSavedResponseResolution } from "./submission-resolution.js";
 
 export function specificationAuthorizationSources(project: Project, batch: Submission[], includedIDs: string[]) {
   const eligible = new Set(requirementEvidenceIDs(project)), included = new Set(includedIDs);
   return new Set(batch.filter((s) => s.applied && (s.input.type === "note" || s.input.type === "answer" && s.input.answer.kind === "answer"
-    || s.input.type === "review" && s.input.action === "changes-requested")).flatMap((s) => s.appliedSourceID ? [s.appliedSourceID] : [])
+    || s.input.type === "review" && s.input.action === "changes-requested")).flatMap((s) => {
+      const resolution = currentSavedResponseResolution(project, s);
+      return [...s.appliedSourceID ? [s.appliedSourceID] : [], ...resolution ? [resolution.sourceID] : []];
+    })
     .filter((id) => eligible.has(id) && included.has(id)));
 }
 
@@ -52,6 +56,8 @@ export function applySpecificationUpdates(before: Project, project: Project, res
       ? batch.filter(s => !!s.appliedSourceID && change.sourceIDs.includes(s.appliedSourceID)) : batch;
     if (authorityBatch.some((s) => s.answerScope && !s.answerScope.requirementIDs.includes(id)
       || s.input.type === "review" && s.input.action === "changes-requested" && s.input.requirementID !== id)) throw new Error("Automatic specification update exceeds the human input's exact target scope.");
+    if (batch.some(s => { const r = currentSavedResponseResolution(project, s); return r && change.sourceIDs.includes(r.sourceID) && !r.requirementIDs.includes(id); }))
+      throw new Error("Saved conflict resolution cannot authorize changes outside its named requirements.");
     if (result.reviewChanges?.some((c) => c.type === "archive-feature" ? c.epicID === target.epicID : c.requirementID === id)
       || result.refinements?.some((p) => p.requirementID === id || p.resolution?.relatedRequirementID === id)
       || result.pendingChanges?.changes.some((c) => c.type !== "revise-question" && c.requirementID === id && (c.type !== "revise-requirement" || change.type !== "activate"))) throw new Error("Automatic specification updates cannot combine competing changes to a target.");

@@ -1177,8 +1177,12 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile layout should not overflow horizontally");
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("ChatGPT model", { exact: true })).toHaveValue("fixture-alt");
-  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
-  await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
+  await page.getByRole("button", { name: "Remove connection…", exact: true }).click();
+  const removeConnection = page.getByRole("group", { name: "Remove connection Browser fixture account", exact: true });
+  await expect(removeConnection).toContainText("project’s current saved connection");
+  await removeConnection.getByRole("checkbox").check();
+  await removeConnection.getByRole("button", { name: "Confirm removal", exact: true }).click();
+  await expect(page.getByText("Saved connection removed. Other connections and project selections are unchanged.", { exact: true })).toBeVisible();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await page.getByLabel("AI connection", { exact: true }).selectOption("");
   await page.getByRole("button", { name: "Back to workspace" }).click();

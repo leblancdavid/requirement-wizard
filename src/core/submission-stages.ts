@@ -9,6 +9,7 @@ import { assertSpecificationAuthorization, specificationAuthorizationSources } f
 import { refinementEvidenceRecords } from "./refinement-context.js";
 import { canonicalJSON } from "./assessment-identity.js";
 import { validateScopedAnswerResult } from "./input-scope.js";
+import { currentSavedResponseResolution } from "./submission-resolution.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -64,6 +65,11 @@ export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]),
   reviewChanges: z.array(z.discriminatedUnion("type", [analysisSchema.shape.reviewChanges.unwrap().element.options[0],
     analysisSchema.shape.reviewChanges.unwrap().element.options[1]])).max(30).optional() });
 export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-submission-batches-v1"), submissionID: z.string().uuid(),
+  humanResolution: z.object({ format: z.literal(1), resolutionID: z.string().uuid(), sourceJobID: z.string().uuid(), sourceID: z.string().uuid() }).strict().optional(),
+  supportPolicy: z.literal("target-originals-v1").optional(),
+  supportRecovery: z.object({ format: z.literal(1), policy: z.literal("target-originals-v1"), sourceJobID: z.string().uuid(),
+    originalMaterialKey: key, originalPlanKey: key, priorAttempts: z.number().int().min(4).max(12), additionalRequests: z.literal(4),
+    atRevision: z.number().int().positive() }).strict().optional(),
   proposalRead: z.object({ format: z.literal(1), policy: z.literal("scoped-target-v1"),
     recordIDs: z.array(z.string().min(1)).min(1).max(512).refine(ids => new Set(ids).size === ids.length) }).strict().optional(),
   verification: z.object({ format: z.literal(1), policy: z.literal("frozen-draft-exact-packing-v1"),
@@ -74,8 +80,8 @@ export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.l
       jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
       verdict: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict().optional() }).strict().optional(),
   task: taskSchema, materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(32),
-   attempts: z.number().int().min(0).max(8), receipts: z.array(z.object({ step: z.number().int().min(0).max(64),
-     contextKey: key, attempt: z.number().int().min(1).max(8), atRevision: z.number().int().positive(), jobID: z.string().min(1),
+    attempts: z.number().int().min(0).max(16), receipts: z.array(z.object({ step: z.number().int().min(0).max(64),
+      contextKey: key, attempt: z.number().int().min(1).max(16), atRevision: z.number().int().positive(), jobID: z.string().min(1),
      model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: submissionStageResponseSchema,
       permissionPolicy: z.literal("staged-target-evidence-v1").optional(),
       checkPolicy: z.enum(["staged-check-scope-v1", "staged-check-scope-v2"]).optional(),
@@ -87,11 +93,15 @@ export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   reconciliation: z.object({ format: z.literal(1), sourceJobID: z.string().uuid(), clarificationJobID: z.string().uuid(),
     questionID: z.string().min(1), answerSourceID: z.string().min(1) }).strict().optional(),
   draftRepair: z.object({ format: z.literal(1), sourceJobID: z.string().uuid(), clarificationJobID: z.string().uuid().optional(),
+     contextPolicy: z.literal("target-support-v1").optional(),
      policy: z.enum(["invalid-requirement-evidence-v1", "invalid-scoped-output-v1"]).optional(),
     fromReceipt: z.number().int().min(1).max(511), priorAttempts: z.number().int().min(0).max(8),
     evidenceIDs: z.array(z.string().min(1)).min(1), conclusion: z.string().max(12000) }).strict()
-    .refine(r => r.policy ? !r.clarificationJobID && r.priorAttempts === 0 : !!r.clarificationJobID && r.priorAttempts > 0,
+    .refine(r => r.policy ? !r.contextPolicy && !r.clarificationJobID && r.priorAttempts === 0 : !!r.clarificationJobID && r.priorAttempts > 0,
       "Citation recovery and clarified rejection recovery require their distinct original evidence.").optional(),
+  transportRecovery: z.object({ format: z.literal(1), policy: z.literal("headerless-sse-v1"), step: z.literal(0),
+    priorAttempts: z.literal(8), additionalRequests: z.literal(4), atRevision: z.number().int().positive(),
+    jobID: z.string().uuid(), failedJobID: z.string().uuid() }).strict().optional(),
   allowanceExtensions: z.array(z.object({ step: z.number().int().min(0).max(63), additionalRequests: z.literal(4),
     atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict()).max(64).optional() }).strict();
 export type SubmissionWork = z.infer<typeof submissionWorkSchema>;
@@ -124,13 +134,20 @@ export const submissionTotalSteps = (w: SubmissionWork) => w.draftRepair ? submi
 export const submissionProgress = (w: SubmissionWork) => w.publicationSupport ? { completed: submissionStep(w) + Number(!!w.publicationSupport.receipt?.verdict.valid), total: submissionTotalSteps(w) + 1,
   phase: w.publicationSupport.receipt?.verdict.valid ? "complete" as const : "check" as const } : ({ completed: submissionStep(w), total: submissionTotalSteps(w),
    phase: submissionStep(w) >= submissionTotalSteps(w) ? "complete" as const : repairRead(w) || submissionStep(w) < submissionReadSteps(w) ? "read" as const : "check" as const });
-export const submissionRequestLimit = (w: SubmissionWork, step = submissionStep(w)) => !repairActive(w) && w.allowanceExtensions?.some((g) => g.step === step) ? 8 : 4;
-export function submissionAllowance(w: SubmissionWork) {
+export const submissionRequestLimit = (w: SubmissionWork, step = submissionStep(w)) => !repairActive(w) && w.supportRecovery && step === 0 ? w.supportRecovery.priorAttempts + 4
+  : !repairActive(w) && w.transportRecovery?.step === step ? 12
+  : !repairActive(w) && w.allowanceExtensions?.some((g) => g.step === step) ? 8 : 4;
+export const submissionTransportRecoveryCandidate = (w: SubmissionWork) => w.attempts === 8 && submissionRequestLimit(w) === 8
+  && !w.receipts.length && w.allowanceExtensions?.length === 1 && w.allowanceExtensions[0]?.step === 0
+  && !w.transportRecovery && !w.supportRecovery && !w.draftRepair && !w.reconciliation && !w.verification && !w.publicationSupport;
+export function submissionAllowance(w: SubmissionWork, knownTransportFailure = false) {
   if (w.publicationSupport) return { step: submissionTotalSteps(w), attempts: w.publicationSupport.attempts, limit: 4, canExtend: false };
   const step = submissionStep(w), limit = submissionRequestLimit(w), last = w.receipts.at(-1);
   const blocked = last && ("submissionCheck" in last.response && !last.response.submissionCheck.valid
     || "submissionBlocked" in last.response && w.permissionRecovery?.receiptIndex !== w.receipts.length - 1);
-  return { step, attempts: w.attempts, limit, canExtend: !w.draftRepair && step < submissionTotalSteps(w) && w.attempts === 4 && limit === 4 && !blocked };
+  const transportRecovery = knownTransportFailure && submissionTransportRecoveryCandidate(w);
+  return { step, attempts: w.attempts, limit, canExtend: transportRecovery || !w.draftRepair && step < submissionTotalSteps(w) && w.attempts === 4 && limit === 4 && !blocked,
+    ...(transportRecovery ? { recovery: "headerless-sse-v1" as const } : {}) };
 }
 const empty = (): Analysis => ({ summary: "Saved response follow-up in progress", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 export const canStageSubmission = (s: Submission | undefined): s is Submission => !!s?.applied && !!s.appliedSourceID && !s.conflict
@@ -138,7 +155,7 @@ export const canStageSubmission = (s: Submission | undefined): s is Submission =
   && (s.input.type === "review" || s.input.type === "answer" && s.input.answer.kind === "answer");
 
 /** Only new overflow work uses this policy; never reconstruct older completed jobs differently. */
-export function submissionMaterials(project: Project, item: Submission, input: ContextTask, overflow?: ContextBudgetError) {
+export function submissionMaterials(project: Project, item: Submission, input: ContextTask, overflow?: ContextBudgetError, supportPolicy?: "target-originals-v1") {
   if (!canStageSubmission(item) || item.projectID !== project.id || project.sources.some((s) => s.supersedes === item.appliedSourceID))
     throw new Error("Staged follow-up requires a current saved review or concrete answer.");
   const task = taskSchema.parse({ ...(input.focusEpicID !== undefined ? { focusEpicID: input.focusEpicID } : {}),
@@ -148,21 +165,36 @@ export function submissionMaterials(project: Project, item: Submission, input: C
   const target = item.input.type === "review" ? item.input.requirementID : item.input.type === "answer" ? item.input.questionID : "";
   if (!task.recordIDs.includes(item.appliedSourceID!) || !task.recordIDs.includes(target)) throw new Error("Follow-up must retain the saved human source and exact target.");
   let manifest: ContextPack["manifest"];
-  if (overflow) manifest = overflow.manifest;
-  else { try { manifest = planExactTaskContext(project, task).manifest; } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; } }
+  const supportingRecordIDs = supportPolicy ? submissionOriginalSupport(project, item, task) : undefined;
+  if (overflow && !supportPolicy) manifest = overflow.manifest;
+  else { try { manifest = planExactTaskContext(project, { ...task, ...(supportingRecordIDs ? { supportingRecordIDs } : {}) }).manifest; } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; } }
   const evidenceIDs = manifest.includedIDs, ids = new Set(evidenceIDs);
   const records = (["sources", "questions", "requirements", "research"] as const).flatMap((field) => project[field].filter((r) => ids.has(r.id)).map((record) => ({ field, record })));
   if (records.length !== ids.size || task.recordIDs.some((id) => !ids.has(id))) throw new Error("Saved follow-up has missing mandatory evidence.");
   const pins = new Set([...task.recordIDs, ...project.sources.filter((s) => s.kind === "initial").map((s) => s.id)]);
+  const resolution = currentSavedResponseResolution(project, item);
   const base = { projectID: project.id, name: project.name, projectOrigin: project.origin ?? null,
     goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     areas: project.epics.filter((e) => manifest.epicIDs?.includes(e.id)),
-    submission: { id: item.id, input: item.input, appliedSourceID: item.appliedSourceID, answerScope: item.answerScope, decisionBasis: item.decisionBasis },
+    submission: { id: item.id, input: item.input, appliedSourceID: item.appliedSourceID, answerScope: item.answerScope, decisionBasis: item.decisionBasis,
+      ...(resolution && task.recordIDs.includes(resolution.sourceID) ? { humanResolution: resolution } : {}) },
     instruction: "Original human input is already saved; do not apply it again. Follow up only on this submission. Human evidence and conflicting decisions are authoritative, drafts are not. Never choose precedence between conflicting human decisions. Other mandatory records are read and checked separately; no partial changes publish. No tools, research, whole-area assessment, organization, archive-feature or global interpretation changes. Links/available IDs are navigation only, not reviewed evidence. Request exact records when needed; never infer from missing evidence." };
-  return { project, item, base, records, pins, evidenceIDs, task, submissionID: item.id, revision: project.revision,
+  return { project, item, base, records, pins, evidenceIDs, task, submissionID: item.id, revision: project.revision, supportPolicy,
     materialKey: hash({ base, records, pins: [...pins], task }) };
 }
 export type SubmissionMaterials = ReturnType<typeof submissionMaterials>;
+function submissionOriginalSupport(project: Project, item: Submission, task: ContextTask) {
+  const targets = item.answerScope?.requirementIDs ?? (item.input.type === "review" ? [item.input.requirementID]
+    : project.requirements.filter(r => task.recordIDs?.includes(r.id)).map(r => r.id));
+  return refinementEvidenceRecords(project, targets);
+}
+export function submissionOriginalSupportGap(m: SubmissionMaterials) {
+  return submissionOriginalSupport(m.project, m.item, m.task).filter(id => !m.evidenceIDs.includes(id));
+}
+export function submissionSupportRecoveryCandidate(m: SubmissionMaterials, w: SubmissionWork) {
+  return !w.supportPolicy && !w.supportRecovery && !w.receipts.length && !w.draftRepair && !w.reconciliation && !w.verification && !w.publicationSupport
+    && w.attempts >= submissionRequestLimit(w) && w.attempts <= 12 && submissionOriginalSupportGap(m).length > 0;
+}
 
 function assertScopedSubmissionDraft(m: SubmissionMaterials, output: Analysis) {
   if (!m.item.answerScope) return;
@@ -219,8 +251,21 @@ export function submissionDraftRepair(m: SubmissionMaterials, w: SubmissionWork,
     const beforeVerdict = { ...w, receipts: w.receipts.slice(0, -1) };
     const draft = replaySubmissionStages(m, beforeVerdict).draft;
     const context = submissionStageContext(m, beforeVerdict, draft);
-    return { format: 1, sourceJobID: source!.id, clarificationJobID: job.id, fromReceipt: w.receipts.length,
+    const repair: NonNullable<SubmissionWork["draftRepair"]> = { format: 1, sourceJobID: source!.id, clarificationJobID: job.id, fromReceipt: w.receipts.length,
       priorAttempts: w.attempts, evidenceIDs: context.manifest.includedIDs, conclusion: job.result.summary };
+    // A near-full rejected verification packet may no longer fit after adding
+    // correction instructions. Only a NEW scoped corrective read may start from
+    // exact target support. All other originals remain requestable and every
+    // mandatory batch must independently check the resulting replacement draft.
+    try { submissionStageContext(m, { ...w, draftRepair: repair, attempts: 0 }, draft); }
+    catch (error) {
+      if (!(error instanceof ContextBudgetError)) throw error;
+      const target = scopedProposalRecords(m);
+      if (!target) throw error;
+      repair.contextPolicy = "target-support-v1"; repair.evidenceIDs = target;
+      submissionStageContext(m, { ...w, draftRepair: repair, attempts: 0 }, draft);
+    }
+    return repair;
   }
   return undefined;
 }
@@ -245,7 +290,9 @@ export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork
     ...(verification ? { verificationPlan: { key: verification.planKey, batch: step - reads + 1, batches: verification.batches.length,
       instruction: "Frozen-draft verification uses a losslessly repacked exact evidence batch. Check against every detailed record here. All original mandatory evidence is assigned to verification batches; omitted evidence is not presumed checked. This check cannot add or rewrite proposals." } } : {}),
     availableEvidenceIDs: m.evidenceIDs,
-    ...(repairRead(w) ? { draftRepair: {
+     ...(repairRead(w) ? { draftRepair: {
+        ...(w.draftRepair!.contextPolicy ? { contextPolicy: w.draftRepair!.contextPolicy,
+          evidenceInstruction: "This corrective proposal starts with the exact linked target and ALL its original support, not the entire prior rejected verification batch. Other mandatory evidence remains available by exact submissionEvidence lookup. Load missing bodies BEFORE using them for any new/changed action. Neither an omitted record nor the prior AI rejection/clarification establishes permission or human precedence. Every original mandatory evidence batch must independently check the complete replacement draft before publication." } : {}),
        ...(w.draftRepair!.policy
         ? { priorVerdict: w.receipts[w.draftRepair!.fromReceipt - 1]!.response, citationIssue: w.draftRepair!.conclusion }
         : { rejectedVerdict: w.receipts[w.draftRepair!.fromReceipt - 1]!.response, clarificationConclusion: w.draftRepair!.conclusion }),
@@ -283,7 +330,7 @@ function scopedProposalRecords(m: SubmissionMaterials): string[] | undefined {
 }
 export function planSubmissionStages(m: SubmissionMaterials, options: { proposalFirst?: boolean } = {}): SubmissionWork {
   const w: SubmissionWork = { format: 1, policy: "exact-submission-batches-v1", submissionID: m.submissionID, task: m.task,
-    materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
+    materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [], ...(m.supportPolicy ? { supportPolicy: m.supportPolicy } : {}) };
   // Only new schedules are packed here. Saved batches and their plan/context keys
   // replay verbatim, including schedules produced by the old 36k raw-size rule.
   // Measure the same lossless wire encoder used at dispatch, leaving the entire
@@ -435,9 +482,17 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
 export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork) {
   submissionWorkSchema.parse(w);
   const grants = w.allowanceExtensions ?? [];
+  if (w.supportRecovery && (w.reconciliation || w.supportRecovery.atRevision > m.revision
+    || !w.supportPolicy && (w.supportRecovery.originalMaterialKey !== w.materialKey || w.supportRecovery.originalPlanKey !== w.planKey)
+    || submissionStep(w) === 0 && w.attempts < w.supportRecovery.priorAttempts
+    || w.receipts.some(r => r.step === 0 && r.attempt <= w.supportRecovery!.priorAttempts)))
+    throw new Error("Invalid original-support recovery; earlier attempts were retained.");
+  if (w.transportRecovery && (w.reconciliation || !grants.some(g => g.step === 0)
+    || w.transportRecovery.atRevision > m.revision || w.receipts.some(r => r.step === 0 && r.attempt <= 8)))
+    throw new Error("Invalid saved-response transport recovery grant; original attempts were retained.");
   if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= (w.draftRepair ? submissionReadSteps(w) + w.batches.length : submissionTotalSteps(w))))
     throw new Error("Invalid saved-response additional request grant.");
-  if (w.materialKey !== m.materialKey || w.submissionID !== m.submissionID || JSON.stringify(w.task) !== JSON.stringify(m.task)
+  if (w.supportPolicy !== m.supportPolicy || w.materialKey !== m.materialKey || w.submissionID !== m.submissionID || JSON.stringify(w.task) !== JSON.stringify(m.task)
     || w.planKey !== submissionPlanKey(w)) throw new Error("Saved response evidence or stage plan changed; completed calls were retained, not repeated.");
   if (w.proposalRead && JSON.stringify(w.proposalRead.recordIDs) !== JSON.stringify(scopedProposalRecords(m)))
     throw new Error("Scoped proposal evidence changed or omitted original target support; paid work was retained.");
@@ -470,7 +525,8 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
       || submissionStep(original) < submissionReadSteps(w) || repair.priorAttempts !== priorAttempt)
       throw new Error("Corrective review must retain a terminal rejected verification and its spent attempts.");
     const before = { ...original, receipts: original.receipts.slice(0, -1) };
-    if (JSON.stringify(submissionStageContext(m, before, draft).manifest.includedIDs) !== JSON.stringify(repair.evidenceIDs))
+    const expectedRepairEvidence = repair.contextPolicy ? scopedProposalRecords(m) : submissionStageContext(m, before, draft).manifest.includedIDs;
+    if (!expectedRepairEvidence || JSON.stringify(expectedRepairEvidence) !== JSON.stringify(repair.evidenceIDs))
       throw new Error("Corrective review must pin the exact evidence from the rejected verification.");
     blocked = undefined; priorAttempt = 0;
   };
@@ -504,6 +560,27 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
   if (w.checkScopeRecovery && w.checkScopeRecovery.receiptIndex >= w.receipts.length) throw new Error("Saved verification recovery is missing its original receipt.");
   if (w.legacyStyleRecovery && w.legacyStyleRecovery.receiptIndex >= w.receipts.length) throw new Error("Saved style compatibility recovery is missing its original receipt.");
   return { draft, blocked };
+}
+
+/** Changed evidence cannot reuse approvals. With no accepted response at all,
+ * only the layout needs replacing; every spent attempt/grant still belongs to
+ * the first unfinished step. Validate the original snapshot before carrying it. */
+export function replanUnansweredSubmission(m: SubmissionMaterials, original: SubmissionMaterials, w: SubmissionWork): SubmissionWork {
+  replaySubmissionStages(original, w);
+  if (w.receipts.length || w.verification || w.publicationSupport || w.draftRepair || w.reconciliation
+    || w.permissionRecovery || w.checkScopeRecovery || w.legacyStyleRecovery
+    || w.allowanceExtensions?.some(g => g.step !== 0)
+    || m.submissionID !== original.submissionID || canonicalJSON(m.task) !== canonicalJSON(original.task)
+    || canonicalJSON(m.base.submission) !== canonicalJSON(original.base.submission))
+    throw new Error("Saved response evidence changed after accepted work or its authorization changed; original calls and spent attempts were retained.");
+  if (m.materialKey === original.materialKey) return structuredClone(w);
+  const next = planSubmissionStages(m, { proposalFirst: !!m.supportPolicy || !!w.proposalRead });
+  next.attempts = w.attempts;
+  if (w.allowanceExtensions) next.allowanceExtensions = structuredClone(w.allowanceExtensions);
+  if (w.transportRecovery) next.transportRecovery = structuredClone(w.transportRecovery);
+  if (w.supportRecovery) next.supportRecovery = structuredClone(w.supportRecovery);
+  replaySubmissionStages(m, next);
+  return next;
 }
 
 function legacySubmissionDraft(w: SubmissionWork) {
@@ -599,7 +676,7 @@ export function submissionPublicationDraft(m: SubmissionMaterials, w: Submission
   return result;
 }
 export function validateSubmissionPublication(project: Project, item: Submission, job: Job, result: Analysis) {
-  const w = job.submissionWork!, m = submissionMaterials(project, item, w.task), verified = replaySubmissionStages(m, w);
+  const w = job.submissionWork!, m = submissionMaterials(project, item, w.task, undefined, w.supportPolicy), verified = replaySubmissionStages(m, w);
   if (verified.blocked || submissionStep(w) !== submissionTotalSteps(w) || JSON.stringify(result) !== JSON.stringify(submissionPublicationDraft(m, w, verified.draft))
     || job.context?.submissionStage?.planKey !== w.planKey || JSON.stringify(job.context.submissionIDs) !== JSON.stringify([item.id])
     || JSON.stringify(job.context.includedIDs) !== JSON.stringify(submissionPublicationEvidence(m, w, verified.draft))) throw new Error("Incomplete or changed saved-response work cannot publish.");

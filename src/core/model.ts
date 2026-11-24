@@ -25,6 +25,9 @@ export const modelSelection = z.object({
 }).strict();
 export type ModelSelection = z.infer<typeof modelSelection>;
 
+export const savedResponseSourceResolutionSchema = z.object({ format: z.literal(1), policy: z.literal("saved-response-decision-v1"), id: z.string().uuid(),
+  submissionID: z.string().uuid(), blockedJobID: z.string().uuid(), requirementIDs: z.array(z.string()).min(1).max(8),
+  supersededRecordIDs: z.array(z.string()).max(16) }).strict();
 const source = z.object({
    id: z.string(), kind: z.enum(["initial", "note", "answer", "delegation", "deferral", "confirmation", "rejection", "workspace"]),
   text: z.string().min(1), questionID: z.string().optional(), supersedes: z.string().optional(),
@@ -34,9 +37,12 @@ const source = z.object({
   /** Targeted human feedback, not an approval/rejection or permission for wider edits. */
   changeRequest: z.literal(true).optional(),
   answerScope: answerScopeSchema.optional(),
+  /** A human resolution supersedes conflicting outcomes only for these targets. */
+  savedResponseResolution: savedResponseSourceResolutionSchema.optional(),
   epicID: z.string().default("project"),
 }).superRefine((value, context) => {
   if (value.answerScope && (value.answerScope.questionID !== value.questionID || !["answer", "delegation", "deferral"].includes(value.kind))) context.addIssue({ code: "custom", message: "Answer scope must match its original question response." });
+  if (value.savedResponseResolution && value.kind !== "note") context.addIssue({ code: "custom", message: "A saved-response resolution must retain its human note source." });
 });
 export const conceptSchema = z.object({
   field: z.enum(["text", "whyItMatters", "label", "consequence"]),
@@ -294,6 +300,8 @@ export type Submission = z.infer<typeof submissionSchema> & {
   /** Server-captured, publication-enforced scope; absent means conservative legacy/general input. */
   answerScope?: AnswerScope;
   overlapFollowup?: z.infer<typeof overlapFollowupSchema>;
+  /** Explicit human decisions scoped to this saved response; original records stay unchanged. */
+  resolutions?: import("./submission-resolution.js").SavedResponseResolution[];
   /** Durable preflight result; input/approval is already saved, inference not started. */
   contextBlock?: Pick<NonNullable<Job["context"]>, "revision" | "characters" | "budget" | "epicIDs" | "sectionCharacters">;
 };
@@ -376,8 +384,9 @@ export type Job = {
   refinementRequests?: number;
   refinementStageProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   /** Metadata-only browser projection; never a request grant by itself. */
-  submissionAllowance?: { step: number; attempts: number; limit: number; canExtend: boolean };
+  submissionAllowance?: { step: number; attempts: number; limit: number; canExtend: boolean; recovery?: "headerless-sse-v1" | "target-originals-v1" };
   submissionProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
+  submissionConflict?: import("./submission-resolution.js").SavedResponseConflict;
   readinessProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   definitionBlock?: { format: 1; reason: string; kind?: import("./definition-evidence-issue.js").DefinitionBlockKind };
   definitionInterruption?: import("./definition-interruption.js").DefinitionInterruption;

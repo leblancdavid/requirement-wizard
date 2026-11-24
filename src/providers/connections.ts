@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { defaultDataDirectory } from "../storage/paths.js";
 import { join } from "node:path";
 import { CredentialStore } from "./credentials.js";
-import { AuthorizationDeclined, ProviderError, authorize, callback, exchange, listModels, probe, refresh, revoke, type Registration } from "./chatgpt.js";
+import { AuthorizationDeclined, ProviderError, authorize, callback, exchange, listModels, probe, providerStage, refresh, revoke, type Registration } from "./chatgpt.js";
 
 export type Account = { id: string; label: string; expiresAt: number };
 export type LoginStatus = { id: string; status: "waiting" | "validating" | "connected" | "failed" | "cancelled"; error?: string; accountID?: string };
@@ -71,7 +71,7 @@ export class ConnectionManager implements Connections {
   withAccount<T>(id: string, operation: (account: Registration, signal: AbortSignal) => Promise<T>, external?: AbortSignal, timeoutMs = 120_000) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 900_000) throw new ProviderError("Request timeout must be between 1 and 900000 milliseconds.");
     if (this.disconnecting.has(id)) throw new ProviderError("This account is disconnecting. Wait before starting another request.");
-    return this.run(async (signal) => operation(await this.credential(id, signal), signal), id, external, timeoutMs);
+    return this.run(async (signal) => operation(await providerStage("saved credentials", signal, () => this.credential(id, signal)), signal), id, external, timeoutMs);
   }
   models(id: string) { return this.withAccount(id, (account, signal) => listModels(account, signal, this.request)); }
   async test(id: string, model: string) {

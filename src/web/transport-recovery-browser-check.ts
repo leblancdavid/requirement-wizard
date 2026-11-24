@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { ProjectStore } from "../storage/store.js";
+import { submissionMaterials, planSubmissionStages, replaySubmissionStages, submissionStageContext } from "../core/submission-stages.js";
+import { startApp } from "./server.js";
+
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
+const { chromium, expect } = await import("@playwright/test");
+await mkdir(resolve(".reqwizit-state"), { recursive: true });
+const store = new ProjectStore(":memory:");
+let project = store.create("Transport recovery fixture", "Save reports", { providerID: "openai", modelID: "fixture", connectionID: "fixture-direct" });
+const setup = store.beginJob(project.id, project.revision).job; store.claimJob(setup.id, Date.now() + 60000);
+store.finishJob(setup.id, { summary: "Fixture question", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+  questions: [{ text: "Should reports work offline?", whyItMatters: "Storage", options: [{ label: "Yes", consequence: "Local" }, { label: "No", consequence: "Online" }], evidenceIDs: [project.sources[0]!.id], epicID: "inbox" }] });
+project = store.get(project.id);
+const item = store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: project.questions[0]!.id, questionText: project.questions[0]!.text, sourceID: null, reviewedRevision: project.revision, answer: { kind: "answer", text: "Yes" } } });
+store.applyQueued(project.id, [item.id]); project = store.get(project.id);
+const saved = store.submissions(project.id).find(s => s.id === item.id)!;
+const task = { recordIDs: [saved.appliedSourceID!, project.questions[0]!.id], requiredEpicIDs: ["inbox"], isolatedTask: true as const, submissionFollowup: true as const, expandMandatory: true as const };
+const m = submissionMaterials(project, saved, task), w = planSubmissionStages(m);
+const failed = store.beginJob(project.id, project.revision).job; store.claimJob(failed.id, Date.now() + 60000);
+w.attempts = 8; w.allowanceExtensions = [{ step: 0, additionalRequests: 4, atRevision: project.revision, jobID: failed.id }];
+store.checkpointSubmission(failed.id, w, submissionStageContext(m, w, replaySubmissionStages(m, w).draft).manifest);
+store.failJob(failed.id, "failed", "ChatGPT response request did not return an event stream; no result was accepted.");
+saved.status = "needs-attention"; saved.jobID = failed.id; store.saveSubmission(saved);
+let calls = 0;
+const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("Fixture failure after explicit recovery consent"); } } });
+const browser = await chromium.launch({ headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.goto(app.origin);
+  const permission = page.getByRole("region", { name: "Additional review permission", exact: true });
+  await expect(permission).toContainText("Recover review after the streaming defect");
+  await expect(permission).toContainText("eight to twelve");
+  assert.equal(calls, 0);
+  await permission.getByRole("button", { name: "Not now", exact: true }).click();
+  assert.equal(calls, 0); assert.equal(store.getJob(failed.id).submissionWork!.attempts, 8);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: resolve(".reqwizit-state/transport-recovery-mobile.png"), fullPage: true });
+  await expect(page.getByRole("button", { name: /^Allow 4/ })).toHaveCount(0);
+  await permission.getByRole("button", { name: "Continue review", exact: true }).click();
+  await expect.poll(() => calls).toBe(1);
+  await expect(permission).toHaveCount(0);
+  const original = store.getJob(failed.id);
+  assert.equal(original.submissionWork!.attempts, 8); assert.ok(original.submissionWork!.transportRecovery);
+  const latest = store.latestSubmissionWorkJob(project.id, saved.id, "unused")!;
+  assert.equal(latest.submissionWork!.attempts, 9); assert.equal(latest.submissionWork!.receipts.length, 0);
+  assert.deepEqual(store.get(project.id), project);
+  await page.reload(); await expect(permission).toHaveCount(0); assert.equal(calls, 1);
+  console.log("Transport recovery browser passed: eight-to-twelve disclosure, decline then one-click Continue review without a separate Allow action, mobile, one consented request, preserved original eight attempts, no automatic regrant/reload request and unchanged project. Synthetic adapter only.");
+} finally { await browser.close(); await app.close(); store.close(); }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { authorize, callback, consumeResponse, exchange, listModels, probe, refresh, validateIdentity, type Registration } from "./chatgpt.js";
+import { authorize, callback, consumeResponse, exchange, generate, listModels, probe, refresh, validateIdentity, type Registration } from "./chatgpt.js";
 
 const signal = () => AbortSignal.timeout(5000);
 const saved: Registration = { id: "client", clientID: "client", subject: "person", accessToken: "private-access", refreshToken: "private-refresh",
@@ -137,4 +137,70 @@ test("probe sends preview-compatible request and rejects unlisted models or malf
   text = '{"ok":true,"unexpected":1}';
   await assert.rejects(probe(saved, "chosen", signal(), request));
   await assert.rejects(listModels(saved, signal(), mock(() => new Response("private-provider-details", { status: 401 }))), (error: Error) => !error.message.includes("private-provider-details"));
+});
+
+test("generation failures identify safe stages without leaking bodies, parser input or transport causes", async () => {
+  const secret = "private-access private-refresh private-provider-body";
+  const catalog = () => json({ models: [{ slug: "chosen", display_name: "Chosen", visibility: "list" }] });
+  const cases: { stage: RegExp; catalog?: () => Response; response?: () => Response }[] = [
+    { stage: /model catalog.*transport or local processing/, catalog: () => { throw new TypeError(secret, { cause: new Error(secret) }); } },
+    { stage: /model catalog.*expected format/, catalog: () => json({ models: secret }) },
+    { stage: /model catalog.*invalid JSON/, catalog: () => new Response(secret) },
+    { stage: /response request.*HTTP 429/, response: () => new Response(secret, { status: 429 }) },
+    { stage: /response request.*transport or local processing/, response: () => { throw new TypeError(secret); } },
+    { stage: /response request did not return an event stream/, response: () => json({ private: secret }) },
+    { stage: /response stream.*invalid JSON/, response: () => new Response(`data: ${secret}\n\n`, { headers: { "Content-Type": "text/event-stream" } }) },
+    { stage: /response stream.*expected format/, response: () => new Response(stream([{ type: 123, private: secret }]), { headers: { "Content-Type": "text/event-stream" } }) },
+    { stage: /response stream.*transport or local processing/, response: () => new Response(new ReadableStream({ start(controller) { controller.error(new Error(secret)); } }), { headers: { "Content-Type": "text/event-stream" } }) },
+    { stage: /response stream.*2,000,000-byte/, response: () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(2_000_001)); controller.close(); } }), { headers: { "Content-Type": "text/event-stream" } }) },
+  ];
+  for (const fixture of cases) {
+    let requests = 0;
+    const request = mock((url) => { requests++; return url.endsWith("/models") ? (fixture.catalog ?? catalog)() : fixture.response!(); });
+    await assert.rejects(generate(saved, "chosen", "Instructions", "Input", signal(), request), (error: Error) => {
+      assert.match(error.message, fixture.stage);
+      for (const value of secret.split(" ")) assert.equal(error.message.includes(value), false);
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+    assert.equal(requests, fixture.catalog ? 1 : 2, "No automatic retry");
+  }
+  const controller = new AbortController();
+  const pending = generate(saved, "chosen", "Instructions", "Input", controller.signal, mock((url) => {
+    if (url.endsWith("/models")) return catalog();
+    controller.abort(); throw new Error(secret);
+  }));
+  await assert.rejects(pending, { name: "AbortError" });
+});
+
+test("missing Content-Type accepts only validated SSE, not JSON/HTML or incomplete/mismatched output", async () => {
+  const catalog = () => json({ models: [{ slug: "chosen", display_name: "Chosen", visibility: "list" }] });
+  let calls = 0;
+  const requestFor = (body: ReadableStream<Uint8Array>, headers?: HeadersInit) => mock((url) => {
+    if (url.endsWith("/models")) return catalog();
+    calls++; return new Response(body, { headers });
+  });
+  const output = [{ type: "response.output_text.delta", delta: '{"ok":true}' }, completed];
+  assert.equal((await probe(saved, "chosen", signal(), requestFor(stream(output)))).model, "chosen");
+  assert.equal(calls, 1);
+  const encoded = (text: string) => new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
+  for (const body of [JSON.stringify({ ...completed.response, output: [{ text: '{"ok":true}' }] }), "<!doctype html><html>private-access</html>",
+    `: comment\n\n<html>private-access</html>\n\ndata: ${JSON.stringify(completed)}\n\n`]) {
+    await assert.rejects(probe(saved, "chosen", signal(), requestFor(encoded(body))), (error: Error) => {
+      assert.match(error.message, /framing|without a valid/); assert.equal(error.message.includes("private-access"), false); return true;
+    });
+  }
+  await assert.rejects(probe(saved, "chosen", signal(), requestFor(stream(output), { "Content-Type": "application/json" })), /did not return an event stream/);
+  await assert.rejects(probe(saved, "chosen", signal(), requestFor(stream(output.slice(0, 1)))), /without a valid/);
+  await assert.rejects(probe(saved, "chosen", signal(), requestFor(stream([{ type: "response.failed" }]))), /failed or was incomplete/);
+  await assert.rejects(probe(saved, "chosen", signal(), requestFor(stream([output[0], { ...completed, response: { ...completed.response, model: "different" } }]))), /different model/);
+  const scopedCompletion = { ...completed, response: { ...completed.response, output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: '{"ok":true}' }] }] } };
+  const scoped = (events: unknown[]) => generate(saved, "chosen", "No tools", "Input", signal(), requestFor(stream(events)), { policy: "scoped-no-tools-v1" });
+  assert.equal((await scoped([output[0], scopedCompletion])).text, '{"ok":true}');
+  await assert.rejects(scoped(output), /completion inventory/);
+  await assert.rejects(scoped([output[0], { ...scopedCompletion, response: { ...scopedCompletion.response, output: [{ ...scopedCompletion.response.output[0], content: [{ type: "output_text", text: "different" }] }] } }]), /does not match/);
+  await assert.rejects(scoped([{ type: "response.web_search_call.in_progress" }, scopedCompletion]), /disallowed tool/);
+  const controller = new AbortController();
+  const pending = probe(saved, "chosen", controller.signal, requestFor(new ReadableStream()));
+  controller.abort(); await assert.rejects(pending, { name: "AbortError" });
 });

@@ -6,8 +6,8 @@ import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { OpenCodeModels } from "./opencode-models.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
-export function AIConnections({ request, accountID, providerID, modelID, onSelect: select, current, children, disabled = false }: {
-  request: Request; accountID: string; providerID: string; modelID: string; onSelect: (accountID: string, modelID: string, providerID: string) => void; current?: React.ReactNode; children?: React.ReactNode; disabled?: boolean;
+export function AIConnections({ request, accountID, currentAccountID, providerID, modelID, onSelect: select, current, children, disabled = false }: {
+  request: Request; accountID: string; currentAccountID?: string; providerID: string; modelID: string; onSelect: (accountID: string, modelID: string, providerID: string) => void; current?: React.ReactNode; children?: React.ReactNode; disabled?: boolean;
 }) {
   const onSelect = (account: string, model: string) => select(account, model, "openai");
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -24,6 +24,8 @@ export function AIConnections({ request, accountID, providerID, modelID, onSelec
   const [login, setLogin] = useState<LoginStatus | null>(null);
   const [authURL, setAuthURL] = useState("");
   const [welcome, setWelcome] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [confirmRemoval, setConfirmRemoval] = useState(false);
   const mounted = useRef(true);
   const catalogSequence = useRef(0);
   const selection = useRef(accountID); selection.current = accountID;
@@ -137,11 +139,30 @@ export function AIConnections({ request, accountID, providerID, modelID, onSelec
     <section className="connected-accounts" aria-label="Connected accounts">
       <div className="connection-heading"><h3>Connected accounts</h3><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
       <p>Manage saved direct ChatGPT accounts here. Adding or reconnecting an account does not change the project’s saved AI. OpenCode accounts are managed in OpenCode; the experimental helper uses its own separate store.</p>
-      {accounts.length ? <ul className="saved-account-list">{accounts.map(item => <li key={item.id}><span>{item.label}</span><div className="button-row">
+      <p>Connections with the same email can be separate registrations. Use the unique label ending to distinguish them. Only connections used by this project or selected in its picker are marked here; unmarked connections may be used by other projects.</p>
+      {accounts.length ? <ul className="saved-account-list">{accounts.map(item => <li key={item.id} aria-label={`Saved connection ${item.label}`}>
+        <div><strong>{item.label}</strong>{item.id === currentAccountID && <p className="plan-label">Used by this project</p>}{item.id === accountID && <p>Selected in picker{item.id !== currentAccountID ? " — not the saved project connection" : ""}</p>}</div><div className="button-row">
         <button className="quiet" disabled={!available || busy || testing || activeLogin} onClick={() => signIn(item.id)}>Reconnect</button>
-        <button className="quiet" disabled={!available || busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID: item.id }); await reload(); if (item.id === accountID) setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button>
-      </div></li>)}</ul> : loaded && <p>No direct ChatGPT accounts saved.</p>}
-      <button className="secondary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Add ChatGPT account</button>
+        <button className="quiet" disabled={!available || busy || testing || activeLogin || loadingModels} onClick={() => { setRemoving(item.id); setConfirmRemoval(false); }}>Remove connection…</button>
+      </div>{removing === item.id && <div className="connection-notice connection-removal" role="group" aria-label={`Remove connection ${item.label}`}>
+        <p><strong>Remove {item.label}?</strong></p>
+        {item.id === currentAccountID && <p>This is the project’s current saved connection. After removal, requests using it will fail until you explicitly save a replacement.</p>}
+        {item.id === accountID && item.id !== currentAccountID && <p>This connection is selected in the picker. Removing it will not select another account for you.</p>}
+        <p>This ends this registration’s renewable ChatGPT session, then removes its saved credentials from this app. If revocation fails, the connection is kept. Other saved connections and project history are not removed.</p>
+        <p>Other projects may still reference this connection. Their saved selections will remain unchanged; there is no automatic fallback.</p>
+        <label><input type="checkbox" checked={confirmRemoval} disabled={busy} onChange={event => setConfirmRemoval(event.target.checked)} /> I understand and want to remove this saved connection.</label>
+        <div className="button-row"><button className="secondary" disabled={!confirmRemoval || busy || testing || activeLogin || loadingModels} onClick={() => void act(async () => {
+          await request("connections/disconnect", { accountID: item.id });
+          setAccounts(previous => previous.filter(saved => saved.id !== item.id));
+          if (item.id === accountID) { catalogSequence.current++; setModels([]); setLoadingModels(false); }
+          if (welcome === item.id) setWelcome(null);
+          setRemoving(null); setConfirmRemoval(false);
+          await reload();
+          setMessage("Saved connection removed. Other connections and project selections are unchanged.");
+        })}>Confirm removal</button><button className="quiet" disabled={busy} onClick={() => { setRemoving(null); setConfirmRemoval(false); }}>Keep connection</button></div>
+      </div>}</li>)}</ul> : loaded && <p>No direct ChatGPT accounts saved.</p>}
+      <div className="button-row"><button className="secondary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Add ChatGPT account</button>
+        <button className="quiet" disabled={busy || activeLogin || testing} onClick={() => void act(async () => { setRemoving(null); setConfirmRemoval(false); await reload(); })}>Refresh connections</button></div>
       {loaded && !available && <p>Direct sign-in is unavailable in this setup. You can still use a saved OpenCode connection.</p>}
       {activeLogin && <div className="connection-notice" role="status"><strong><Spinner />{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><ActivityBar label="Account authorization progress" /><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
       {accountID && <div className="connection-test"><p>Test selection: {account?.label ?? "Unavailable account"} · {modelID || "Choose a model above"}. This tests the dropdown selection, not necessarily the project’s current AI.</p>

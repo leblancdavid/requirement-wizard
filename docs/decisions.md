@@ -2,6 +2,15 @@
 
 ## Confirmed product direction
 
+**Review includes bounded review usage (2026-11-24).** The user explicitly requested
+that clicking Review imply permission for that review, without a separate Allow
+action. Saved-response Review/Continue review now includes an eligible ordinary or
+one-time transport-recovery extension in the same exact-job request. Keep usage
+disclosure, finite caps, original attempts and backend freshness/eligibility checks;
+viewing tabs, issues or reloading is not review authorization. This does not authorize
+unrelated work, research, coding, repeated recovery grants or automatic product approval.
+See [implemented interaction](browser-workspace.md#review-click-includes-bounded-ai-usage-2026-11-24).
+
 **Helper visibility in the app (2026-11-24).** The user requested app controls instead
 of terminal-only process management. Experimental Settings now shows safe lifecycle/
 connection observations and offers explicit-consent check/sign-in/stop. This does not

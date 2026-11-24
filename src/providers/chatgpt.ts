@@ -13,6 +13,18 @@ export type Registration = z.infer<typeof registrationSchema>;
 type Fetch = typeof fetch;
 export class ProviderError extends Error {}
 export class AuthorizationDeclined extends ProviderError {}
+/** Fixed stages/categories only; never serialize arbitrary errors or provider payloads. */
+export async function providerStage<T>(stage: "saved credentials" | "model catalog" | "response request" | "response stream" | "output JSON", signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch (error) {
+    signal.throwIfAborted();
+    const detail = error instanceof ProviderError ? error.message
+      : error instanceof z.ZodError ? "returned data did not match the expected format."
+      : error instanceof SyntaxError ? "returned invalid JSON."
+      : "operation could not complete; transport or local processing failed (private details omitted).";
+    throw new ProviderError(`ChatGPT ${stage} failed: ${detail}`);
+  }
+}
 export type GenerationProfile = { policy: "scoped-no-tools-v1" };
 const generationProfileSchema = z.object({ policy: z.literal("scoped-no-tools-v1") }).strict();
 const tokenSchema = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1).optional(),
@@ -107,13 +119,15 @@ export async function revoke(saved: Registration, signal: AbortSignal, request: 
 }
 
 export async function listModels(saved: Registration, signal: AbortSignal, request: Fetch = fetch) {
-  const response = await checked(await request(`${resource}/models`, { headers: { Authorization: `Bearer ${saved.accessToken}` }, signal }));
-  const catalog = z.object({ models: z.array(z.object({ slug: z.string().min(1), display_name: z.string(), visibility: z.string() })) }).parse(await response.json());
-  return catalog.models.filter((model) => model.visibility === "list").map(({ slug, display_name }) => ({ id: slug, name: display_name }));
+  return providerStage("model catalog", signal, async () => {
+    const response = await checked(await request(`${resource}/models`, { headers: { Authorization: `Bearer ${saved.accessToken}` }, signal }));
+    const catalog = z.object({ models: z.array(z.object({ slug: z.string().min(1), display_name: z.string(), visibility: z.string() })) }).parse(await response.json());
+    return catalog.models.filter((model) => model.visibility === "list").map(({ slug, display_name }) => ({ id: slug, name: display_name }));
+  });
 }
 
 /** SSE parser handles split UTF-8, CRLF, comments, and multi-line data. */
-export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: AbortSignal, profile?: GenerationProfile) {
+export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: AbortSignal, profile?: GenerationProfile, requireFraming = false) {
   if (profile) generationProfileSchema.parse(profile);
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -143,11 +157,14 @@ export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: 
       const { value, done } = await reader.read();
       signal.throwIfAborted();
       received += value?.byteLength ?? 0;
-      if (received > 2_000_000) throw new Error("ChatGPT probe stream exceeded its size budget.");
+      if (received > 2_000_000) throw new ProviderError("ChatGPT response stream exceeded its 2,000,000-byte size budget; no result was accepted.");
       buffer += decoder.decode(value, { stream: !done });
       let end: number;
       while ((end = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, end).replace(/\r$/, ""); buffer = buffer.slice(end + 1);
+        if (requireFraming && line) {
+          if (!/^(?:data:|event:|id:|retry:|:)/.test(line)) throw new ProviderError("ChatGPT response without Content-Type did not contain event-stream framing; no result was accepted.");
+        }
         if (!line) dispatch();
         else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
       }
@@ -176,7 +193,7 @@ export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: 
 
 export async function probe(saved: Registration, model: string, signal: AbortSignal, request: Fetch = fetch) {
   const result = await generate(saved, model, 'Return only valid JSON with exactly one field: {"ok":true}. Do not use tools.', "Run the Reqwizit connection check.", signal, request);
-  z.object({ ok: z.literal(true) }).strict().parse(JSON.parse(result.text));
+  await providerStage("output JSON", signal, async () => z.object({ ok: z.literal(true) }).strict().parse(JSON.parse(result.text)));
   return { model: result.response.model, requestID: result.response.id, usage: result.response.usage };
 }
 
@@ -184,13 +201,18 @@ export async function generate(saved: Registration, model: string, instructions:
   if (profile) generationProfileSchema.parse(profile);
   const catalog = await listModels(saved, signal, request);
   if (!catalog.some((entry) => entry.id === model)) throw new ProviderError("Choose an exact model ID from this account's model catalog.");
-  const response = await checked(await request(`${resource}/responses`, { method: "POST", signal,
+  const response = await providerStage("response request", signal, async () => checked(await request(`${resource}/responses`, { method: "POST", signal,
     headers: { Authorization: `Bearer ${saved.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model, store: false, stream: true,
       ...(profile ? { tools: [], tool_choice: "none", parallel_tool_calls: false } : {}),
-      instructions, input: [{ role: "user", content: input }] }) }));
-  if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) throw new Error("ChatGPT did not return an event stream.");
-  const result = await consumeResponse(response.body, signal, profile);
+       instructions, input: [{ role: "user", content: input }] }) })));
+  const contentType = response.headers.get("content-type");
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  // The direct route has returned valid SSE with no Content-Type. This remains
+  // the same streamed protocol, never a JSON fallback: require SSE framing and
+  // all normal terminal/model/inventory checks before accepting any result.
+  if (!response.body || contentType !== null && mediaType !== "text/event-stream") throw new ProviderError("ChatGPT response request did not return an event stream; no result was accepted.");
+  const result = await providerStage("response stream", signal, () => consumeResponse(response.body!, signal, profile, contentType === null));
   if (result.response.model !== model) throw new ProviderError("ChatGPT returned a different model; the response was not accepted.");
   return result;
 }

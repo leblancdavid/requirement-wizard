@@ -62,14 +62,11 @@ try {
   await page.goto(app.origin);
   const permission = page.getByRole("region", { name: "Additional review permission", exact: true });
   await expect(permission).toBeVisible(); await expect(permission).toContainText("additional AI usage");
-  await page.locator(".queue-header").getByRole("button", { name: "Review saved responses", exact: true }).click();
-  assert.equal(allowances, 0, "Ordinary Continue cannot renew exhausted usage");
-  await expect(permission).toBeVisible();
   await expect(permission.getByText("Details", { exact: true })).toBeVisible();
   await permission.getByRole("button", { name: "Not now", exact: true }).click();
   assert.equal(allowances, 0); await expect(permission).toContainText("Review is paused");
-  await permission.getByRole("button", { name: "Review permission", exact: true }).click();
-  await permission.getByRole("button", { name: "Continue review", exact: true }).click();
+  await page.reload(); await expect(permission).toBeVisible(); assert.equal(allowances, 0, "Reload is not review consent");
+  await page.locator(".queue-header").getByRole("button", { name: "Review saved responses", exact: true }).click();
   await expect(permission).toHaveCount(0); assert.equal(allowances, 1);
   await page.getByRole("button", { name: "Resolve saved-answer conflict", exact: true }).click();
   const conflict = page.getByRole("region", { name: "Resolve conflicting saved answers", exact: true });

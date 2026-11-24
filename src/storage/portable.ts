@@ -16,6 +16,7 @@ import { definitionTaskSchema } from "../core/definition-assessment.js";
 import { readinessQuestionTaskSchema } from "../core/readiness-questions.js";
 import { readinessWorkSchema } from "../core/readiness-stages.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
+import { savedResponseResolutionSchema } from "../core/submission-resolution.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, answerGroupClarifications } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey, definitionAssessmentEvidenceIDs } from "../core/definition-identity.js";
@@ -82,9 +83,10 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   refinementSnapshot: (revision: number) => DecisionEvidenceProject = snapshot, profile?: ContinuationProfile,
   options: { transferJobs?: boolean } = {}): Continuation {
   const started = performance.now();
-  const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending");
+  const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending" || !!s.resolutions?.length);
   const waitingIDs = new Set(waiting.map((s) => s.id));
   const linked = new Set(waiting.flatMap((s) => [s.jobID, s.overlapFollowup?.discoveryJobID, ...s.overlapFollowup?.pairs.map((p) => p.jobID) ?? []]).filter(Boolean));
+  for (const item of waiting) for (const resolution of item.resolutions ?? []) linked.add(resolution.blockedJobID);
   const selected = new Map<string, Job>();
   const requirements = new Map(project.requirements.map((r) => [r.id, r]));
   const refinementCurrent = refinementCheckCurrentMatcher(project);
@@ -104,6 +106,11 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.submissionWork?.reconciliation) {
       linked.add(job.submissionWork.reconciliation.sourceJobID); linked.add(job.submissionWork.reconciliation.clarificationJobID);
     }
+    if (job.submissionWork?.transportRecovery) {
+      linked.add(job.submissionWork.transportRecovery.jobID); linked.add(job.submissionWork.transportRecovery.failedJobID);
+    }
+    if (job.submissionWork?.supportRecovery) linked.add(job.submissionWork.supportRecovery.sourceJobID);
+    if (job.submissionWork?.humanResolution) linked.add(job.submissionWork.humanResolution.sourceJobID);
     if (job.submissionWork?.draftRepair) {
       linked.add(job.submissionWork.draftRepair.sourceJobID);
       if (job.submissionWork.draftRepair.clarificationJobID) linked.add(job.submissionWork.draftRepair.clarificationJobID);
@@ -456,7 +463,11 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => !!j.answerGroupWork?.proposalRead || !!j.discoveryMetrics?.answerIntegration?.cohortSearch) ? 58
+  const sharedFormat = project.sources.some(s => !!s.savedResponseResolution) || continuation?.submissions.some(s => !!s.resolutions?.length) || continuation?.jobs.some(j => !!j.submissionWork?.humanResolution) ? 62
+    : continuation?.jobs.some(j => !!j.submissionWork?.draftRepair?.contextPolicy) ? 61
+    : continuation?.jobs.some(j => !!j.submissionWork?.supportPolicy || !!j.submissionWork?.supportRecovery) ? 60
+    : continuation?.jobs.some(j => !!j.submissionWork?.transportRecovery) ? 59
+    : continuation?.jobs.some(j => !!j.answerGroupWork?.proposalRead || !!j.discoveryMetrics?.answerIntegration?.cohortSearch) ? 58
     : continuation?.jobs.some(j => !!j.answerGroupWork?.scopePolicy) ? 57
     : requiresSeparateAnswerAuthority(project, continuation) ? 56
     : continuation?.jobs.some(j => j.submissionWork?.proposalRead || j.submissionWork?.draftRepair?.policy === "invalid-scoped-output-v1") ? 55
@@ -602,8 +613,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(58), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–58 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(62), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–62 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -640,7 +651,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   const rawContinuation = read("continuation.json");
   if (rawContinuation?.formatVersion === 2 && state.formatVersion < 48) throw new Error("Segmented continuation requires portable state format 48. Saved work was not overwritten.");
   const continuation = z.object({ formatVersion: z.literal(1), jobs: z.array(portableJobSchema).max(10000),
-    submissions: z.array(z.object({ id: z.string(), projectID: z.literal(project.id), auto: z.literal(false), status: z.enum(["queued", "saved", "completed", "needs-attention", "superseded"]) }).passthrough()),
+    submissions: z.array(z.object({ id: z.string(), projectID: z.literal(project.id), auto: z.literal(false), status: z.enum(["queued", "saved", "completed", "needs-attention", "superseded"]),
+      resolutions: z.array(savedResponseResolutionSchema).max(64).optional() }).passthrough()),
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(decodeContinuationParts(files, rawContinuation)) as Continuation;
@@ -648,6 +660,14 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     throw new Error("Separate question targets and cross-feature answer permissions require portable state format 56. Saved work was not overwritten.");
   if (state.formatVersion < 57 && continuation?.jobs.some(j => !!j.answerGroupWork?.scopePolicy))
     throw new Error("Per-answer scoped shared permissions require portable state format 57. Saved work was not overwritten.");
+  if (state.formatVersion < 62 && (project.sources.some(s => !!s.savedResponseResolution) || continuation?.submissions.some(s => !!s.resolutions?.length) || continuation?.jobs.some(j => !!j.submissionWork?.humanResolution)))
+    throw new Error("Saved-response human decisions require portable state format 62. Saved work was not overwritten.");
+  if (state.formatVersion < 61 && continuation?.jobs.some(j => !!j.submissionWork?.draftRepair?.contextPolicy))
+    throw new Error("Target-support corrective review requires portable state format 61. Saved work was not overwritten.");
+  if (state.formatVersion < 60 && continuation?.jobs.some(j => !!j.submissionWork?.supportPolicy || !!j.submissionWork?.supportRecovery))
+    throw new Error("Original target support requires portable state format 60. Saved work was not overwritten.");
+  if (state.formatVersion < 59 && continuation?.jobs.some(j => !!j.submissionWork?.transportRecovery))
+    throw new Error("Saved-response transport recovery requires portable state format 59. Saved work was not overwritten.");
   if (state.formatVersion < 58 && continuation?.jobs.some(j => !!j.answerGroupWork?.proposalRead || !!j.discoveryMetrics?.answerIntegration?.cohortSearch))
     throw new Error("Scoped shared proposal schedules and cohort diagnostics require portable state format 58. Saved work was not overwritten.");
   if (state.formatVersion < 55 && continuation.jobs.some(j => j.submissionWork?.proposalRead || j.submissionWork?.draftRepair?.policy === "invalid-scoped-output-v1"))

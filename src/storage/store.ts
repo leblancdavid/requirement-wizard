@@ -108,6 +108,9 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, submissionCitationRepair, submissionScopedRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionTransportRecoveryCandidate } from "../core/submission-stages.js";
+import { submissionSupportRecoveryCandidate, planSubmissionStages } from "../core/submission-stages.js";
+import { savedResponseConflict, savedResponseDecision, savedResponseResolutionSchema, resolutionKey, currentSavedResponseResolution, type SavedResponseChoice } from "../core/submission-resolution.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
 import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview,adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
 import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-group.js";
@@ -216,6 +219,7 @@ function readStoredSubmission(payload: string): Submission {
     if (item.input.type !== "answer" || item.input.questionID !== item.answerScope.questionID) throw new Error("Saved answer scope does not match its input; no data was overwritten.");
   }
   if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
+  if (item.resolutions !== undefined) z.array(savedResponseResolutionSchema).max(64).parse(item.resolutions);
   if (item.decisionBasis !== undefined) decisionBasisSchema.parse(item.decisionBasis);
   if (item.appliedRevision !== undefined) z.number().int().min(2).parse(item.appliedRevision);
   return item;
@@ -952,6 +956,11 @@ export class ProjectStore {
   }
 
   saveSubmission(item: Submission) {
+    if (item.resolutions !== undefined) {
+      z.array(savedResponseResolutionSchema).max(64).parse(item.resolutions);
+      if (Buffer.byteLength(JSON.stringify(item.resolutions)) > 2097152)
+        throw new OperationConflictError("This saved response has reached its decision-history size limit. Original decisions were retained.");
+    }
     if (item.answerScope !== undefined) {
       answerScopeSchema.parse(item.answerScope);
       if (item.input.type !== "answer" || item.input.questionID !== item.answerScope.questionID) throw new Error("Answer scope does not match its input.");
@@ -2754,7 +2763,7 @@ export class ProjectStore {
     if (source.projectID !== project.id || !work || !submissionQuestionBlock(source) || !item || item.archivedAt
       || !["saved", "needs-attention"].includes(item.status) || !latest || JSON.stringify(latest.submissionWork) !== JSON.stringify(work))
       throw new Error("Saved-response clarification no longer matches the latest retained blocker. Original work was preserved.");
-    const materials = submissionMaterials(project, item, work.task);
+    const materials = submissionMaterials(project, item, work.task, undefined, work.supportPolicy);
     if (!recoverSubmissionPermissions(materials, structuredClone(work), source).blocked)
       throw new Error("This saved-response blocker needs processing recovery, not a new product question.");
     return item;
@@ -2766,10 +2775,10 @@ export class ProjectStore {
     const source = this.getJob(repair.sourceJobID), original = source.submissionWork;
     const expected = source.projectID === project.id && original
       && (repair.policy === "invalid-requirement-evidence-v1"
-        ? submissionCitationRepair(submissionMaterials(project, item, original.task), original, source)
+        ? submissionCitationRepair(submissionMaterials(project, item, original.task, undefined, original.supportPolicy), original, source)
         : repair.policy === "invalid-scoped-output-v1"
-        ? submissionScopedRepair(submissionMaterials(project, item, original.task), original, source)
-        : submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.submissionRecoveryJobs(project.id, item.id)));
+        ? submissionScopedRepair(submissionMaterials(project, item, original.task, undefined, original.supportPolicy), original, source)
+        : submissionDraftRepair(submissionMaterials(project, item, original.task, undefined, original.supportPolicy), original, this.submissionRecoveryJobs(project.id, item.id)));
     if (canonicalJSON(expected) !== canonicalJSON(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
       || JSON.stringify(original.task) !== JSON.stringify(work.task)
       || JSON.stringify(work.receipts.slice(0, repair.fromReceipt)) !== JSON.stringify(original.receipts))
@@ -3048,6 +3057,127 @@ export class ProjectStore {
     this.saveJob(job); return changed;
   }
 
+  private submissionTransportFailure(job: Job): string | undefined {
+    const w = job.submissionWork;
+    if (!w || !submissionTransportRecoveryCandidate(w) || !job.model.connectionID || !["failed", "interrupted", "cancelled"].includes(job.status)) return;
+    const row = this.db.prepare(`SELECT id FROM jobs WHERE project_id = ?
+      AND json_extract(payload, '$.submissionWork.submissionID') = ?
+      AND json_extract(payload, '$.submissionWork.task') = ?
+      AND json_array_length(payload, '$.submissionWork.allowanceExtensions') = 1
+      AND json_extract(payload, '$.submissionWork.allowanceExtensions[0].jobID') = ?
+      AND json_extract(payload, '$.submissionWork.allowanceExtensions[0].atRevision') = ?
+      AND json_extract(payload, '$.submissionWork.allowanceExtensions[0].step') = 0
+      AND json_extract(payload, '$.submissionWork.attempts') = 8 AND json_array_length(payload, '$.submissionWork.receipts') = 0
+      AND json_extract(payload, '$.model.connectionID') = ? AND json_extract(payload, '$.model.modelID') = ?
+      AND json_extract(payload, '$.status') = 'failed'
+      AND json_extract(payload, '$.diagnostic') = ? ORDER BY rowid DESC LIMIT 1`).get(job.projectID, w.submissionID, JSON.stringify(w.task), w.allowanceExtensions![0]!.jobID, w.allowanceExtensions![0]!.atRevision,
+        job.model.connectionID, job.model.modelID, "ChatGPT response request did not return an event stream; no result was accepted.") as { id: string } | undefined;
+    return row?.id;
+  }
+  submissionConflictView(project: Project, job: Job) {
+    if (!job.submissionWork || job.status !== "failed") return;
+    const item = this.submissions(project.id).find(s => s.id === job.submissionWork!.submissionID);
+    if (!item) return;
+    const view = savedResponseConflict(project, item, job);
+    if (!view) return;
+    // Keep an already-published clarification on its original answer path. Do
+    // not offer two competing places to decide or discard a queued answer.
+    if (this.submissionRecoveryJobs(project.id, item.id).some(j => {
+      const task = j.context?.readinessQuestions;
+      return j.status === "completed" && task?.format === 3 && task.blockedJobID === job.id
+        && j.result?.questions.some(q => project.questions.some(current => current.status !== "retired" && current.text === q.text
+          && canonicalJSON(current.evidenceIDs) === canonicalJSON(q.evidenceIDs)));
+    })) return;
+    try {
+      const w = job.submissionWork, original = this.get(project.id, job.expectedRevision);
+      // A dated blocker can be resolved after unrelated edits, never by treating
+      // its old verification as current. The cited rules/input must be unchanged;
+      // the new decision will trigger fresh verification of ALL current evidence.
+      for (const r of view.requirements) if (canonicalJSON(project.requirements.find(x => x.id === r.id)) !== canonicalJSON(original.requirements.find(x => x.id === r.id))) return;
+      for (const s of [...view.sources, { id: view.input.sourceID }]) {
+        const current = project.sources.find(x => x.id === s.id), before = original.sources.find(x => x.id === s.id);
+        if (canonicalJSON(current) !== canonicalJSON(before)) return;
+        if (current?.questionID && canonicalJSON(project.questions.find(q => q.id === current.questionID)) !== canonicalJSON(original.questions.find(q => q.id === current.questionID))) return;
+      }
+      if (!replaySubmissionStages(submissionMaterials(original, item, w.task, undefined, w.supportPolicy), w).blocked) return;
+      return view;
+    } catch { return; } // Stale/incomplete evidence cannot authorize a human-resolution write.
+  }
+
+  resolveSavedResponse(projectID: string, revision: number, requestID: string, jobID: string, conflictKey: string, choice: SavedResponseChoice) {
+    return this.db.transaction(() => {
+      const items = this.submissions(projectID), priorItem = items.find(s => s.resolutions?.some(r => r.id === requestID));
+      const prior = priorItem?.resolutions?.find(r => r.id === requestID);
+      if (prior) {
+        if (prior.blockedJobID !== jobID || prior.conflictKey !== conflictKey || canonicalJSON(prior.choice) !== canonicalJSON(choice))
+          throw new OperationConflictError("This decision request was already used for different input. Refresh before saving.");
+        return { saved: true as const, reused: true, submissionID: priorItem!.id, resolution: prior };
+      }
+      this.assertNoExecution(projectID);
+      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before resolving the saved response.");
+      const project = this.get(projectID);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      const job = this.getJob(jobID), view = this.submissionConflictView(project, job);
+      const item = items.find(s => s.id === view?.submissionID);
+      if (!view || !item || view.key !== conflictKey || this.latestSubmissionWorkJob(projectID, item.id, "unused")?.id !== jobID)
+        throw new OperationConflictError("The saved conflict changed. Refresh its original evidence before deciding.");
+      const decision = savedResponseDecision(view, choice), priorResolution = currentSavedResponseResolution(project, item);
+      const previous = priorResolution && canonicalJSON([...priorResolution.requirementIDs].sort()) === canonicalJSON([...decision.requirementIDs].sort()) ? priorResolution : undefined;
+      const sourceID = randomUUID();
+      const resolution = savedResponseResolutionSchema.parse({ format: 1, policy: "saved-response-decision-v1", id: requestID,
+        blockedJobID: job.id, blockedWorkKey: resolutionKey(job.submissionWork), conflictKey, sourceID, atRevision: revision + 1,
+        ...decision, ...(previous ? { supersedesResolutionID: previous.id } : {}) });
+      if ((item.resolutions?.length ?? 0) >= 64) throw new OperationConflictError("This saved response has reached its decision-history limit. Original decisions were retained.");
+      this.mutate(projectID, revision, "Human resolved a saved-response conflict", p => {
+        p.sources.push({ id: sourceID, kind: "note", text: decision.text,
+          epicID: p.requirements.find(r => r.id === decision.requirementIDs[0])!.epicID,
+          savedResponseResolution: { format: 1, policy: "saved-response-decision-v1", id: resolution.id, submissionID: item.id,
+            blockedJobID: job.id, requirementIDs: decision.requirementIDs, supersededRecordIDs: decision.supersededRecordIDs },
+          ...(decision.requirementIDs.length === 1 ? { requirementID: decision.requirementIDs[0]! } : {}),
+          ...(previous ? { supersedes: previous.sourceID } : {}) });
+        p.roundChanges = ["Saved an explicit human rule for a blocked response. Conflicting outcomes are superseded only within this review; original records and paid work remain in history. Requirement changes still need verification."];
+      });
+      (item.resolutions ??= []).push(resolution); item.status = "saved";
+      delete item.contextBlock;
+      item.diagnostic = "Your conflict decision is saved. Continue review to check the original answer against it.";
+      this.saveSubmission(item);
+      return { saved: true as const, reused: false, submissionID: item.id, resolution };
+    }).immediate();
+  }
+
+  assertSubmissionResolution(project: Project, item: Submission, work: SubmissionWork) {
+    if (!work.humanResolution) return;
+    const marker = work.humanResolution, resolution = currentSavedResponseResolution(project, item);
+    const source = this.getJob(marker.sourceJobID), original = source.submissionWork;
+    if (!resolution || resolution.id !== marker.resolutionID || resolution.sourceID !== marker.sourceID
+      || resolution.blockedJobID !== source.id || source.projectID !== project.id || !original
+      || resolution.blockedWorkKey !== resolutionKey(original)
+      || canonicalJSON(work.task) !== canonicalJSON({ ...original.task, recordIDs: [...new Set([...original.task.recordIDs, marker.sourceID])] }))
+      throw new Error("Saved-response resolution does not match its original blocked task and human decision.");
+  }
+  private submissionSupportRecovery(job: Job, project: Project) {
+    const w = job.submissionWork;
+    if (!w || w.supportPolicy || w.supportRecovery || w.receipts.length || w.attempts < 4 || w.attempts > 12
+      || job.expectedRevision !== project.revision || !["failed", "interrupted", "cancelled"].includes(job.status)) return;
+    const item = this.submissions(project.id).find(s => s.id === w.submissionID);
+    if (!item || item.conflict || item.archivedAt) return;
+    try {
+      const m = submissionMaterials(project, item, w.task);
+      if (!submissionSupportRecoveryCandidate(m, w) || replaySubmissionStages(m, w).blocked) return;
+      planSubmissionStages(submissionMaterials(project, item, w.task, undefined, "target-originals-v1"), { proposalFirst: true });
+      return { format: 1 as const, policy: "target-originals-v1" as const, sourceJobID: job.id,
+        originalMaterialKey: w.materialKey, originalPlanKey: w.planKey, priorAttempts: w.attempts, additionalRequests: 4 as const, atRevision: project.revision };
+    } catch { return; } // Unknown/missing/oversized evidence is not recovery authority.
+  }
+  submissionAllowanceForJob(job: Job, project?: Project): NonNullable<Job["submissionAllowance"]> {
+    if (!job.submissionWork) throw new Error("Saved-response work is missing.");
+    const w = job.submissionWork;
+    if (!w.supportPolicy && !w.supportRecovery && !w.receipts.length && w.attempts >= 4 && w.attempts <= 12
+      && this.submissionSupportRecovery(job, project ?? this.get(job.projectID)))
+      return { ...submissionAllowance(w), canExtend: true, recovery: "target-originals-v1" };
+    return submissionAllowance(job.submissionWork, !!this.submissionTransportFailure(job));
+  }
+
   /** Explicit extra allowance, never a reset or an automatic retry. Metadata-only
    * transaction binds consent to the latest exhausted task and current evidence. */
   extendSubmissionAllowance(projectID: string, revision: number, submissionID: string, jobID: string) {
@@ -3060,11 +3190,14 @@ export class ProjectStore {
       const latest = [...this.jobs(projectID)].reverse().find((j) => j.submissionWork?.submissionID === submissionID);
       if (!item || item.conflict || item.archivedAt || resolvedReviewAttempts(project, submissions).has(item.id) || item.status !== "needs-attention" || item.jobID !== jobID
         || job.projectID !== projectID || job.id !== latest?.id || job.expectedRevision !== revision
-        || !["failed", "interrupted", "cancelled"].includes(job.status) || !job.submissionWork || !submissionAllowance(job.submissionWork).canExtend)
+        || !["failed", "interrupted", "cancelled"].includes(job.status) || !job.submissionWork || !this.submissionAllowanceForJob(job).canExtend)
         throw new OperationConflictError("This saved step cannot receive another allowance. Refresh its current state; no requests were granted.");
-      const work = job.submissionWork, material = submissionMaterials(project, item, work.task);
+      const work = job.submissionWork, material = submissionMaterials(project, item, work.task, undefined, work.supportPolicy);
       if (replaySubmissionStages(material, work).blocked) throw new OperationConflictError("Resolve the saved evidence conflict before requesting more allowance.");
-      (work.allowanceExtensions ??= []).push({ step: submissionAllowance(work).step, additionalRequests: 4, atRevision: revision, jobID });
+      const supportRecovery = this.submissionSupportRecovery(job, project), failedJobID = this.submissionTransportFailure(job);
+      if (supportRecovery) work.supportRecovery = supportRecovery;
+      else if (failedJobID) work.transportRecovery = { format: 1, policy: "headerless-sse-v1", step: 0, priorAttempts: 8, additionalRequests: 4, atRevision: revision, jobID, failedJobID };
+      else (work.allowanceExtensions ??= []).push({ step: submissionAllowance(work).step, additionalRequests: 4, atRevision: revision, jobID });
       submissionWorkSchema.parse(work); this.saveJob(job);
     }).immediate();
   }
@@ -3290,6 +3423,7 @@ export class ProjectStore {
               throw new Error("Staged saved-response publication requires its exclusive saved task.");
             validateSubmissionPublication(project, item, job, result);
             this.assertSubmissionDraftRepair(project, item, job.submissionWork);
+            this.assertSubmissionResolution(project, item, job.submissionWork);
             if (job.submissionWork.reconciliation) {
               const provenance = job.submissionWork.reconciliation, source = this.getJob(provenance.sourceJobID);
               const expected = source.submissionWork && submissionReconciliation(project, item.id, source.submissionWork, this.submissionRecoveryJobs(project.id, item.id));

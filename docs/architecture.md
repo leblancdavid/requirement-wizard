@@ -1,5 +1,20 @@
 # Architecture outline
 
+New scoped no-question saved-answer corrections can use exact target/support-first
+context if reusing a rejected nearly full batch would exceed the input budget after
+adding repair metadata. Original receipts and finite correction limits remain intact;
+all other originals remain requestable and every original batch verifies the replacement
+draft. SQLite 90 / conditional portable 61 fence the optional corrective context policy.
+See [replay, migration and verification](migrations.md#bounded-target-first-corrective-review-sqlite-89--90-conditional-portable-61).
+
+Saved-response material preparation now uses an explicit `target-originals-v1`
+policy where background decision projection omitted target-owned historical source
+links. Exact bodies become mandatory/requestable before proposal/check dispatch;
+acceptance and publication safeguards are not weakened. Unanswered adoption retains
+the original ledger, and a locally proven exhausted inventory defect has one bounded
+Review-authorized correction. SQLite 89 / conditional portable 60 fence these saved
+markers. See [provenance, compatibility and verification](migrations.md#exact-original-target-support-sqlite-88--89-conditional-portable-60).
+
 Desktop continuity now keeps bounded ID-only last-project/Recents state in a
 data-root-owned file, accessed through fixed trusted-frame preload methods rather
 than relying on the loopback port's Chromium localStorage. Project-aware default-root

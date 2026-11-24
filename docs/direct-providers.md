@@ -1,5 +1,169 @@
 # Direct provider migration
 
+## Later saved-answer support-inventory failure (2026-11-24)
+
+The newer exports show completed multi-request reviews, then a returned analysis
+rejected because a changed target lacked all supporting sources in its request.
+This is distinct from the earlier headerless SSE transport failure. Read-only local
+inspection proved seven target-owned historical reviews were missing from the
+mandatory/requestable inventory. The app now supplies exact original support and
+retains strict acceptance/verification rather than repeatedly asking the model for
+an impossible lookup. Exhausted affected work has one bounded correction included
+in Review, preserving every earlier attempt; no sign-in, provider switch or automatic
+replay is needed. See [the selector policy and upgrade contract](migrations.md#exact-original-target-support-sqlite-88--89-conditional-portable-60).
+
+## One-click review usage (2026-11-24)
+
+The user requested that clicking Review imply permission for that review's AI usage.
+Eligible ordinary and streaming-recovery extensions are now included in the existing
+Review/Continue review request; there is no separate Allow action. The UI retains
+usage disclosure and the backend still requires exact-job/revision-bound consent.
+This changes the interaction, not the finite caps, old attempts or provenance. Viewing
+screens/reloading never grants work. See [current browser behavior](browser-workspace.md#review-click-includes-bounded-ai-usage-2026-11-24)
+and [compatibility](migrations.md#review-action-implies-its-eligible-bounded-allowance-2026-11-24).
+
+## Explicit retry consent after the headerless-stream fix (2026-11-24)
+
+The exhausted eight-attempt answer remains saved rather than receiving an automatic
+refund. Eligible tasks now offer **Allow 4 recovery requests**, a one-time extension
+to twelve total on that unanswered step, bound to its original streaming failure and
+ordinary allowance consent. Current evidence still validates, including after a
+compatible no-receipt replan. New semantic failures do not become recovery authority.
+The old eight attempts and failed diagnostic remain recorded; the grant and source
+failure are linked in a strictly versioned recovery object. No background migration,
+reload, account change or transport fix alone authorizes another request. See
+[migration/portable compatibility](migrations.md#explicit-recovery-of-headerless-stream-attempts-sqlite-87--88-portable-59)
+and [browser action](browser-workspace.md#recover-a-review-exhausted-by-the-streaming-defect-2026-11-24).
+
+## Headerless direct event streams (2026-11-24)
+
+The newer supplied log export contains five revision-4050 response-format failures
+after the plan-recovery fix; a sixth run was still running at export. The broad
+unfinished step reached eight spent attempts, with no accepted stage. Old generic
+and plan-mismatch entries remain historical evidence, not new instances of those
+blockers. Repeating processing cannot diagnose or repair the transport issue.
+
+With separate explicit consent, one tiny 60-second-bounded diagnostic request used
+the saved direct `gpt-6.1-sol` selection, without retries or project changes. Catalog
+and Responses returned HTTP 200. The Responses **Content-Type header was absent**,
+but private bounded inspection read a 17,465-byte SSE body containing normal response
+events through `response.completed`. Only fixed structural categories/event names,
+status and timings were printed; no raw body, credentials or returned prose was saved.
+The earlier header-only rejection therefore has a concrete reproduced adapter cause.
+It does not reconstruct the bodies of every historical failed request.
+
+The adapter now consumes headerless responses only under strict SSE line framing
+and all existing completed-event, exact-model, size, cancellation, JSON-output and
+scoped no-tools/inventory checks. Explicit non-SSE Content-Type values still reject;
+there is no ordinary JSON-output fallback, alternate endpoint/model or second request.
+Headerless HTML, JSON, incomplete/failed streams, mismatched models/output inventories
+and observable scoped tool use reject. Historical errors/attempts are never rewritten
+or refunded automatically, even if their discarded responses may have completed.
+
+Verification: type check and 59 provider/credential/scoped/mixed-adapter tests passed,
+including headerless SSE discovery/help, stale-revision handling and negative stream
+cases. Diff check passed. The diagnostic call preceded the fix and its body was not
+retained for replay; **no second live verification call was made**. Live end-to-end
+project processing remains unverified, and the broad eight-attempt step remains
+exhausted. No new allowance, automatic retry or project restart was authorized by
+this change. Full browser tests were not rerun for this backend-only fix.
+
+## Direct failure diagnostics (2026-11-24)
+
+The supplied metadata export and read-only local diagnostic fields show four failed
+direct adapter attempts at revision 4049, then a pre-dispatch rejection because the
+unfinished saved-response step spent its four-request allowance. All five saved job
+selections match the project's current direct connection/model. This does not identify
+which same-email registration is healthy or prove provider acceptance. The older
+revision-3694 workspace-publication measurement is separate evidence.
+
+The four old failures contain only the generic connection message: the previous
+adapter replaced non-`ProviderError` exceptions with sign-in advice. Their original
+cause cannot be recovered from those diagnostics. Context size/timing alone does not
+establish an authorization, context-limit or timeout cause.
+
+New failures now identify **saved credentials**, **model catalog**, **response request**,
+**response stream**, or **output JSON**. Fixed categories distinguish invalid JSON,
+unexpected data shape, and otherwise transport/local-processing failure; safe existing
+HTTP status, stream-budget and completion errors are preserved. Provider bodies,
+arbitrary exception messages/causes, parser inputs, credentials and identifiers are
+never copied into the new diagnostics. Cancellation/deadlines retain the existing
+connection-manager behavior. Progress before catalog/request work no longer claims
+that a model request was already sent. This is diagnostic hardening, **not a verified
+fix for the reported live failure**.
+
+No old job, original evidence, spent attempt, project selection or allowance is rewritten.
+There is no automatic retry, reauthorization, fallback or budget extension. Before
+retrying paid project work, diagnose the selected connection separately; a tiny live
+connection check still consumes provider allowance and needs explicit consent. Resuming
+the exhausted original step requires the user's **Allow 4 more requests** action.
+The metadata-only export continues to omit diagnostic prose; inspect the new failure
+in the app's Logs instead. Live direct inference remains unqualified.
+
+Verification: TypeScript check and 16 deterministic provider/credential tests passed,
+including stage/redaction cases, malformed catalog/event/output JSON, HTTP failure,
+transport/stream interruption, stream budget, cancellation, no retries/fallback, and
+preservation of original project work and an older expired grant after failed refresh
+over reopen. No live provider request or allowance extension was performed.
+The subsequent combined provider, scoped/mixed-adapter and server regression run
+passed 86 tests; type and diff checks also passed. The full browser suite was not
+rerun for this backend diagnostic-only change.
+
+With explicit user consent, one bounded 60-second connection probe then used the
+unchanged saved direct `gpt-6.1-sol` selection. It failed in about 2.3 seconds:
+model catalog HTTP 200, followed by exactly one Responses request HTTP 200 whose
+content type was not `text/event-stream`. The adapter rejected it before consuming
+model output. No refresh request was needed. Only stage/status/timing/stream-header
+metadata was retained; the returned body and exact non-stream content type were not
+captured, so this does not explain the upstream reason or establish the cause of all
+four historical failures. Official models/inference documentation still requires
+`store:false`, `stream:true` and terminal `response.completed`; those request flags
+were already present. No JSON fallback, automatic retry, alternate endpoint/model,
+project write or allowance extension was performed. Completed direct inference remains
+unqualified. Further live investigation requires separate consent.
+
+## Saved connection management (2026-11-24)
+
+The user reported that the first saved direct ChatGPT registration failed model
+listing while a second registration worked. This is a **user-reported catalog
+observation**, not an independently instrumented sign-in, refresh or inference
+qualification. No registration is marked obsolete, merged by email or removed based
+on that report. Separate issued client IDs/grants remain distinct even for one email.
+
+Under **Settings → Connected accounts**, each saved registration now shows its
+distinct label ending plus **Used by this project** and/or **Selected in picker**
+where applicable. An unmarked registration is not declared globally unused: other
+projects may still reference it. **Refresh connections** reloads saved metadata
+without starting inference or changing the selected account/model.
+
+**Remove connection…** opens a confirmation for that exact registration. A fresh
+unchecked acceptance and **Confirm removal** are required; **Keep connection** makes
+no request, and opening another confirmation resets acceptance. The warning explains
+that removal ends that registration's renewable session and removes its local direct
+credentials, not other saved registrations or project history. Current-project and
+picker-selected removals have explicit warnings. Existing saved project selections
+are not rewritten, so removing a referenced account leaves a missing connection until
+the user explicitly saves a replacement; no OpenCode/account fallback occurs.
+
+The backend reuses the existing authenticated `connections/disconnect` contract:
+cancel only this service's work for the target ID, revoke that registration's renewable
+session, then remove its local credentials. Failed revocation retains credentials and
+requires explicit retry; there is **no local-only-forget fallback** in this flow.
+OpenCode and SDK-helper credentials remain separate and untouched. No app-owned
+account label/schema change or automatic cleanup runs on upgrade.
+
+Verification: dedicated deterministic connection-management and existing model-picker
+browser checks passed, including same-email records, confirmation/cancel/reset, failure
+retention, exact old-record removal, current-account warning, refresh, missing-selection
+reload, mobile layout and unchanged project history. Seven provider/credential tests
+and 29 server regressions passed; a new synthetic grant test preserves the other
+registration byte-for-field over repeated reopen and never revokes the wrong client.
+Type/UI build and diff checks passed, as did the full `npm run test:browser` command
+including all posttests. Its older Disconnect-button assertion was updated to
+exercise the new explicit confirmation flow before the successful full rerun.
+No real removal, model call or token import was performed. Actual provider revocation
+of the user's old registration remains an explicit user action, not a test result.
+
 The later [SDK-helper authentication pilot](embedded-helper-auth.md) is a separate
 explicitly consented coding-engine preparation path. It never imports this direct
 store's credentials. SDK credentials use owner-protected plaintext SQLite, not this
@@ -119,10 +283,13 @@ Settings is available before creating a project as well as inside a project.
    **Explore next gaps** is disabled until pending changes are saved or discarded.
    **Discard changes** restores the saved fields without an API write/model call;
    a blocked save explains why inline.
-5. Each saved account has its own **Reconnect** and **Disconnect** actions under
-   **Connected accounts**. **Reconnect** reauthorizes that identity. **Disconnect** revokes the saved
-   renewable session before removing the connection and stops this service's active
-   requests for it. Projects retain the missing selection and do not fall back.
+5. Each saved account has its own **Reconnect** and **Remove connection…** actions
+   under **Connected accounts**. **Reconnect** reauthorizes that identity. Removal
+   requires explicit checkbox confirmation, revokes the saved renewable session
+   before removing the connection and stops this service's active requests for it.
+   Failed revocation retains the saved connection. Projects retain the missing
+   selection and do not fall back. **Refresh connections** reloads saved account
+   metadata without selecting another connection or sending inference.
 
 The header identifies direct-plan use. Settings separates current AI, draft selection
 and saved accounts, with a usage-management link and a first-sign-in confirmation remembered by

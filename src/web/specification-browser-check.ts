@@ -433,7 +433,7 @@ try {
   await expect(retained).toContainText("does not guarantee completion");
   assert.equal(calls, beforeReviewResume, "Opening the allowance confirmation cannot start requests");
   const processRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${followup.id}/process-responses`) && request.method() === "POST");
-  await retained.getByRole("button", { name: "Allow 4 more requests", exact: true }).click();
+  await retained.getByRole("button", { name: "Review saved response", exact: true }).click();
   await closeTechnicalViews(page);
   assert.deepEqual((await processRequest).postDataJSON(), { revision: followup.revision, submissionIDs: [savedReview.id], research: false,
     resumeJobID: exhaustedJob.id, additionalRequests: 4, confirmAdditionalRequests: true });

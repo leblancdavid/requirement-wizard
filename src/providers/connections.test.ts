@@ -58,7 +58,7 @@ test("browser OAuth validates a real signed fixture callback, exposes no credent
   } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("direct discovery uses the selected account, schema/revision validation, and never falls back", async () => {
+for (const contentType of [true, false]) test(`direct discovery with ${contentType ? "declared" : "headerless"} SSE uses the selected account, schema/revision validation, and never falls back`, async () => {
   const directory = await mkdtemp(join(tmpdir(), "reqwizit-direct-discovery-"));
   const credentials = new CredentialStore(directory, codec);
   await credentials.transaction(async (state) => { state.accounts.push(account); }, AbortSignal.timeout(5000));
@@ -76,7 +76,7 @@ test("direct discovery uses the selected account, schema/revision validation, an
     const output = input.input[0].content.includes("helping a human understand ONE")
       ? { explanation: "Offline means keeping work available without a network connection.", assumptions: [], followUp: null }
       : { summary: "Direct result", goals: [], actors: [], assumptions: [], questions: [{ text: "Should work be available offline?", whyItMatters: "Determines storage needs", options: [{ label: "Yes", consequence: "Local access" }, { label: "No", consequence: "Network required" }] }], requirements: [], retireQuestions: [] };
-    return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(output) })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "response", model: "fixture", status: "completed", usage: { input_tokens: 12, output_tokens: 20 } } })}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    return new Response(new TextEncoder().encode(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(output) })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "response", model: "fixture", status: "completed", usage: { input_tokens: 12, output_tokens: 20 } } })}\n\n`), contentType ? { headers: { "Content-Type": "text/event-stream" } } : undefined);
   }) as typeof fetch;
   const manager = new ConnectionManager(credentials, request);
   const service = new DiscoveryService(store, new ConnectedDiscovery(manager, { async analyze() { legacyCalls++; throw new Error("Unexpected fallback"); } }, request));
@@ -100,6 +100,41 @@ test("direct discovery uses the selected account, schema/revision validation, an
     const missing = await service.analyze(project.id, project.revision);
     assert.equal(missing.status, "failed"); assert.match(missing.diagnostic!, /disconnected/);
     assert.equal(legacyCalls, 0);
+  } finally { await manager.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("direct failures save stage diagnostics, preserve original work and credentials, and never retry or fall back", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-direct-diagnostics-"));
+  const credentials = new CredentialStore(directory, codec);
+  const expired = { ...account, expiresAt: 0 };
+  await credentials.transaction(async state => { state.accounts.push(expired); }, AbortSignal.timeout(5000));
+  const store = new ProjectStore(":memory:");
+  const project = store.create("Direct diagnostics", "Original evidence", { providerID: "openai", modelID: "fixture", connectionID: account.id });
+  let calls = 0, failRefresh = true;
+  const request = (async (url: string | URL | Request) => {
+    calls++;
+    if (String(url).endsWith("/token")) return Response.json(failRefresh ? { private: "private-refresh" }
+      : { access_token: "renewed-access", refresh_token: "renewed-refresh", token_type: "Bearer", expires_in: 3600, scope: "chatgpt.tokens.use.direct" });
+    if (String(url).endsWith("/models")) return Response.json({ models: [{ slug: "fixture", display_name: "Fixture", visibility: "list" }] });
+    return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "not JSON private-access" })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "response", model: "fixture", status: "completed" } })}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+  }) as typeof fetch;
+  const manager = new ConnectionManager(credentials, request);
+  const service = new DiscoveryService(store, new ConnectedDiscovery(manager, { async analyze() { assert.fail("No fallback"); } }, request));
+  try {
+    const refreshFailure = await service.analyze(project.id, project.revision);
+    assert.equal(refreshFailure.status, "failed");
+    assert.match(refreshFailure.diagnostic!, /saved credentials.*expected format/);
+    assert.equal(calls, 1);
+    const reopened = new CredentialStore(directory, codec);
+    assert.deepEqual(await reopened.transaction(async state => state.accounts, AbortSignal.timeout(5000)), [expired]);
+    failRefresh = false;
+    const outputFailure = await service.analyze(project.id, project.revision);
+    assert.equal(outputFailure.status, "failed");
+    assert.match(outputFailure.diagnostic!, /output JSON.*invalid JSON/);
+    assert.equal(calls, 4);
+    for (const job of store.jobs(project.id)) for (const secret of ["private-refresh", "private-access", "not JSON"]) assert.equal(job.diagnostic!.includes(secret), false);
+    assert.deepEqual(store.get(project.id), project);
+    assert.equal(store.jobs(project.id).length, 2, "Earlier failure evidence remains saved");
   } finally { await manager.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -157,5 +192,28 @@ test("connection tests cancel without accepting partial output and can run again
     manager.cancelTest(); await rejected;
     block = false;
     await manager.test(account.id, "fixture");
+  } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("removing one same-email registration revokes only that session, preserves failures and retains the other grant across reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-remove-registration-"));
+  const credentials = new CredentialStore(directory, codec);
+  const other = { ...account, id: "other-client", clientID: "other-client", accessToken: "other-access", refreshToken: "other-refresh" };
+  await credentials.transaction(async state => { state.accounts.push(account, other); }, AbortSignal.timeout(5000));
+  let fail = true, revocations = 0;
+  const manager = new ConnectionManager(credentials, (async (url: string | URL | Request, init?: RequestInit) => {
+    assert.equal(String(url), "https://auth.openai.com/api/accounts/oauth/revoke");
+    const body = new URLSearchParams(String(init?.body));
+    assert.equal(body.get("client_id"), account.id); assert.equal(body.get("token"), account.refreshToken);
+    revocations++; return new Response(null, { status: fail ? 503 : 200 });
+  }) as typeof fetch);
+  try {
+    await assert.rejects(manager.disconnect(account.id), /HTTP 503/);
+    assert.deepEqual(await credentials.transaction(async state => state.accounts, AbortSignal.timeout(5000)), [account, other]);
+    fail = false; await manager.disconnect(account.id);
+    assert.equal(revocations, 2);
+    await assert.rejects(manager.disconnect("missing-registration"), /disconnected/); assert.equal(revocations, 2);
+    const reopened = new CredentialStore(directory, codec);
+    for (let i = 0; i < 2; i++) assert.deepEqual(await reopened.transaction(async state => state.accounts, AbortSignal.timeout(5000)), [other]);
   } finally { await manager.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,5 +1,127 @@
 # Browser workspace, epics, and estimated completeness
 
+## Resolve a saved-answer conflict inline (2026-11-24)
+
+When a retained failed review identifies both exact conflicting requirements and
+earlier human input, the workspace shows **A saved answer needs your decision**.
+The card displays the original current answer, requirement wording/acceptance and
+earlier input. Nothing is preselected. Choose the existing requirement, an earlier
+answer, or write a different rule/exception, then **Save decision & continue review**.
+That action includes bounded AI-usage permission; there is no separate Allow step.
+Review actions focus an available card instead of repeating the rejected work.
+
+The decision is a new human note scoped to the named requirements, not a replacement
+of the entire earlier answer or a product choice made by the app. Original records,
+rejected drafts, completed calls and spent attempts remain saved. A fresh plan must
+check all current mandatory evidence; old checks do not verify changed intent. Later
+continuation retains the fresh plan's accepted stages. If starting review fails, the
+saved decision remains available with **Continue review**. Retrying the same save
+request cannot create another decision or dispatch another review.
+
+Custom text survives choice changes and failed saves while the card stays mounted;
+unsaved text is not durable across a page reload. Saved decisions survive reload
+without automatically making requests. Existing published clarification questions
+keep their original answer path rather than competing with a new inline card.
+Unchanged cited records allow a dated blocker to be resolved after unrelated edits;
+changed cited evidence or an unavailable original snapshot prevents that write.
+Technical/malformed blockers without exact conflicting originals do not get choices
+invented from diagnostic prose. See [migration compatibility](migrations.md#explicit-saved-response-decisions-sqlite-90--91-conditional-portable-62).
+
+`npm run test:browser:saved-conflict` checks the card with a deterministic adapter
+(including mobile, failed saves, duplicate-save handling and reload). Live model
+completion of this resolution path remains unqualified; no game policy was selected
+and no real project decision was saved during implementation.
+
+## Corrective review exceeded the input budget (2026-11-24)
+
+A near-full verification packet can fit initially but become oversized when a later
+corrective review adds instructions and a clarification conclusion. New scoped
+corrections now use exact target/support-first preparation only when that old layout
+does not fit. Other original evidence remains requestable, and the replacement draft
+still requires all mandatory verification batches before publication. The 96,000
+character limit, original answer, receipts and spent attempts are unchanged.
+
+Restart the updated app and resume the saved review; no repeated answer or separate
+usage-grant action is needed for this preparation fix. Previously accepted stages
+are retained. Oversized indispensable target support still stops safely. See
+[reproduction, compatibility and checks](migrations.md#bounded-target-first-corrective-review-sqlite-89--90-conditional-portable-61).
+
+## Saved answer blocked by missing original target support (2026-11-24)
+
+The app now retains target-owned original supporting records in a saved answer's
+evidence inventory even when a background current-decision projection would omit
+them as another requirement's superseded review history. They remain historical
+evidence, not current decision authority. A fitting scoped proposal receives the
+complete target support before every mandatory evidence check; no source is silently
+summarized or waived. Existing accepted work keeps its original exact policy.
+
+For an exhausted unanswered task affected by this locally proven omission, the
+notice reads **Continue review with original supporting records**. **Continue review**
+includes one bounded four-request correction under the existing one-click usage
+decision. Earlier attempts remain counted (up to sixteen total if twelve were already
+spent); this correction cannot renew or override semantic rejection. No separate
+Allow action or repeated human answer is required. Reload/startup do not spend or
+grant usage. See [compatibility, reproduced cause and checks](migrations.md#exact-original-target-support-sqlite-88--89-conditional-portable-60).
+
+## Review click includes bounded AI usage (2026-11-24)
+
+At the user's request, **Review saved responses**, **Review saved response** and
+**Continue review** now include the eligible bounded allowance in that same action.
+There is no separate **Allow** or **Review permission** click. Saved-response
+processing/individual follow-up actions use the same selected-step routing. The
+visible review notice explains additional AI usage and preserves the original
+four-to-eight limit or one-time streaming-recovery eight-to-twelve limit.
+
+The browser sends the existing authenticated, revision-bound request with that exact
+submission/job and confirmation fields only after the review click. If a selection
+contains several saved responses, an eligible exhausted step is resumed alone; other
+responses stay waiting rather than receiving unrelated grants. Backend eligibility,
+semantic blockers, current revision/model checks and final request caps are unchanged.
+Reviewing cannot renew a spent recovery or authorize coding/research/gap discovery.
+
+**Not now** keeps review paused; the subsequent **Continue review** directly reviews
+without reopening a permission step. Merely viewing the Specification/Design tabs,
+opening an issue, loading metadata or restarting/reloading the app grants nothing.
+Earlier wording below that mentions an Allow button describes the superseded initial
+recovery UI; its durable evidence/allowance rules still apply.
+
+## Recover a review exhausted by the streaming defect (2026-11-24)
+
+After restarting the updated app, an eligible unanswered saved review now shows
+**Recover review after the streaming defect** with **Continue review**,
+both at the project-level review prompt and in **Processing & queue**. This is a
+review action that includes AI usage: the first step can spend up to twelve total attempts,
+not eight, while all original eight stay recorded. Decline with **Not now** to keep
+it paused. Reopening/reloading never grants or starts work. Later stages retain their
+normal limits; this finite recovery cannot renew or guarantee completion.
+
+The option is limited to saved evidence of the known event-stream rejection with no
+accepted response, retaining the original task, direct selection and consent. It is
+not a general reset for failed or semantically blocked reviews. No project selection,
+original answer or earlier usage is replaced. See [upgrade and consent semantics](migrations.md#explicit-recovery-of-headerless-stream-attempts-sqlite-87--88-portable-59).
+
+## Evidence changes before a saved response is accepted (2026-11-24)
+
+Explicit saved-response processing now rebuilds a changed-evidence stage layout only
+when no response was accepted and the original ledger still validates against its
+historical snapshot. Original jobs and every spent attempt/allowance grant remain
+saved. Accepted lookup/draft/check receipts are not silently replayed against changed
+evidence, and changed authorization still blocks. Exhausted work stays exhausted:
+use the existing explicit allowance control only when further provider work is wanted.
+See [compatibility and verification](migrations.md#changed-evidence-before-any-accepted-saved-response-2026-11-24).
+
+## Removing old direct connections (2026-11-24)
+
+**Settings → Connected accounts** marks the connection used by the current project
+separately from the dropdown selection. Same-email registrations retain their unique
+label endings. **Remove connection…** opens an exact-account warning and requires a
+fresh checkbox plus **Confirm removal**; **Keep connection** cancels without a request.
+The existing backend revokes that registration before removing local credentials,
+and retains it if revocation fails. Other saved connections and project history stay
+intact. Removing a referenced account does not switch projects automatically: save
+a replacement explicitly. **Refresh connections** only reloads saved metadata.
+See [semantics and verification](direct-providers.md#saved-connection-management-2026-11-24).
+
 ## Desktop restart continuity (2026-11-24)
 
 Desktop project history now survives a fallback loopback port through a validated,

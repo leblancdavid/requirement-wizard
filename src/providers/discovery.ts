@@ -3,7 +3,7 @@ import type { DiscoveryAdapter, DiscoveryOptions } from "../service/discovery.js
 import type { Project, QuestionHelpRequest } from "../core/model.js";
 import { discoveryPrompt, questionHelpPrompt, scanPrompt } from "../runtime/discovery.js";
 import { ConnectionManager, connectionError } from "./connections.js";
-import { generate, ProviderError } from "./chatgpt.js";
+import { generate, ProviderError, providerStage } from "./chatgpt.js";
 import { verifyDefinitionReviewScopeContext } from "../core/definition-review-scope.js";
 import { verifyDefinitionMixedReviewContext } from "../core/definition-mixed-review.js";
 import {needsJointInputAdmission,JointInputCapacityError} from "../runtime/input-capacity.js";
@@ -49,7 +49,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       if (project.model.providerID !== "openai") throw new ProviderError("Select an OpenAI model for this ChatGPT connection.");
       options.onProgress("Generating with your connected ChatGPT plan…");
       return await this.connections.withAccount(project.model.connectionID!, async (account, signal) => {
-        options.onProgress("Request sent to the selected ChatGPT model; awaiting its response…");
+        options.onProgress("Checking the selected ChatGPT model and requesting a response…");
         const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request,
           options.context.manifest.organizationCheck || options.context.manifest.answerGroupStage || options.context.manifest.definitionChangeReview || options.context.manifest.definitionChangeGroupReview || options.context.manifest.definitionScopeReview || options.context.manifest.definitionMixedReview ? { policy: "scoped-no-tools-v1" } : undefined);
         signal.throwIfAborted();
@@ -59,7 +59,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
         options.onTelemetry({ actualModel: { providerID: "openai", modelID: result.response.model }, runtimeReportedCost: null,
           usage: usage.success ? { input: usage.data.input_tokens, output: usage.data.output_tokens, reasoning: usage.data.output_tokens_details?.reasoning_tokens ?? 0 } : null });
         options.onResearch([]);
-        return JSON.parse(result.text) as unknown;
+        return providerStage("output JSON", signal, async () => JSON.parse(result.text) as unknown);
       }, options.signal, options.scan ? 900_000 : 300_000);
     } catch (error) { throw new ProviderError(connectionError(error)); }
   }

@@ -12,7 +12,8 @@ import { answerGroupProgress, answerGroupClarificationView } from "../core/answe
 import { ProjectStore } from "../storage/store.js";
 import { startWorkspaceTemporaryCleanup } from "../storage/workspace-temporary.js";
 import { readinessProgress } from "../core/readiness-stages.js";
-import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
+import { submissionProgress } from "../core/submission-stages.js";
+import { savedResponseChoiceSchema } from "../core/submission-resolution.js";
 import { refinementStageProgress } from "../core/refinement-stages.js";
 import { activityQuerySchema } from "../storage/activity.js";
 import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
@@ -341,7 +342,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           ...(answerGroupWork ? { answerGroupProgress: { answers: answerGroupWork.submissionIDs.length, ...answerGroupProgress(answerGroupWork) }, submissionProgress: answerGroupProgress(answerGroupWork) } : {}),
           ...(answerGroupWork ? { answerGroupClarification: answerGroupClarificationView(project, { ...job, answerGroupWork }) } : {}),
           ...(refinementWork ? { refinementStageProgress: refinementStageProgress(refinementWork) } : {}),
-          ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: submissionAllowance(submissionWork) } : {}),
+          ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: options.store.submissionAllowanceForJob({ ...job, submissionWork }, project),
+            submissionConflict: options.store.submissionConflictView(project, { ...job, submissionWork }) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
           ...(job.context?.readinessQuestions && _ ? { result: _ } : {}),
           gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),
@@ -383,6 +385,19 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "resolve-saved-response") {
+        const input = z.object({ revision, requestID: z.string().uuid(), jobID: z.string().uuid(), conflictKey: z.string().regex(/^[a-f0-9]{64}$/),
+          choice: savedResponseChoiceSchema, continueReview: z.literal(true), confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        const alreadySaved = options.store.submissions(id).some(s => s.resolutions?.some(r => r.id === input.requestID));
+        if (!alreadySaved && (queue.isActive(id) || implementation.isActive(id) || workflow.active(id))) throw new OperationConflictError("Pause active work before resolving the saved response.");
+        const saved = options.store.resolveSavedResponse(id, input.revision, input.requestID, input.jobID, input.conflictKey, input.choice);
+        if (saved.reused) { json(res, 200, { ...saved, continued: queue.isActive(id) }); return; }
+        try {
+          queue.resume(id, { processOnly: true, submissionIDs: [saved.submissionID], research: false });
+          json(res, 200, { ...saved, continued: true });
+        } catch { json(res, 200, { ...saved, continued: false }); }
+        return;
+      }
       if (action === "clarify-shared-answers") {
         const input = z.object({ revision, jobID: z.string().uuid(), text: z.string().trim().min(1).max(12000),
           continueReview: z.literal(true).optional(), confirmAIUsage: z.literal(true).optional(), workflowVersion: z.number().int().nonnegative().optional(),

@@ -458,6 +458,10 @@ export class DiscoveryQueue {
   }
 
   private async prepareSubmissionClarification(id: string, source: Job, signal: AbortSignal, report: (message: string) => void, automatic = false) {
+    if (this.service.store.submissionConflictView(this.service.store.get(id), source)) {
+      report("This saved answer needs your decision. Use the conflict card to compare the original records and save the rule to follow; no clarification request was started.");
+      return;
+    }
     if (this.coordinator || source.submissionWork?.draftRepair || !submissionQuestionBlock(source)) return;
     signal.throwIfAborted();
     try {

@@ -19,6 +19,8 @@
 .saved-account-list { padding: 0; list-style: none; }
 .saved-account-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
 .saved-account-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.saved-account-list li > div { min-width: 0; overflow-wrap: anywhere; }
+.connection-removal { flex-basis: 100%; }
 .connection-test { margin-top: 16px; }
 .helper-diagnostics { margin: 18px 0; }
 .helper-diagnostics > summary { cursor: pointer; font-weight: 600; }

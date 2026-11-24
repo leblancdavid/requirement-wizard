@@ -8,6 +8,9 @@ import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareSubmissionPublicationSupport, submissionPublicationEvidence, validateSubmissionPublicationSupport, submissionStageResponseSchema } from "../core/submission-stages.js";
 import { packSubmissionVerification, SubmissionLookupError } from "../core/submission-stages.js";
 import { submissionCitationRepair, submissionScopedRepair } from "../core/submission-stages.js";
+import { replanUnansweredSubmission } from "../core/submission-stages.js";
+import { submissionOriginalSupportGap } from "../core/submission-stages.js";
+import { currentSavedResponseResolution, resolutionKey } from "../core/submission-resolution.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
   options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
@@ -17,8 +20,32 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   const previous = local("history", () => store.latestSubmissionWorkJob(project.id, item.id, job.id));
   // Browsing another feature does not redefine an unfinished saved submission.
   // Reconstruct its original scope, then revalidate all current mandatory evidence.
-  let m = local("preparation", () => submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow));
+  let m = local("preparation", () => submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow,
+    previous?.submissionWork?.supportPolicy));
+  if (!previous && submissionOriginalSupportGap(m).length)
+    m = local("preparation", () => submissionMaterials(project, item, task, undefined, "target-originals-v1"));
   let w = local("preparation", () => previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m, { proposalFirst: true }));
+  const resolution = currentSavedResponseResolution(project, item);
+  if (previous && resolution?.blockedJobID === previous.id && resolution.blockedWorkKey === resolutionKey(previous.submissionWork)) {
+    const original = local("preparation", () => submissionMaterials(store.get(project.id, previous.expectedRevision), item, previous.submissionWork!.task, undefined, previous.submissionWork!.supportPolicy));
+    local("replay", () => replaySubmissionStages(original, previous.submissionWork!));
+    m = local("preparation", () => submissionMaterials(project, item, { ...previous.submissionWork!.task,
+      recordIDs: [...new Set([...previous.submissionWork!.task.recordIDs, resolution.sourceID])] }, undefined, "target-originals-v1"));
+    w = { ...local("preparation", () => planSubmissionStages(m, { proposalFirst: true })), humanResolution: { format: 1,
+      resolutionID: resolution.id, sourceJobID: previous.id, sourceID: resolution.sourceID } };
+    options.onProgress?.("Your explicit conflict decision is saved. Checking a new draft against that decision; original answers, rejected drafts, completed calls and spent attempts remain in their original jobs. No partial change is approved.");
+  }
+  if (previous && !w.receipts.length && !w.supportPolicy && submissionOriginalSupportGap(m).length) {
+    const original = local("preparation", () => submissionMaterials(store.get(project.id, previous.expectedRevision), item, w.task));
+    m = local("preparation", () => submissionMaterials(project, item, w.task, undefined, "target-originals-v1"));
+    w = local("preparation", () => replanUnansweredSubmission(m, original, w));
+    options.onProgress?.("Loaded the target’s exact original supporting records, including historical reviews previously omitted from the lookup inventory. Earlier attempts remain charged; no historical record became current decision authority.");
+  }
+  if (previous && w.materialKey !== m.materialKey && !w.receipts.length) {
+    const original = local("preparation", () => submissionMaterials(store.get(project.id, previous.expectedRevision), item, w.task, undefined, w.supportPolicy));
+    w = local("preparation", () => replanUnansweredSubmission(m, original, w));
+    options.onProgress?.("Mandatory evidence changed before any response was accepted. Updated the unpaid stage layout; every spent attempt and explicit allowance grant is retained. No completed call was repeated or additional requests granted.");
+  }
   if (!previous && w.proposalRead) options.onProgress?.("Preparing one scoped update from your saved answer, linked requirements and their original support. Every mandatory evidence batch will check the frozen proposal; omitted reads are not credited. Existing approvals and unrelated requirements remain protected.");
   if (previous?.submissionWork) {
     const history = local("history", () => store.submissionRecoveryJobs(project.id, item.id));
@@ -58,6 +85,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
     }
   }
   local("validation", () => store.assertSubmissionDraftRepair(project, item, w));
+  local("validation", () => store.assertSubmissionResolution(project, item, w));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
   let lookupCorrection: SubmissionLookupError["issues"] | undefined;
@@ -123,7 +151,9 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       ? "Corrective saved-response review exhausted its finite request allowance. Earlier work remains saved; unchanged retry cannot grant another corrective pass."
       : submissionRequestLimit(w) === 4
       ? "Saved-response step exhausted its four-request allowance. Earlier completed work and spent attempts remain saved. Use Allow 4 more requests in Processing & queue to explicitly extend only this unfinished step."
-      : "Saved-response step exhausted its extended eight-request allowance. Earlier completed work and spent attempts remain saved; no further requests were granted.");
+       : submissionRequestLimit(w) === 8 ? "Saved-response step exhausted its extended eight-request allowance. Earlier completed work and spent attempts remain saved; no further requests were granted."
+       : w.supportRecovery ? "Saved-response original-support recovery exhausted its finite allowance. Original attempts and recovery consent remain saved; no further requests were granted."
+       : "Saved-response transport recovery exhausted its twelve-request limit. Original attempts and recovery consent remain saved; no further requests were granted.");
     if (!calls) options.measurement?.planned(context);
     w.attempts++; calls++; local("checkpoint", () => store.checkpointSubmission(job.id, w, context.manifest));
     progress(`Following up on saved input · ${submissionStep(w)} / ${submissionTotalSteps(w)} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);

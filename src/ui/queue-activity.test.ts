@@ -13,7 +13,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { followThroughOutcome } from "../core/follow-through.js";
 import { ProcessingPreferences as ProcessingSettings, ProcessingSettings as ProjectAssistanceSettings } from "./processing-settings.js";
-import { ProjectReviewPermission, additionalReview } from "./project-review-permission.js";
+import { ProjectReviewPermission, additionalReview, savedResponseReviewRequest } from "./project-review-permission.js";
 import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
 
 test("project status is idle without a start action and swaps saved continuation for pause", () => {
@@ -217,6 +217,34 @@ test("additional usage is a direct project-level choice, with no approval or cal
   assert.match(html, />Continue review<\/button>/); assert.match(html, />Not now<\/button>/);
   assert.match(html, /<details><summary>Details/); assert.doesNotMatch(html.split("<details>")[0]!, /batch|checkpoint|four to eight|type="checkbox"/);
   assert.deepEqual({ project, item, job }, before);
+});
+
+test("Review includes only an eligible selected step's bounded grant, never an unrelated task or an exhausted recovery", () => {
+  const item: Submission = { id: "first-input", projectID: project.id, jobID: "first-job", status: "needs-attention", applied: true,
+    submittedAt: "2026-11-11T00:00:00Z", auto: false, research: false, input: { type: "note", epicID: "inbox", text: "Retain all answers" } };
+  const second = { ...item, id: "selected-input", jobID: "selected-job" };
+  const job: Job = { id: item.jobID!, projectID: project.id, expectedRevision: project.revision, model: project.model, leaseUntil: null, status: "failed",
+    submissionAllowance: { step: 0, attempts: 4, limit: 4, canExtend: true } };
+  const recovery: Job = { ...job, id: second.jobID!, submissionAllowance: { step: 0, attempts: 8, limit: 8, canExtend: true, recovery: "headerless-sse-v1" } };
+  const submissions = [item, second], jobs = [job, recovery], before = structuredClone({ project, submissions, jobs });
+  assert.deepEqual(savedResponseReviewRequest(project, submissions, jobs, [second.id], true), { revision: project.revision,
+    submissionIDs: [second.id], research: false, resumeJobID: recovery.id, additionalRequests: 4, confirmAdditionalRequests: true });
+  assert.deepEqual(savedResponseReviewRequest(project, submissions, jobs, [item.id, second.id]), { revision: project.revision,
+    submissionIDs: [item.id], research: false, resumeJobID: job.id, additionalRequests: 4, confirmAdditionalRequests: true });
+  const capped = { ...recovery, submissionAllowance: { ...recovery.submissionAllowance!, attempts: 12, limit: 12, canExtend: false } };
+  assert.deepEqual(savedResponseReviewRequest(project, submissions, [job, capped], [second.id]), { revision: project.revision, submissionIDs: [second.id], research: false });
+  assert.deepEqual(savedResponseReviewRequest(project, submissions, [], [second.id], true), { revision: project.revision, submissionIDs: [second.id], research: true });
+  assert.deepEqual(savedResponseReviewRequest(project, [{ ...second, status: "completed" }], [recovery], [second.id]), { revision: project.revision, submissionIDs: [second.id], research: false });
+  const html = renderToStaticMarkup(createElement(ProjectReviewPermission, { item: second, job: recovery, disabled: false, allow() { assert.fail("No consent on render"); } }));
+  assert.match(html, />Continue review<\/button>/); assert.doesNotMatch(html, />Allow 4|>Review permission/);
+  assert.match(html, /eight to twelve/);
+  const supportJob: Job = { ...recovery, submissionAllowance: { step: 0, attempts: 12, limit: 12, canExtend: true, recovery: "target-originals-v1" } };
+  const supportHTML = renderToStaticMarkup(createElement(ProjectReviewPermission, { item: second, job: supportJob, disabled: false, allow() { assert.fail("No consent on render"); } }));
+  assert.match(supportHTML, /original supporting records/); assert.match(supportHTML, /16 total attempts/);
+  assert.match(supportHTML, />Continue review<\/button>/); assert.doesNotMatch(supportHTML, />Allow|streaming defect/);
+  assert.deepEqual(savedResponseReviewRequest(project, submissions, [job, supportJob], [second.id]), { revision: project.revision,
+    submissionIDs: [second.id], research: false, resumeJobID: recovery.id, additionalRequests: 4, confirmAdditionalRequests: true });
+  assert.deepEqual({ project, submissions, jobs }, before);
 });
 
 test("joint validation failures cannot become generic discovery resume authority", () => {

@@ -1,5 +1,332 @@
 # Data migrations and upgrade compatibility
 
+## Explicit saved-response decisions (SQLite 90 → 91; conditional portable 62)
+
+An eligible saved-answer conflict now accepts an explicit human decision through a
+revision/conflict-key-checked transaction. `Submission.resolutions` retains typed
+choice, exact decision text, source ID, original blocked job/work identity, named
+requirements and scoped superseded record IDs. A human note carries the matching
+`savedResponseResolution` provenance. Existing sources/requirements are not rewritten;
+only a later decision over the same target set supersedes its previous resolution
+note. Original answers, completed calls, rejected drafts, spent attempts and dated
+history remain intact. Decision histories are bounded to 64 entries / 2 MiB;
+exceeding either bound rejects the write without discarding earlier decisions.
+Schema version is independent of project revision.
+
+`submissionWork.humanResolution` links a fresh, finite plan to that human decision
+and the original blocked ledger. All current mandatory evidence must check the new
+draft; earlier rejected work is retained rather than credited as verification. A
+dated blocker replays its original snapshot and compares cited current records and
+input before permitting a resolution. Unrelated edits do not invalidate the choice,
+but changed cited evidence does. The saved decision cannot authorize specification
+changes outside its named requirements. No AI usage is granted on startup/reload;
+the save-and-continue action supplies consent. Identical request-ID retries reuse
+the recorded result without another source, revision or dispatch. Failed dispatch
+does not roll back the human decision.
+
+Migration 91 adds bounded partial startup indexes/validation for resolution histories,
+source markers in current/historical snapshots and linked work markers. It rewrites
+no old payloads or allowances and makes no model calls. Unsupported future policies
+fail validation before the transaction commits; originals remain recoverable for a
+later compatible reader. Existing data without markers migrates unchanged and does
+not require reassessment or a reset. Conditional portable format 62 retains source
+markers, resolution-bearing submissions (including completed ones), and linked failed
+jobs/snapshots. Lower declared formats reject these markers; other projects retain
+their earlier conditional format.
+
+Deterministic checks cover all three choices, stale/forged/cross-project rejection,
+exact originals and scoped authority, fresh verification of unrelated new evidence,
+paused continuation without repeating the accepted draft, repeated decisions and
+historical replay, existing clarification precedence, 90→91 preservation and
+future-policy rollback/retry, repeated startup, portable roundtrip/adoption and
+continuation in an empty store. Browser coverage checks no default/automatic request,
+exact wording, custom text retention, failed save, mobile, a single save-and-review
+action, duplicate-save idempotency and reload without another request. These use
+synthetic adapters, not live subscription calls. No real project migration, decision
+save or live completion was performed for this slice. The 203 targeted
+saved-response/resume/specification/migration/portable/API tests, type check, UI
+build and dedicated conflict-card browser check passed. The full `npm run
+test:browser` suite and its posttests also passed (the dedicated new card check
+ran separately; the running suite had loaded the earlier posttest list).
+
+## Bounded target-first corrective review (SQLite 89 → 90; conditional portable 61)
+
+Revision-4062 local inspection reproduced a **97,334 / 96,000-character** preparation
+failure after completed no-question clarification of a rejected saved-answer draft.
+The original frozen verification batch fit at 95,873 characters; pinning that entire
+batch for a corrective read plus its new instructions/conclusion exceeded the same
+cap. No request had started for the oversized correction, so increasing provider
+allowance could not resolve it.
+
+Only a **new scoped no-question corrective pass** whose legacy read exceeds the cap
+may now use `draftRepair.contextPolicy = target-support-v1`. It starts with the exact
+original answer, linked targets and all original target support. The original rejection
+and no-question conclusion remain supplied as untrusted AI hypotheses, not approval
+or precedence. Every other mandatory original remains available under its exact ID;
+the model must request a missing body before using it for a new/changed action. The
+complete replacement draft must then independently pass **every original mandatory
+evidence batch**, including batches that checked the older draft. There is no partial
+publication, evidence truncation, raised cap, authority expansion or automatic conflict
+resolution. If target support or a needed lookup still does not fit, preparation stops.
+
+The retained repair source, completed clarification, original receipt prefix, rejected
+attempt count and finite correction allowance are unchanged. No new grant is created.
+Already-started corrective layouts keep their old context policy and context keys;
+smaller new legacy corrective packets also retain the old representation. The new
+selection is reconstructed and checked exactly at replay/publication; altered evidence
+IDs, source jobs, conclusions or future policies do not gain compatibility.
+
+Migration 90 is a transactional reader fence only, with the existing bounded repair
+validator rejecting unknown/future markers before committing. It rewrites no saved
+work, credentials, project decisions or assessments and makes no calls. Conditional
+portable format 61 preserves the new policy plus the existing linked source and
+clarification jobs; lower declared formats reject the marker. Other exports retain
+their prior conditional formats. SQLite/schema versions remain separate from project
+revisions and optimistic concurrency. No completed work is invalidated or reset.
+
+Verification: 171 saved-response/resume/migration/portable/API tests, type and diff
+checks passed; Specification and review-recovery browser checks also passed. New
+fixtures reproduce an overflowing legacy correction, include exact target support,
+load supplemental evidence, pause/reopen without repeating accepted reads/lookups,
+verify every mandatory original, and reject a contradictory check without publication.
+Tests cover original prefix/attempt preservation, altered repair evidence, portable-61
+fencing, 89→90 future-policy rollback/retry and repeated startup. A read-only preparation
+of the affected local task produced a **65,654-character** corrective packet with 29
+detailed records and 426 still-requestable records, retaining all three original
+receipts and the one rejected attempt. No real project migration/write, model request
+or automatic retry was performed. Full browser-suite rerun was not repeated for this
+backend-only change; live completion of this corrective pass remains unverified.
+
+## Exact original target support (SQLite 88 → 89; conditional portable 60)
+
+**Reproduced defect:** an active target could cite another requirement's superseded
+confirmation/rejection. The current-decision projection omitted that record from the
+saved-response mandatory/lookup inventory, while staged revision acceptance required
+ALL target source links loaded. The model could neither load the missing original
+through the advertised inventory nor publish without it. Revision-4060 read-only
+inspection found seven such sources in the affected target's 21 supporting source
+links, twelve spent attempts and no accepted reply. Historical sources exist and must
+not be discarded, treated as current authority or summarized away to bypass the guard.
+
+New affected work persists `submissionWork.supportPolicy = target-originals-v1`.
+Material preparation pins exact target-owned support into the working-set selector's
+supporting-record inventory, overriding only background omission of those IDs. The
+task's original source, targets and write permissions do not expand. A fitting scoped
+proposal reads the complete original target support first, followed by every mandatory
+frozen-draft verification batch. Other originals remain exact/requestable. Source
+eligibility and the all-support-loaded acceptance check are unchanged. Oversized or
+missing originals still stop; no truncated or implicit evidence is credited.
+
+Unanswered older work may adopt this layout only after replay-validating its original
+snapshot; its spent attempts, ordinary extensions and transport grant carry forward.
+Accepted receipts/layouts continue under their original policy and exact keys. No
+completed/accepted call is replayed or invalidated by this upgrade. Unaffected new
+work retains the legacy representation. Saved repair/publication/reconciliation
+validation reconstructs the explicit saved policy, not today's default selector.
+
+An exhausted, current unanswered task can receive **one** `supportRecovery` format 1 /
+`target-originals-v1` grant through the existing user-initiated Review action. Eligibility
+requires a locally proven missing-target-support inventory and successful exact
+replanning, not generic failure prose or a renderer assertion. The grant retains the
+original job, material/plan keys, prior spent attempts and grant revision; it permits
+four further first-step requests without resetting the old count (at most sixteen
+total when twelve were already spent). It cannot renew. Later steps keep their own
+limits and every verification must pass. Real human conflicts are not repair authority.
+Simply loading/restarting, schema migration, metadata reads and tab navigation grant
+nothing. The UI identifies original-support recovery rather than a streaming defect.
+
+Migration 89 is a transactional reader fence plus bounded indexed validation of the
+optional policy/recovery fields. It does not rewrite existing payloads or grant calls.
+Future/oversized fields reject without committing the version or replacing evidence.
+Conditional portable format 60 retains the source grant job and original revision
+snapshots; earlier labeled formats reject the new markers, and older app versions
+reject SQLite 89/portable 60. Schema versions remain separate from project revisions
+and attempts. Credential formats, assessment identities and freshness are unchanged.
+
+Verification: 175 saved-response/migration/portable/API/queue tests and type/diff checks
+passed, followed by focused checks for finite sixteen-attempt exhaustion and 88→89
+future-policy/grant rollback and repeated reopen. The reproduced fixture covers fresh
+and old four/twelve-attempt schedules, original bodies in actual model context,
+successful publication only after all checks, semantic-check rejection, preserved
+sources and portable-60 fencing. A read-only in-memory preparation of the affected
+local plan detailed all seven previously omitted sources in a 61,404-character
+proposal, preserved twelve attempts and computed a sixteen-request correction cap.
+The oversized-original fixture also rejects technical recovery rather than claiming
+the body fitted. Another 56 resume/provider/scoped/mixed-adapter regressions passed.
+No real grant, project migration/write or provider call was performed. The full
+`npm run test:browser` suite and all posttests passed using deterministic adapters.
+Live end-to-end recovery of this affected answer remains unverified.
+
+## Review action implies its eligible bounded allowance (2026-11-24)
+
+Interaction-only follow-up: **Review/Continue review** now sends the existing exact-job
+additional-request consent as part of the review action, rather than navigating to
+a separate Allow button. It does not grant anything on startup, rendering, metadata
+refresh or tab/issue navigation. The user-requested change applies to the ordinary
+four-to-eight extension and eligible one-time eight-to-twelve transport recovery;
+caps, provenance, original attempts and backend rejection rules are unchanged.
+
+No persisted field, schema version, fingerprint, snapshot or portable format changes:
+SQLite 88 and conditional portable 59 remain the same. Prior grants/receipts retain
+their exact representation and identities; no migration rewrite or reassessment is
+required. A selected exhausted task remains single-submission/exact-job scoped even
+when the surrounding UI selected several responses. A capped, stale or ineligible
+task cannot manufacture a new grant through Review. Failures retain the normal
+transactional consent and checkpoint semantics. No model/provider fallback is added.
+
+Verification: type/UI build and 46 queue/API tests passed, including selected versus
+unrelated task routing, ordinary/recovery consent bodies, capped recovery, no-render
+consent and unchanged input data. Targeted ordinary project assistance, headerless
+recovery and staged Specification browser checks passed: one Review click includes
+the grant, Not now/reload do not, no separate Allow control is required, earlier
+attempts remain saved, and only the selected review resumes. The full browser suite
+and all its posttests passed. After the final Specification retry-routing adjustment,
+the UI was rebuilt and Specification, project-assistance and transport-recovery browser
+checks passed again against that build. No live provider calls or actual project/grant
+changes were performed.
+
+## Explicit recovery of headerless-stream attempts (SQLite 87 → 88; portable 59)
+
+The transport fix alone did not unblock a saved answer that had already spent its
+extended eight attempts. A new **explicit**, one-time recovery grant records that
+all eight remain spent and permits up to four further attempts on the unanswered
+first step. It never resets original counters, repeats accepted work, refunds provider
+usage or starts requests merely because the app upgraded/opened. Later steps retain
+their ordinary limits. Twelve spent attempts cannot receive another recovery grant.
+
+Eligibility requires no accepted response receipts or prior recovery/repair state,
+the original first-step eight-attempt consent, and a saved exact event-stream-rejection
+failure at attempt eight for the same submission, task, direct connection/model and
+original consent anchor. Compatible unanswered replanning may have updated evidence
+and plan keys; it must retain that exact task and consent anchor. Current evidence
+must still replay normally before granting. Unrelated errors, changed identity/task,
+accepted lookup/draft/check replies and stale job/revision consent cannot qualify.
+The authenticated existing additional-request API saves `submissionWork.transportRecovery`
+format 1 / `headerless-sse-v1`, linked to the granting and original failed jobs. Its
+button explicitly discloses eight-to-twelve attempts and uses the existing exact-job,
+revision-bound `confirmAdditionalRequests` consent; no renderer-provided provenance
+or arbitrary request budget is accepted. Processing starts only from that user action.
+
+SQLite migration 88 is a transactional reader fence plus a partial startup-validation
+index; it rewrites no job/project payloads and grants nothing. Startup rejects unknown,
+oversized or future recovery objects without committing the migration. Historical
+attempts/receipts/IDs, model choices, credential state, assessment identities and
+fingerprints stay unchanged. New counters allow up to twelve only under a valid grant;
+replay still rejects over-budget ungranted work. No retry is needed solely to upgrade.
+
+Portable output uses format 59 only when transport-recovery state is present and
+retains the linked failure/grant jobs. Other exports retain their previous conditional
+format. New readers still accept older files; labeling a recovery-bearing export as
+format 58 or below rejects before adoption. Older app versions reject SQLite 88 and
+portable 59 instead of dropping the consent record. Recovery fields and original
+counter values survive repeated reopen and portable roundtrip.
+
+Verification includes explicit-grant success (first accepted reply is attempt 9),
+finite exhaustion at 12 without renewal, unrelated-error refusal, changed-evidence
+consent lineage, stale/wrong-job/repeated grant rejection, 87→88 preservation,
+future-policy rollback/retry, repeated reopen and portable-format fencing. Dedicated
+browser coverage passed for disclosure, decline/reopen, mobile, exact explicit action,
+retained eight attempts and no request on reload, using a synthetic adapter. A
+read-only local check matched the affected unanswered task to its original transport
+failure and consent after later evidence changes; no real grant, migration, project
+write or provider request was performed during this implementation. Type/UI build,
+diff and dedicated browser checks passed. Regression runs passed 140 saved-response,
+resume, server, queue and path tests, then 125 saved-response/migration/portable tests
+and 59 provider/scoped/mixed-adapter tests. The focused recovery cases passed again
+after the changed-evidence lineage check, including wrong connection/model/task or
+consent-anchor rejection. The full `npm run test:browser` suite and all posttests
+also passed, including the recovery-consent browser check. These use deterministic
+adapters, not live provider calls. Live end-to-end recovery remains unverified.
+
+## Validate headerless direct SSE without changing saved work (2026-11-24)
+
+No schema, payload, credential, fingerprint or portable version change. Only live
+transport admission changes: absent Content-Type may proceed through strict SSE
+framing plus unchanged terminal/model/output checks; an explicit non-SSE media type
+still rejects. This is the same streamed protocol, not a JSON response fallback.
+Existing completed receipts remain valid. Historic rejected/discarded responses are
+not reconstructed or marked accepted, and old diagnostic strings are retained.
+Original IDs, evidence, revisions, exhausted allowances and paid attempts stay intact;
+no startup work, token import, automatic replay/refund or reset is introduced.
+
+The existing provider upgrade/reopen and transaction tests passed in a 59-test run,
+alongside headerless discovery/help and strict negative cases. No persistent data
+rewrite is needed and no live project data was changed. One separately consented
+diagnostic request established the header/body mismatch; the fixed adapter has not
+yet completed a live verification request or the user's project workflow. See
+[observation and limits](direct-providers.md#headerless-direct-event-streams-2026-11-24).
+
+## Changed evidence before any accepted saved response (2026-11-24)
+
+Source and target remain submission-work format 1 / `exact-submission-batches-v1`,
+with the existing SQLite and portable versions. No new durable field or version
+is needed: the new job uses a normally validated current-evidence plan, and the
+older job/snapshot remains its unchanged historical attempt evidence. Old apps can
+validate the new plan normally. No startup migration or request replay occurs.
+
+Explicit processing may now replace the stage layout when mandatory evidence
+changed **and no response receipt exists**, after replay-validating the original
+ledger against its original project revision. Submission identity, exact task and
+input/authority must remain unchanged. All spent attempts and first-step allowance
+extensions carry forward unchanged. Missing historical evidence, corrupt plans,
+accepted lookup/draft/check receipts, verification/support/recovery/reconciliation
+state and changed authorization reject instead of being reset. Completed work never
+becomes current merely because a new layout fits. New plans still include and check
+all current mandatory evidence. An exhausted step remains exhausted; no grant is
+implicit. The existing current-job consent path can extend it only explicitly.
+
+Recovery is computed before the new job's first checkpoint. Failures leave original
+jobs untouched; normal expected-revision checkpoints retain current work atomically.
+Repeated evidence changes/reopens carry the same finite allowance forward, not a
+fresh allowance. Tests cover older file-backed ledgers with 1/4/8 spent attempts,
+malformed plans, accepted-lookup and authority rejection, explicit grants, repeated
+reopen/evidence changes, portable roundtrip, and unchanged original jobs/projects.
+All 114 saved-response/resume/server tests, type and diff checks passed. A read-only
+in-memory check against the two affected local plans validated current evidence and
+preserved 4/4 and 1/4 attempts; no live project/credential writes or model requests
+were made. Full browser tests were not rerun for this backend-only change.
+
+## Safe direct-provider diagnostic stages (2026-11-24)
+
+No format/schema/fingerprint change or data migration is required. New direct failures
+use stage-specific safe prose in the existing job diagnostic string; old generic
+diagnostics remain unchanged because their discarded causes cannot be reconstructed.
+The existing 2,000,000-byte stream ceiling is unchanged, now explicitly reported.
+Project revisions, pending/finished work, stable IDs, evidence, allowance counters,
+credential envelopes, assessment identities and portable state are not rewritten or
+invalidated. Startup does not replay requests or reset exhausted steps.
+
+Deterministic integration coverage reopens an older-shaped expired credential grant
+after malformed refresh output and verifies field-for-field preservation. Both failed
+job records remain saved, the original project is unchanged, and a subsequent explicit
+request does not hide invalid output JSON behind sign-in advice. Existing credential
+transaction/cancellation tests also pass. No live-store upgrade rewrite or provider
+probe was performed. See [diagnosis and limits](direct-providers.md#direct-failure-diagnostics-2026-11-24).
+
+## Explicit direct-connection removal controls (2026-11-24)
+
+No persisted representation change: direct credential envelope version 1, protected
+storage, stable registration/client IDs, scopes, original grants and account labels
+are unchanged. UI markers distinguish current-project versus picker use without
+claiming global non-use or account health. Upgrade never deletes/revokes an old
+registration, combines same-email accounts, reauthenticates or changes project AI.
+
+An explicit checkbox confirmation now precedes the existing direct disconnect API;
+its revocation-before-removal behavior, target-only cancellation and failure retention
+remain unchanged. Projects keep their saved connection references and paid history
+even when that connection is intentionally removed; no model/provider fallback,
+revision rewrite, assessment invalidation or portable-format change is introduced.
+Refresh and confirmation state add no durable fields. OpenCode/helper credentials
+are never imported or removed by these direct-account controls.
+
+Tests use two synthetic same-email registrations and assert exact client/token
+targeting, retention after failed revocation, preservation of the other original grant
+through repeated credential-store reopen, unchanged project revision/history and a
+retained missing selection (not an automatic account/OpenCode switch). Browser checks
+cover fresh unchecked confirmation, cancellation, explicit retry, current/picker
+markers, metadata refresh, reload and mobile. No real account removal was performed.
+See [behavior and qualification limits](direct-providers.md#saved-connection-management-2026-11-24).
+
 ## Desktop root and workspace-history recovery (2026-11-24)
 
 **Root routing:** directory presence is no longer enough to mask existing project
