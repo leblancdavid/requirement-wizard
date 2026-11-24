@@ -9,8 +9,38 @@ import { ProjectWorkflow } from "./workflow.js";
 import { questionBatchLimits, workflowReviewInputKey, workflowSchema } from "../core/workflow.js";
 import type { Analysis, Project } from "../core/model.js";
 import { jobHistoryLog, projectLogs } from "../ui/log-records.js";
+import { discoveryPrompt } from "../runtime/discovery.js";
+import { captureAnswerScope } from "../core/input-scope.js";
 
 const empty = (): Analysis => ({ summary: "Original workflow evidence", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("targeted collection advertises five independent candidates and preserves explicit update targets through publication", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, { context }) {
+    calls++; const prompt = discoveryPrompt(p, context); assert.match(prompt, /SHARED CANDIDATE YIELD/);
+    assert.match(prompt, /EXPLICIT QUESTION UPDATE TARGETS/);
+    const schema = JSON.parse(prompt.split("\nSchema: ")[1]!.split("\nWorking context revision")[0]!);
+    const limits: number[] = [];
+    const visit = (v: unknown): void => {
+      if (!v || typeof v !== "object") return;
+      for (const [key, child] of Object.entries(v)) {
+        if (key === "questions" && child && typeof child === "object" && "maxItems" in child) limits.push((child as { maxItems: number }).maxItems);
+        visit(child);
+      }
+    };
+    visit(schema); assert.ok(limits.includes(5));
+    const epicID = context.manifest.epicReview!.epicID, result = questions(p, epicID, 5), target = p.requirements.find(r => r.epicID === epicID)!;
+    result.questions = result.questions.map(q => ({ ...q, evidenceIDs: [target.id, p.sources[0]!.id], updateTargets: { format: 1, requirementIDs: [target.id] } }));
+    return result;
+  } });
+  try {
+    const p = fixture(store); arm(store, p);
+    workflow.configure(p.id, p.revision, store.workflow(p.id).settingsVersion, "continue-continuous", undefined, 5); await workflow.wait(p.id);
+    const current = store.get(p.id); assert.equal(calls, 1); assert.equal(current.questions.length, 5);
+    for (const q of current.questions) assert.deepEqual(captureAnswerScope(current, q.id)!.requirementIDs, q.updateTargets!.requirementIDs);
+    assert.deepEqual(current.requirements, p.requirements); assert.equal(current.assessments.length, p.assessments.length);
+  } finally { await workflow.close(); store.close(); }
+});
 function fixture(store: ProjectStore, areas = 7) {
   let p = store.create("Question batches", "Decide several independent workflow details", { providerID: "openai", modelID: "fixture" });
   const ids = Array.from({ length: areas }, (_, i) => `area-${i}`);

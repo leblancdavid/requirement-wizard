@@ -1,5 +1,34 @@
 # Architecture outline
 
+Fresh scoped answer cohorts use explicit per-answer target authority rather than
+transferring the union of member permissions. SQLite 86 / conditional portable 57
+fence the new protocol; old paid schedules retain their identities. Record-staged
+planning shares its exact evidence-inventory selector with a bounded negative
+historical-policy prefilter, avoiding packing only when a completed job lacks a
+current mandatory original. Equal inventories and unfinished work still require
+normal validation. See [compatibility and qualification](migrations.md#scoped-answer-cohorts-and-negative-planning-inventories-sqlite-85--86-portable-57).
+
+Private continuation staging selects the existing consuming-parts path at 128 MiB
+of measured used heap as well as the existing record-count thresholds. This avoids
+keeping large low-count paid ledgers live during a speculative single-file pass.
+The publisher cap, evidence selection, formats and recovery journal are unchanged;
+see [reproduced mechanism and limits](migrations.md#heap-aware-private-continuation-staging-2026-11-23).
+
+Literal compression planning now uses a bounded process-local exact-text memo,
+independent of semantic planning/context/verdict caches. Current data is always
+rendered again, preserving historical wire identities and pending-question
+invalidation. Filesystem-only artifact validation/read/hash helpers are isolated in
+`src/storage/workspace-artifacts.ts`; `workspace.ts` keeps compatible exports.
+See [compatibility and measured limits](migrations.md#literal-preparation-memo-and-artifact-io-isolation-2026-11-23).
+
+New cross-feature shared answers retain per-source feature authorization via
+`answerGroupWork.featurePolicy`; same-feature paid groups preserve their old
+material/context identities. New `question.updateTargets` metadata separates an
+explicit answer-write subset from mixed supporting citations without changing old
+questions. SQLite 85 / conditional portable 56 fence these capabilities. Continuation
+format-2 parts now stream individual records rather than accumulating part-sized
+record graphs. See [compatibility and limits](migrations.md#separate-answer-authority-and-streamed-parts-sqlite-84--85-portable-56).
+
 New multi-batch scoped saved answers can use a target/support-only proposal read
 followed by full-inventory frozen verification (`scoped-target-v1`, SQLite 84 /
 conditional portable 55). All-read paid schedules retain their exact identities.

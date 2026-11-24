@@ -35,12 +35,60 @@ import { gapEvidence } from "../core/gap-backlog.js";
 import { completedRecordStagesEquivalent, recordStageEvidenceKey } from "../core/epic-stage-reuse.js";
 import { expandedEvidence } from "../core/gap-retrieval.js";
 import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
+import { discoveryPrompt } from "../runtime/discovery.js";
 import { canResumePausedEpic } from "../core/epic-continuation.js";
 import { prepareEpicChangeImpact, validateEpicImpactHypothesis } from "../core/epic-change-impact.js";
 import { planEpicCollectionBaseline } from "../core/epic-collection-baseline.js";
 import { planEpicVerification, epicVerificationContexts } from "../core/epic-verification.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+for (const outcome of ["replace", "exhaust"] as const) test(`Project-wide target metadata preserves charged correction authority and original bodies: ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = store.create("Project-wide metadata fixture", "Choose shared recovery behavior", { providerID: "openai", modelID: "fixture" });
+    for (let i = 0; i < 14; i++) p = store.note(p.id, p.revision, exact(`project-target-${i}`), "project");
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { ...empty(), requirements: [{ epicID: "project", statement: "Keep shared recovery decisions explicit", rationale: "Original idea",
+      sourceIDs: p.sources.map(source => source.id), acceptance: ["Recovery behavior follows the chosen project rule"] }] });
+    p = store.get(p.id);
+    const target = p.requirements[0]!.id;
+    const question = { epicID: "project", text: "Which shared recovery outcome should apply?", whyItMatters: "Clarify the shared rule", evidenceIDs: [target],
+      options: [{ label: "Keep", consequence: "Retain the failed operation" }, { label: "Cancel", consequence: "Cancel the failed operation" }] };
+    let reads = 0, checks = 0;
+    const result = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
+      assert.ok(stage);
+      if (stage.phase === "validate") { checks++; return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } }; }
+      reads++;
+      assert.ok(context.manifest.includedIDs.includes(target));
+      assert.match(discoveryPrompt(p, context, false), /Project-wide questions .*MUST OMIT updateTargets/);
+      if (reads === 1 || outcome === "exhaust") return { ...empty(), questions: [{ ...question, updateTargets: { format: 1, requirementIDs: [target] } }] };
+      assert.ok((context.data as { citationCorrection?: unknown }).citationCorrection);
+      return { ...empty(), questions: [question] };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "project", candidateFirst: true, research: false });
+    const work = result.retrievalWork!.epicStages!;
+    const current = store.get(p.id);
+    const portable = decodePortable(renderWorkspace(current, emptyExecution(), continuationState(current, store.jobs(p.id), [], revision => store.get(p.id, revision))), current.model);
+    assert.deepEqual(portable.continuation.jobs.find(job => job.id === result.id)?.retrievalWork?.epicStages?.citationCorrections,
+      work.citationCorrections, "Portable adoption retains rejected target metadata as dated history, never as a published question");
+    if (outcome === "exhaust") {
+      assert.equal(reads, 3); assert.equal(checks, 0); assert.equal(result.retrievalWork!.attempts, 3);
+      assert.equal(work.citationCorrections!.length, 3); assert.equal(work.receipts.length, 0);
+      assert.deepEqual(store.get(p.id), p);
+      await new DiscoveryService(store, { async analyze() { assert.fail("Repeated continuation cannot renew exhausted target corrections"); } })
+        .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "project", candidateFirst: true, research: false });
+      return;
+    }
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.equal(reads, 2); assert.ok(checks > 0);
+    assert.equal(work.receipts[0]!.attempts, 2);
+    assert.equal(work.citationCorrections!.length, 1);
+    assert.deepEqual(work.citationCorrections![0]!.response.questions[0]!.updateTargets, { format: 1, requirementIDs: [target] });
+    assert.equal(store.get(p.id).questions[0]!.updateTargets, undefined);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+  } finally { store.close(); }
+});
 
 test("explicit discovery retry retains a transport-failed screen's attempt and does not replay other completed frontiers", async () => {
   const store = new ProjectStore(":memory:");
@@ -851,6 +899,42 @@ test("compact policy identities reject only provably incompatible appended histo
       onContext(_key, value, cached) { if (cached && value.outcome === "policy-identity") reused++; } });
     assert.equal(reused, 0);
     console.log(JSON.stringify({ fixtureOnly: true, coldPolicyPreparations: cold, appendedHistoryPreparations: warm, compactIdentities: identities.size }));
+  } finally { store.close(); }
+});
+
+test("new mandatory originals reject completed record-policy history before packing, without skipping unfinished work or equal-inventory validation", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 30);
+    const job = await new DiscoveryService(store, { async analyze() { return empty(); } }).analyze(p.id, p.revision,
+      { gapMode: "epic", focusEpicID: "orders", candidateFirst: true, research: false });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.equal(job.context!.epicReview!.contextPolicy, "staged-dense-records-v5");
+    const original = structuredClone(job), changed = store.note(p.id, p.revision, "New exact mandatory human constraint", "project");
+    const added = changed.sources.at(-1)!.id; assert.ok(!job.context!.includedIDs.includes(added));
+    const prepare = (history: Job[]) => {
+      let saved = 0, activity = "catalog";
+      const plan = planEpicReview(changed, history, "orders", [], rev => store.get(p.id, rev), {
+        targetFirst: true, onActivity(value) { activity = value; }, onPrepare() { if (activity === "saved-policy") saved++; } });
+      return { plan, saved };
+    };
+    const skipped = prepare([job]);
+    const unfinished = prepare([{ ...job, status: "interrupted", result: undefined }]);
+    assert.deepEqual(skipped.plan.task!.review, unfinished.plan.task!.review);
+    assert.deepEqual(skipped.plan.task!.batches, unfinished.plan.task!.batches);
+    assert.ok(skipped.saved < unfinished.saved, `${skipped.saved} inventory preparations versus ${unfinished.saved} full-policy preparations`);
+    assert.ok(skipped.plan.task!.batches!.some(c => c.manifest.includedIDs.includes(added)));
+    let equalChecks = 0;
+    planEpicReview(p, [job], "orders", [], rev => store.get(p.id, rev), { targetFirst: true,
+      onActivity(value) { if (value === "saved-policy") equalChecks++; } });
+    assert.ok(equalChecks > 0, "Equal inventories do not grant freshness or bypass the normal policy validator");
+    const partialManifest = structuredClone(job), omitted = partialManifest.context!.includedIDs.pop()!;
+    partialManifest.context!.omittedIDs.push(omitted);
+    const fullHistory = planEpicReview(p, [job], "orders", [], rev => store.get(p.id, rev), { targetFirst: true });
+    const partialHistory = planEpicReview(p, [partialManifest], "orders", [], rev => store.get(p.id, rev), { targetFirst: true });
+    assert.deepEqual(partialHistory.report, fullHistory.report, "A legacy completed last-page manifest must take normal validation, not masquerade as a complete inventory");
+    assert.deepEqual(store.getJob(job.id), original);
+    console.log(JSON.stringify({ fixtureOnly: true, completedInventoryPreparations: skipped.saved, unfinishedPolicyPreparations: unfinished.saved }));
   } finally { store.close(); }
 });
 

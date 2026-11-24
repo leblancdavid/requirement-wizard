@@ -1,17 +1,17 @@
 import { z } from "zod";
 
 export const answerIntegrationReasons = {
-  shared: "Compatible new answers in this feature share one evidence read/check schedule.",
+  shared: "Compatible new answers share one evidence read/check schedule while retaining their own feature and target permissions.",
   "retained-group": "The original shared group is continuing with its saved steps and spent attempts.",
   "separate-action": "This action processes responses individually; shared integration is available through the specification workflow.",
   research: "Research permission in the selected responses prevents shared no-research integration.",
   "already-started": "This response already has paid or started work. Its original processing path and attempts are retained.",
-  "scoped-answer": "This answer is scoped to specific requirements and keeps its separate permissions.",
+  "scoped-answer": "This targeted answer is processing individually; no compatible scoped cohort was selected. Its exact target permissions remain unchanged.",
   "other-input": "Reviews, notes, deferred choices and delegated choices retain their individual processing paths.",
   resolution: "This answer belongs to a duplicate/conflict resolution task and must stay on that task.",
-  "different-features": "The compatible new answers belong to different features; cross-feature answer grouping is not implemented.",
+  "different-features": "This run kept answers from different features separate under its original processing policy.",
   "single-answer": "Only one response was available in the submitted set. Save several answers before submitting to allow eligible grouping.",
-  "single-compatible-answer": "No second compatible new answer in this feature was available in the submitted set.",
+  "single-compatible-answer": "No second compatible new answer with the same scoped/unscoped processing policy was available in the submitted set.",
   "context-budget": "The exact combined evidence cannot fit a shared schedule. Individual work was selected before any shared request started.",
   "estimated-cost": "The new shared schedule is estimated to need more requests than individual processing. Individual work was selected before any shared request started; repairs and actual frozen drafts can change the final cost.",
   ineligible: "The saved answer does not meet the current exact-source eligibility checks for shared integration.",

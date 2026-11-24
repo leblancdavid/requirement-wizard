@@ -1,5 +1,30 @@
 # Local project workspaces
 
+Publication now chooses record-consuming staging under measured heap pressure,
+even below the old 128-job/8,192-object thresholds. A 96-job synthetic failure under
+the count-only policy passes through the new policy at the same 256-MiB cap without
+dropping original receipts. Small low-pressure checkpoints keep their exact bytes;
+no data reset, reassessment or model replay is required. Restart the updated backend
+and explicitly retry folder sync. The exact reported revision-3873 project still
+needs real-project qualification. See [mechanism and compatibility](migrations.md#heap-aware-private-continuation-staging-2026-11-23).
+
+Follow-up: the workspace suite now passes 47/47. The 48-MiB serializer microfixture
+uses filesystem-only artifact inspection instead of accidentally importing the
+entire rendering/model graph; the input and heap cap are unchanged. Full-publication
+and near-pressure tests remain at 256 MiB. This supersedes the unit-test failure
+noted below, **not** the unqualified production abort. See
+[diagnosis and limits](migrations.md#literal-preparation-memo-and-artifact-io-isolation-2026-11-23).
+
+Continuation parts now serialize one record at a time, releasing publication-private
+records immediately after writing instead of retaining a full part's graph. Exact
+decoded evidence, import size bounds, conflict hashes and the prior published state
+are preserved. A near-production-pressure synthetic check passes at the existing
+256-MiB heap cap; the actual revision-3873 abort is not qualified as fixed. The
+48-MiB single-large-text test now passes after the dependency isolation above.
+Portable format 56 is required
+only for retained explicit question targets/cross-feature answer authority, not for
+the streaming allocation change itself. See [migration and limits](migrations.md#separate-answer-authority-and-streamed-parts-sqlite-84--85-portable-56).
+
 Portable state format 10 is required when a shared-answer checkpoint carries exact
 original-source support or its one-time recovery grant; formats 1–9 remain readable.
 The original blocked grant parent and spent attempts travel with the checkpoint.

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Analysis, Job, Project, Submission } from "./model.js";
+import { validateQuestionUpdateTargets } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { planContext, contextPreparationIndex, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure, type ContextPreparationIndex } from "./working-set.js";
 import { gapEvidence } from "./gap-backlog.js";
@@ -29,6 +30,7 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
   if (output.refinements?.length || output.pendingChanges?.changes.length || output.reviewChanges?.length
     || output.organization?.length || output.assessments?.length || output.resolutionCheck) throw new Error("Epic workflow reviews propose gaps only; cleanup and wider changes are not authorized.");
   if (output.questions.some((q) => !q.evidenceIDs?.length)) throw new Error("Epic review questions require exact detailed evidence IDs.");
+  for (const q of output.questions) validateQuestionUpdateTargets(project, q, context.manifest.focusEpicID ?? "project");
   const outside = epicReviewOutsideArea(context, output);
   if (outside) throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside)}. Allowed area IDs: ${JSON.stringify(context.manifest.epicIDs)}. No proposals applied; retry the review to request a corrected response.`);
 }
@@ -348,7 +350,7 @@ function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () =
   return planned;
 }
 
-function computeRecordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
+function recordStagedEvidence(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
   const unitIDs = questionAnswerUnitIndex(project);
   const plain = { ...base, contextPolicy: "current-spec-v1" as const }; delete plain.guardrailBatches;
   delete plain.recordGrouping;
@@ -372,6 +374,11 @@ function computeRecordStagedReview(project: Project, base: EpicReview, onPrepare
   if (records.length !== ids.size) throw new Error("Record-staged review cannot reconstruct every mandatory record.");
   const pins = new Set([...base.recordIDs, ...project.sources.filter((s) => s.kind === "initial" && ids.has(s.id)).map((s) => s.id),
     ...(base.recordGrouping === "pending-question-units-v2" || base.recordGrouping === "target-decision-units-v3" ? project.questions.filter(q => q.status === "pending" && ids.has(q.id)).map(q => q.id) : [])]);
+  return { unitIDs, original, ids, records, pins, graph };
+}
+
+function computeRecordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
+  const { unitIDs, original, ids, records, pins, graph } = recordStagedEvidence(project, base, onPrepare, preparation, memo);
   const dense = base.contextPolicy === "staged-dense-records-v5";
   const review: EpicReview = { ...base, contextPolicy: dense ? "staged-dense-records-v5" : "staged-records-v4", guardrailBatches: [] };
   const render = (seeds: string[]): ContextPack => {
@@ -608,6 +615,33 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     const candidate = { review, context, batches, batchKey, error, batchLimit }; rememberCandidate(candidates, cacheKey, candidate); return candidate;
   };
   const equivalentCompleted = options.completedEquivalence ?? new Map<string, boolean>();
+  // Negative inventory proof only: a completed record-staged job missing a current
+  // mandatory original cannot pass exact identity or completed-equivalence.
+  // Avoid packing every historical representation just to discover that mismatch.
+  // Pending/failed jobs, unknown protocols and equal inventories retain full replay.
+  const policyInventories = new Map<string, Set<string>>();
+  const inventoryRejects = (group: Job[], policy: EpicReview, records: Record[]) => {
+    if (!recordStagePolicy(policy.contextPolicy) || !group.every(j => j.status === "completed"
+      && j.retrievalWork?.epicStages?.phase === "complete")) return false;
+    const key = JSON.stringify([policy.epicID, policy.epicIDs, policy.kind, records.map(r => r.id).sort(), policy.recordGrouping]);
+    let inventory = policyInventories.get(key);
+    if (!inventory) {
+      try {
+        inventory = during("saved-policy", () => recordStagedEvidence(project, { ...policy, recordIDs: records.map(r => r.id).sort() }, options.onPrepare, preparation, contextMemo).ids);
+      } catch (error) {
+        if (error instanceof ContextBudgetError) return false;
+        throw error;
+      }
+      policyInventories.set(key, inventory);
+      while (policyInventories.size > 32) policyInventories.delete(policyInventories.keys().next().value!);
+    }
+    return group.every(j => {
+      // A historical last-page manifest retains the rest as omitted navigation.
+      // Count both lists for this negative identity test, never as read evidence.
+      const available = new Set([...j.context!.includedIDs, ...j.context!.omittedIDs]);
+      return [...inventory].some(id => !available.has(id));
+    });
+  };
   const policyIdentityKey = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[], policy: EpicReview) =>
     hash(["exact-policy-identity-v1", exactProjectKey ??= digestJSONArray([project]), epicID, epicIDs, kind,
       records.map(r => r.id).sort(), policy.contextPolicy, policy.recordGrouping]);
@@ -746,6 +780,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         records.map(r => r.id).sort(), first.contextPolicy, first.recordGrouping, group.map(({ job }) => historyProof(job))]);
       const miss = missKey && options.contexts?.get(missKey);
       if (miss && miss.outcome === "policy-miss") { options.onContext?.(missKey!, miss, true); continue; }
+      if (inventoryRejects(group.map(({ job }) => job), first, records)) continue;
       const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, first.contextPolicy, first.recordGrouping));
       rememberIdentity(identityKey, saved);
       let matched = false;
@@ -780,6 +815,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
           subset.map(r => r.id).sort(), first.contextPolicy, first.recordGrouping, group.map(historyProof)]);
         const miss = missKey && options.contexts?.get(missKey);
         if (miss && miss.outcome === "policy-miss") { options.onContext?.(missKey!, miss, true); continue; }
+        if (inventoryRejects(group, first, subset)) continue;
         const saved = during("saved-policy", () => build(epicID, epicIDs, kind, subset, first.contextPolicy, first.recordGrouping));
         rememberIdentity(identityKey, saved);
         let matched = false;

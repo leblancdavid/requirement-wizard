@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { analysisSchema, requirementEvidenceIDs, type Analysis, type Job, type Project, type Submission } from "./model.js";
+import { analysisSchema, requirementEvidenceIDs, validateQuestionUpdateTargets, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { submissionDraftSchema, submissionMaterials } from "./submission-stages.js";
 import { specificationAuthorizationSources, assertSpecificationAuthorization } from "./specification.js";
 import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } from "./working-set.js";
+import { answerScopeMatches, effectiveAnswerScope, validateScopedAnswerResult } from "./input-scope.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -27,9 +28,23 @@ export class AnswerGroupResponseCapacityError extends Error {
   }
 }
 export class AnswerGroupCapacityError extends Error {
-  constructor(public readonly kind: "page layouts" | "pages in one layout" | "pages for this original step" | "completed pages" | "saved replies" | "saved work bytes", used: number, limit: number) {
+  constructor(public readonly kind: "evidence batches" | "page layouts" | "pages in one layout" | "pages for this original step" | "completed pages" | "saved replies" | "saved work bytes", used: number, limit: number) {
     super(`Shared answer work reached its bounded ${kind} limit (${used} / ${limit}). This is a work-capacity stop, not proof that human constraints exceed the input budget. No additional model call was made; original answers, completed work and spent attempts are retained.`);
   }
+}
+/** The historical queue surfaced this local planner overflow as a raw Zod issue.
+ * Classification alone grants nothing: callers must independently prove that no
+ * job/paid work exists and require explicit user continuation of current input. */
+export function legacyAnswerGroupBatchOverflow(diagnostic?: string): boolean {
+  if (!diagnostic || diagnostic.length > 4096) return false;
+  try {
+    const issues = JSON.parse(diagnostic) as unknown;
+    if (!Array.isArray(issues) || issues.length !== 1) return false;
+    const issue = issues[0];
+    return issue?.code === "too_big" && issue.maximum === 32 && issue.type === "array" && issue.inclusive === true
+      && issue.exact === false && issue.message === "Array must contain at most 32 element(s)"
+      && Array.isArray(issue.path) && issue.path.length === 1 && issue.path[0] === "batches";
+  } catch { return false; }
 }
 export const answerGroupDraftSchema = z.object({ analysis: submissionDraftSchema.extend({
   reviewChanges: z.tuple([]).optional(), reviewResponses: z.tuple([]).optional(),
@@ -98,6 +113,9 @@ const humanClarificationSchema = z.object({ format: z.literal(1), fromReceipt: z
 }).strict();
 const repairClarificationSchema = humanClarificationSchema.extend({ format: z.literal(2), draftKey: key });
 export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-answer-group-v1"),
+  scopePolicy: z.literal("per-answer-targets-v1").optional(),
+  featurePolicy: z.object({ format: z.literal(1), epicIDs: z.array(z.string().min(1)).min(2).max(5)
+    .refine(ids => new Set(ids).size === ids.length) }).strict().optional(),
   verificationPolicy: z.literal("union-v1").optional(),
   packingPolicy: z.literal("lossless-v1").optional(),
   unionPageCapacity: z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key }).strict().optional(),
@@ -423,14 +441,16 @@ export function authorizeAnswerGroupRecovery(m: AnswerGroupMaterials, w: AnswerG
   return next;
 }
 
-/** First shared protocol: same-feature concrete unscoped answers only. Targeted
- * answers, reviews, reconciliation, research and paid individual work stay separate. */
+/** Fresh concrete answers only. Scoped cohorts retain individual immutable target
+ * permissions; reviews, reconciliation, research and paid individual work stay separate. */
 export function eligibleGroupAnswer(project: Project, item: Submission) {
   if (item.projectID !== project.id || item.archivedAt || item.conflict || !item.applied || !item.appliedSourceID
-    || item.answerScope || item.overlapFollowup || item.research || ["completed", "superseded"].includes(item.status)
+    || item.overlapFollowup || item.research || ["completed", "superseded"].includes(item.status)
     || item.input.type !== "answer" || item.input.answer.kind !== "answer") return false;
   const q = project.questions.find(q => item.input.type === "answer" && q.id === item.input.questionID);
   const source = project.sources.find(s => s.id === item.appliedSourceID);
+  if (item.answerScope && (!effectiveAnswerScope(project, item) || !answerScopeMatches(project, item.answerScope))) return false;
+  if (!item.answerScope && source?.answerScope) return false;
   return !!q && q.status === "answered" && q.sourceID === item.appliedSourceID
     && source?.kind === "answer" && source.questionID === q.id && source.text === item.input.answer.text
     && project.epics.some(e => e.id === q.epicID && !e.archived)
@@ -438,13 +458,16 @@ export function eligibleGroupAnswer(project: Project, item: Submission) {
 }
 export function answerGroupMaterials(project: Project, items: Submission[]) {
   if (items.length < 2 || items.length > answerGroupLimits.answers || new Set(items.map(s => s.id)).size !== items.length
-    || items.some(s => !eligibleGroupAnswer(project, s))) throw new Error("Shared integration requires two to five current concrete unscoped answers.");
+    || items.some(s => !eligibleGroupAnswer(project, s))) throw new Error("Shared integration requires two to five current concrete answers with matching scope provenance.");
+  if (items.some(s => !!s.answerScope) && !items.every(s => !!s.answerScope))
+    throw new Error("Scoped and unscoped answers require separate cohorts; shared reading never combines their write permissions.");
   const questions = items.map(s => project.questions.find(q => s.input.type === "answer" && q.id === s.input.questionID)!);
   const epicID = questions[0]!.epicID;
-  if (questions.some(q => q.epicID !== epicID) || new Set(questions.map(q => q.id)).size !== items.length)
-    throw new Error("Shared answers require distinct questions in the same active feature.");
-  const singles = items.map((s, i) => submissionMaterials(project, s, { requiredEpicIDs: [epicID],
-    recordIDs: [s.appliedSourceID!, questions[i]!.id], isolatedTask: true, submissionFollowup: true, expandMandatory: true }));
+  const epicIDs = [...new Set(questions.map(q => q.epicID))].sort();
+  if (new Set(questions.map(q => q.id)).size !== items.length)
+    throw new Error("Shared answers require distinct original questions.");
+  const singles = items.map((s, i) => submissionMaterials(project, s, { requiredEpicIDs: [questions[i]!.epicID],
+    recordIDs: [s.appliedSourceID!, questions[i]!.id, ...s.answerScope?.requirementIDs ?? []], isolatedTask: true, submissionFollowup: true, expandMandatory: true }));
   const included = new Set(singles.flatMap(s => s.evidenceIDs));
   const records = (["sources", "questions", "requirements", "research"] as const).flatMap(field => project[field]
     .filter(r => included.has(r.id)).map(record => ({ field, record })));
@@ -452,13 +475,40 @@ export function answerGroupMaterials(project: Project, items: Submission[]) {
   const base = { projectID: project.id, name: project.name, projectOrigin: project.origin ?? null,
     goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     areas: project.epics.filter(e => singles.some(s => s.base.areas.some(a => a.id === e.id))),
-    submissions: items.map(s => ({ id: s.id, input: s.input, appliedSourceID: s.appliedSourceID })),
+    submissions: items.map(s => ({ id: s.id, input: s.input, appliedSourceID: s.appliedSourceID,
+      ...(s.answerScope ? { answerScope: s.answerScope } : {}) })),
+    ...(items[0]!.answerScope ? { scopedAuthority: items.map(s => ({ submissionID: s.id, sourceID: s.appliedSourceID!, ...s.answerScope! })) } : {}),
+    ...(epicIDs.length > 1 ? { featureAuthority: items.map((s, i) => ({ submissionID: s.id, sourceID: s.appliedSourceID!, epicID: questions[i]!.epicID })),
+      featureInstruction: "Cross-feature evidence sharing is NOT shared write authority. Each original answer authorizes changes only in its own named feature. Never cite another feature's current answer to authorize an edit, combine permissions, or choose precedence. Shared/global changes need a separately authorized note. All mandatory evidence from every member still requires reading and frozen verification." } : {}),
     instruction: "Original answers are already saved. Integrate exactly this answer set together, preserving each original question, answer and source ID. No tools, research, approvals, organization, global interpretation or precedence between conflicting human decisions. Other evidence is read and checked separately; no partial publication. Links and drafts are not reviewed evidence." };
   const model = { providerID: project.model.providerID, modelID: project.model.modelID };
-  return { project, items, epicID, base, records, pins, evidenceIDs, model,
+  return { project, items, epicID, epicIDs, base, records, pins, evidenceIDs, model,
     materialKey: hash({ policy: "exact-answer-group-v1", base, records, pins: [...pins], model }) };
 }
 export type AnswerGroupMaterials = ReturnType<typeof answerGroupMaterials>;
+/** A union of target IDs is not transferable authority. Every cited current
+ * answer must independently permit its action, including during draft repair. */
+function validateScopedGroupResult(m: AnswerGroupMaterials, output: Analysis) {
+  const scopes = m.items.map(item => effectiveAnswerScope(m.project, item)!);
+  validateScopedAnswerResult(m.project, scopes, output);
+  const blank: Analysis = { summary: output.summary, goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
+  const validate = (action: Analysis, sourceIDs?: string[]) => {
+    const cited = sourceIDs?.flatMap(id => m.items.flatMap((item, i) => item.appliedSourceID === id ? [scopes[i]!] : [])) ?? [];
+    if (sourceIDs && !cited.length) throw new Error("Scoped shared changes must cite their own original answer's target authority.");
+    if (cited.length) {
+      for (const scope of cited) validateScopedAnswerResult(m.project, [scope], action);
+    } else if (!scopes.some(scope => {
+      try { validateScopedAnswerResult(m.project, [scope], action); return true; } catch { return false; }
+    })) throw new Error("Scoped shared proposals must fit one original answer's target permissions, not their combined scope.");
+  };
+  for (const change of output.specificationUpdates?.changes ?? []) validate({ ...blank, specificationUpdates: { format: 1, changes: [change] } }, change.sourceIDs);
+  for (const change of output.pendingChanges?.changes ?? []) validate({ ...blank, pendingChanges: { format: 1, changes: [change] } }, change.sourceIDs);
+  for (const refinement of output.refinements ?? []) validate({ ...blank, refinements: [refinement] });
+  for (const question of output.questions) {
+    const cited = question.evidenceIDs?.filter(id => m.items.some(item => item.appliedSourceID === id));
+    validate({ ...blank, questions: [question] }, cited?.length ? cited : undefined);
+  }
+}
 function clarificationConflictIDs(project: Project, reason: string, previous?: { conflictIDs: string[] }) {
   const named = project.sources.filter(s => s.kind === "answer" && reason.includes(s.id)).map(s => s.id);
   // A follow-up can describe the same saved conflict without repeating UUIDs.
@@ -471,7 +521,7 @@ export function answerGroupClarificationPreview(project: Project, job: Job) {
   const w = job.answerGroupWork, last = w?.receipts.at(-1)?.response;
   const all = w ? answerGroupClarifications(w) : [], latest = all.at(-1);
   const repair = !!w && answerGroupProgress(w).phase === "repair" && !!carriedDraft(w.receipts);
-  if (!w || all.length >= 8 || latest && w.receipts.length <= latest.fromReceipt || job.status !== "failed" || job.expectedRevision !== project.revision
+  if (!w || w.featurePolicy || w.scopePolicy || all.length >= 8 || latest && w.receipts.length <= latest.fromReceipt || job.status !== "failed" || job.expectedRevision !== project.revision
     || !last || !("answerGroupBlocked" in last) || !repair && w.receipts.some(r => completes(r.response))
     || repair && answerGroupProgress(w).repairs >= answerGroupRepairLimit(w)
     || w.automation && (w.automation.requests >= answerGroupPlayLimits.requests || w.automation.failures >= answerGroupPlayLimits.failures)
@@ -567,7 +617,7 @@ const rulePermissionActive = (w: AnswerGroupWork) => !!w.ruleRepairPermission &&
  * approval nor authority to issue a grant; exact replay is required on consent. */
 export function answerGroupRuleRepairPreview(project: Project, job: Pick<Job, "id" | "status" | "expectedRevision" | "answerGroupWork" | "context">) {
   const w = job.answerGroupWork, last = w?.receipts.at(-1)?.response;
-  if (!w || w.ruleRepairPermission || job.status !== "failed" || job.expectedRevision !== project.revision
+  if (!w || w.featurePolicy || w.scopePolicy || w.ruleRepairPermission || job.status !== "failed" || job.expectedRevision !== project.revision
     || w.attempts >= answerGroupRequestLimit(w) || answerGroupProgress(w).phase !== "repair"
     || answerGroupProgress(w).repairs >= answerGroupLimits.repairs || !last || !("answerGroupBlocked" in last)
     || !/permission|permitted|permits|scope/i.test(last.answerGroupBlocked.reason)) return undefined;
@@ -1231,6 +1281,8 @@ export function authorizeAnswerGroupVerification(m: AnswerGroupMaterials, w: Ans
 }
 export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = false, compactPacking = unionVerification, measuredPacking = compactPacking): AnswerGroupWork {
   const w: AnswerGroupWork = { format: 1, policy: "exact-answer-group-v1", submissionIDs: m.items.map(s => s.id), epicID: m.epicID,
+    ...(m.items[0]!.answerScope ? { scopePolicy: "per-answer-targets-v1" as const } : {}),
+    ...(m.epicIDs.length > 1 ? { featurePolicy: { format: 1 as const, epicIDs: m.epicIDs } } : {}),
     ...(unionVerification ? { verificationPolicy: "union-v1" as const } : {}),
     ...(compactPacking ? { packingPolicy: "lossless-v1" as const } : {}),
     materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
@@ -1281,6 +1333,8 @@ export function planAnswerGroup(m: AnswerGroupMaterials, unionVerification = fal
   }
   // New schedules use more of the actual bounded packet, while retaining the full
   // draft reserve. Saved schedules are never repacked or assigned a different key.
+  if (w.batches.length > answerGroupLimits.batches)
+    throw new AnswerGroupCapacityError("evidence batches", w.batches.length, answerGroupLimits.batches);
   w.planKey = answerGroupPlanKey(w);
   answerGroupWorkSchema.parse(w);
   return w;
@@ -1357,12 +1411,28 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
   }
   if (!("answerGroupDraft" in response) && !("answerGroupRepair" in response)) throw new Error("Shared answer reading requires a complete draft.");
   const next = "answerGroupRepair" in response ? response.answerGroupRepair : response.answerGroupDraft, output = next.analysis, loaded = new Set(context.manifest.includedIDs);
-  if ([...output.questions, ...output.requirements].some(r => r.epicID !== m.epicID)
-    || output.retireQuestions.some(q => m.project.questions.find(r => r.id === q.questionID)?.epicID !== m.epicID)
-    || output.refinements?.some(r => m.project.requirements.find(t => t.id === r.requirementID)?.epicID !== m.epicID)
-    || output.pendingChanges?.changes.some(c => (c.type === "revise-question"
-      ? m.project.questions.find(q => q.id === c.questionID) : m.project.requirements.find(r => r.id === c.requirementID))?.epicID !== m.epicID))
+  if (w.scopePolicy) validateScopedGroupResult(m, output);
+  for (const q of output.questions) validateQuestionUpdateTargets(m.project, q);
+  const ownFeature = (id: string | undefined) => id !== undefined && m.epicIDs.includes(id);
+  if ([...output.questions, ...output.requirements].some(r => !ownFeature(r.epicID))
+    || output.retireQuestions.some(q => !ownFeature(m.project.questions.find(r => r.id === q.questionID)?.epicID))
+    || output.refinements?.some(r => !ownFeature(m.project.requirements.find(t => t.id === r.requirementID)?.epicID))
+    || output.pendingChanges?.changes.some(c => !ownFeature((c.type === "revise-question"
+      ? m.project.questions.find(q => q.id === c.questionID) : m.project.requirements.find(r => r.id === c.requirementID))?.epicID)))
     throw new Error("Shared answer changes must stay within their original feature.");
+  if (w.featurePolicy) {
+    const authority = new Map(m.items.map(item => [item.appliedSourceID!, m.project.questions.find(q => item.input.type === "answer" && q.id === item.input.questionID)!.epicID]));
+    const authorized = (epicID: string | undefined, sourceIDs: string[]) => {
+      const current = sourceIDs.filter(id => authority.has(id));
+      if (!ownFeature(epicID) || !current.length || current.some(id => authority.get(id) !== epicID))
+        throw new Error("Cross-feature answers retain separate source authority; an action must cite its own feature's original answer, not another member's permission.");
+    };
+    for (const r of output.requirements) authorized(r.epicID, r.sourceIDs);
+    for (const c of output.pendingChanges?.changes ?? []) authorized((c.type === "revise-question"
+      ? m.project.questions.find(q => q.id === c.questionID) : m.project.requirements.find(r => r.id === c.requirementID))?.epicID, c.sourceIDs);
+    for (const c of output.specificationUpdates?.changes ?? []) authorized(m.project.requirements.find(r => r.id === c.requirementID)?.epicID
+      ?? output.requirements.find(r => r.localID === c.requirementID)?.epicID, c.sourceIDs);
+  }
   if (new Set(next.answers.map(a => a.submissionID)).size !== m.items.length
     || next.answers.length !== m.items.length || next.answers.some(a => !w.submissionIDs.includes(a.submissionID)))
     throw new Error("Shared answer draft must account for each original answer exactly once.");
@@ -1401,7 +1471,7 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
   const references = (value: unknown, field = ""): void => {
     const declared = field === "requirementID" && output.requirements.some(r => r.localID === value)
       || field === "questionID" && output.questions.some(q => q.localID === value);
-    if (typeof value === "string" && (field === "epicID" ? value !== m.epicID
+    if (typeof value === "string" && (field === "epicID" ? !ownFeature(value)
       : field !== "localID" && (field.endsWith("ID") || field.endsWith("IDs")) && !loaded.has(value) && !declared))
       throw new Error("New shared actions must reference detailed evidence in this request and stay within the feature.");
     if (Array.isArray(value)) value.forEach(v => references(v, field));
@@ -1421,7 +1491,7 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
     const target = m.project.requirements.find(r => r.id === change.requirementID);
     const permittedRule = change.type === "revise" && (answerGroupPlayActive(w) && [...m.evidenceIDs, ...supportRecords(m, w).map(r => r.record.id)].includes(change.requirementID)
       || rulePermissionActive(w) && change.requirementID === w.ruleRepairPermission!.requirementID);
-    if (target && (target.epicID !== m.epicID && !permittedRule || target.sourceIDs.some(id => !loaded.has(id))))
+    if (target && (!ownFeature(target.epicID) && !permittedRule || target.sourceIDs.some(id => !loaded.has(id))))
       throw new Error("Shared changes require the exact same-feature target and every original supporting source loaded first.");
   }
   return { response, draft: next };
@@ -1435,6 +1505,9 @@ export function acceptAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork, d
 }
 export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): { draft: AnswerGroupDraft | undefined; blocked: string | undefined } {
   answerGroupWorkSchema.parse(w);
+  if (!!w.scopePolicy !== !!m.items[0]!.answerScope) throw new Error("Shared answer target permissions changed; paid work was retained.");
+  if (JSON.stringify(w.featurePolicy?.epicIDs) !== JSON.stringify(m.epicIDs.length > 1 ? m.epicIDs : undefined))
+    throw new Error("Shared answer feature permissions changed; paid work was retained.");
   const clarifications = answerGroupClarifications(w);
   if (clarifications.length > 8) throw new Error("Shared human clarification history exceeds its bounded decision count.");
   if (w.humanClarificationFollowups && !w.humanClarification) throw new Error("Follow-up decisions require their retained first clarification.");

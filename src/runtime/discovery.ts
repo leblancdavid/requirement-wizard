@@ -1,5 +1,6 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
+import { ClientError } from "@opencode/client";
 import { DiscoveryRuntimes, discoveryTransportFailure, type DiscoveryTransportPhase } from "./discovery-runtime.js";
 import { organizationPrompt } from "../core/organization-check.js";
 import { readinessBlockedSchema, readinessEvidenceSchema, readinessVerdictSchema, readinessReadSchema } from "../core/readiness-stages.js";
@@ -74,9 +75,9 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
   private async generate(project: Project, options: Parameters<DiscoveryAdapter["analyze"]>[1], prompt: string): Promise<unknown> {
     if (options.context.manifest.organizationCheck && (options.scan || options.research)) throw new Error("Organization checks cannot use scan or research profiles.");
     options.onProgress("Connecting to your selected AI…");
-    const lease = await this.runtimes.acquire(`${project.model.providerID}/${project.model.modelID}`, this.workspace, options.signal, options.research)
-      .catch(error => { throw options.signal.aborted ? error : discoveryTransportFailure(error, "server startup", false) ?? error; });
-    const runtime = lease.runtime;
+    let lease = await this.runtimes.acquire(`${project.model.providerID}/${project.model.modelID}`, this.workspace, options.signal, options.research)
+      .catch(error => { options.signal.throwIfAborted(); throw discoveryTransportFailure(error, "server startup", false) ?? error; });
+    let runtime = lease.runtime;
     let healthy = false;
     let phase: DiscoveryTransportPhase = "model catalog", promptStarted = false;
     let sessionID: string | undefined;
@@ -97,7 +98,23 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
     try {
       options.signal.throwIfAborted();
       options.onProgress("OpenCode is ready; checking the selected model…");
-      const catalog = (await runtime.client.provider.list({}, { signal: options.signal })).data;
+      let catalog;
+      try { catalog = (await runtime.client.provider.list({}, { signal: options.signal })).data; }
+      catch (error) {
+        // The catalog is a read-only metadata lookup, before session creation or
+        // any model prompt. Recover this transport race once with a fresh OWNED
+        // process. Never retry authentication/HTTP/schema/model errors or anything
+        // after prompt dispatch; never refund the caller's reserved attempt.
+        if (!(error instanceof ClientError) || error.reason !== "Transport" || options.signal.aborted) throw error;
+        options.onProgress("OpenCode's model lookup connection was interrupted before any prompt. Reconnecting the owned server once; saved work and the current attempt are unchanged…");
+        await lease.release(false);
+        options.signal.throwIfAborted();
+        phase = "server startup";
+        lease = await this.runtimes.acquire(`${project.model.providerID}/${project.model.modelID}`, this.workspace, options.signal, options.research);
+        runtime = lease.runtime;
+        phase = "model catalog";
+        catalog = (await runtime.client.provider.list({}, { signal: options.signal })).data;
+      }
       if (!catalog) throw new Error("OpenCode returned no provider catalog.");
       const model = selectModel(catalog, project.model.providerID, project.model.modelID);
       if(needsJointInputAdmission(options.context)){
@@ -175,7 +192,8 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       options.signal.throwIfAborted(); healthy = true; return output;
     } catch (error) {
       if (budgetExceeded) throw new Error("Research exceeded its tool budget or attempted a disallowed tool. The round was stopped without applying proposals.");
-      throw options.signal.aborted ? error : discoveryTransportFailure(error, phase, promptStarted) ?? error;
+      options.signal.throwIfAborted();
+      throw discoveryTransportFailure(error, phase, promptStarted) ?? error;
     } finally {
       options.signal.removeEventListener("abort", cancel);
       options.signal.removeEventListener("abort", abortRequest);
@@ -225,14 +243,18 @@ ${plainLanguagePolicy}
 The paid oversized lookup remains saved. Clarify only whether its withRecordIDs referred to the always-pinned human answers rather than requiring ALL requested bodies together. If separate complete original-unit loads beside every pinned answer suffice for the intended work, return {"answerGroupLoadPlan":{"separateOriginalUnits":true,"reason":"explain the intended retrieval scope"}}. This is not a finding of semantic independence or consistency. Every requested original and complete linked support will still be read and every original verification will run. If the original all-at-once comparison is indispensable, return {"answerGroupBlocked":{"reason":"explain the specific indivisible comparison"}}; never waive it to fit. Do not claim to have read any omitted body. The supplied original working packet retains the full draft and every original human answer. No product choices are authorized by clarification.
 Working evidence batch: ${JSON.stringify(context.data)}`;
     const inventory = answerGroupLookupInventory(context);
+    const featureAuthority = expandedEvidence(context.data).featureAuthority;
+    const crossFeature = Array.isArray(featureAuthority);
+    const scoped = Array.isArray(expandedEvidence(context.data).scopedAuthority);
     return `SHARED SAVED-ANSWER INTEGRATION (${stage.phase}). Return ONLY JSON matching the schema. No tools, research, scans, coding or general discovery.
+${scoped ? "SCOPED ANSWER AUTHORITY overrides PLAY and same-feature guidance. The app-owned scopedAuthority maps each original source to its own immutable requirementIDs. Each change must cite its own answer and stay within THAT answer's targets, not the union of member permissions. No new requirements, feature/global changes, retirements or unrelated proposals. Linked clarifications/refinements must fit one original answer's target set. Sharing reads never combines authorization; block genuinely conflicting human choices. Every mandatory original still requires reading and frozen verification." : ""}
 ${plainLanguagePolicy}
 ${requirementWritingPolicy}
 ${(context.data as { answerGroup?: { processingPolicy?: unknown } }).answerGroup?.processingPolicy ? "PLAY PROCESSING: The app owns technical recovery and evidence loading. Feature boundaries do not prevent specificationUpdates.changes type revise of existing original requirements justified by pinned human answers. Complete original support must be detailed. All other cross-feature actions remain prohibited. Do not ask for scope/budget permission or reconfirm settled choices. Block actual human conflicts. Every original batch must verify after repair." : ""}
 ${(context.data as { answerGroup?: { ruleRepairPermission?: unknown } }).answerGroup?.ruleRepairPermission ? "EXACT RULE-REPAIR PERMISSION: answerGroup.ruleRepairPermission is app-owned human scope consent. It overrides the same-feature restriction ONLY for specificationUpdates.changes type revise of its single named existing requirementID. Its complete original support must be detailed before changing it. All other cross-feature actions remain prohibited, including new requirements/questions, retirements, refinements and pending changes. Cite only the original concrete authorization answers. This is not a new product choice or approval of wording; retain actual human conflicts as blockers. Every original evidence batch must verify the repaired draft again." : ""}
 ${(context.answerGroupPagingAdvice?.format ?? 0) >= 9 && stage.phase === "read" ? "This exact read unit may use current-input capacity rather than space reserved for a maximum future draft. The complete current draft and every pinned answer remain present. Keep unchanged actions verbatim; use answerGroupKeep when no change is justified. Make only necessary bounded draft changes, never truncate prior actions or human evidence to create room. If an indispensable revised draft cannot fit with its required evidence, return a technical blocker, not approval or an invented product choice. Every subsequent actual input is measured again; all original verification steps remain mandatory." : ""}
-Integrate ONLY the two to five original answers in this same-feature group. Each complete question/answer and original source ID is pinned in every request. Keep each original human decision distinct; shared reading grants no extra authority and NEVER establishes precedence between conflicting human choices. All other mandatory evidence is read and checked separately. Omitted records, links, available IDs and drafts are not reviewed evidence. If indispensable joint evidence is absent, load it first; if it cannot fit, return answerGroupBlocked rather than assume consistency.
-Read: return {answerGroupDraft:{analysis,answers}} with a COMPLETE bounded analysis and exactly one answers entry per original submissionID, with outcome integrated or no-change and a plain explanation. These entries are model judgments, not human approvals. Retain unchanged actions verbatim; any NEW/CHANGED action may reference only exact evidence detailed in THIS request. Use {answerGroupEvidence:{recordIDs:[...]}} to request up to eight DISTINCT MISSING original IDs allowed by THIS request's lookup schema FIRST; never guess IDs. Use {answerGroupKeep:true} only after a draft exists. Preserve earlier draft actions while loading missing sources. All new requirements/questions must explicitly use the group's feature ID. No global interpretation, organization, assessments, research findings, pair resolutions, review responses/changes or feature archival. goals, actors and assumptions must be []; keep summary about this follow-up, not a new global interpretation.
+Integrate ONLY the two to five original answers in this ${crossFeature ? "cross-feature group. SEPARATE FEATURE AUTHORITY overrides all same-feature and PLAY permission guidance: each action may use only its own feature's current answer as authorization. Exact source-to-feature mapping: " + JSON.stringify(featureAuthority) + ". Sharing evidence never permits cross-feature writes, global changes or combining another member's authority" : "same-feature group"}. Each complete question/answer and original source ID is pinned in every request. Keep each original human decision distinct; shared reading grants no extra authority and NEVER establishes precedence between conflicting human choices. All other mandatory evidence is read and checked separately. Omitted records, links, available IDs and drafts are not reviewed evidence. If indispensable joint evidence is absent, load it first; if it cannot fit, return answerGroupBlocked rather than assume consistency.
+Read: return {answerGroupDraft:{analysis,answers}} with a COMPLETE bounded analysis and exactly one answers entry per original submissionID, with outcome integrated or no-change and a plain explanation. These entries are model judgments, not human approvals. Retain unchanged actions verbatim; any NEW/CHANGED action may reference only exact evidence detailed in THIS request. Use {answerGroupEvidence:{recordIDs:[...]}} to request up to eight DISTINCT MISSING original IDs allowed by THIS request's lookup schema FIRST; never guess IDs. Use {answerGroupKeep:true} only after a draft exists. Preserve earlier draft actions while loading missing sources. All new requirements/questions must explicitly use ${crossFeature ? "their own original answer's feature ID" : "the group's feature ID"}. No global interpretation, organization, assessments, research findings, pair resolutions, review responses/changes or feature archival. goals, actors and assumptions must be []; keep summary about this follow-up, not a new global interpretation.
 specificationUpdates may faithfully activate a declared new: requirement or revise an existing active same-feature target only with explicit original answer intent. Every authorization sourceID MUST be one of ${JSON.stringify(context.manifest.submissionAuthorizationSourceIDs ?? [])}, never historical confirmations or other sources. All of an existing target's original sourceIDs must be detailed in the producing read before a new/changed update; request missing exact evidence first. Preserve stable IDs and supported behavior. Use focused questions/proposals for genuine unresolved human choices; do not reconfirm settled decisions. Do not create duplicates to bypass permissions. Each answer's outcome must accurately describe its effect, including when no specification edit is needed.
 ${(context.answerGroupPagingAdvice?.format ?? 0) >= 8 && stage.phase === "read" ? "Read: ORIGINAL-UNIT continuation. Each readingScope unit includes complete recursive requirement.sourceIDs/source.questionID/question.sourceID support. Change only actions justified by exact bodies here; retain all other draft actions verbatim. Earlier completed pages remain read across rearrangements, not currently detailed or approved. Do not reconstruct unchanged actions by reloading their history. If a SPECIFIC indispensable joint comparison requires missing bodies, request them with withRecordIDs naming detailed counterparts. The whole comparison must fit together; otherwise block. Every original check remains mandatory." : ""}
 ${(context.answerGroupPagingAdvice?.format ?? 0) >= 7 && stage.phase === "check"
@@ -347,8 +369,10 @@ Working evidence batch: ${JSON.stringify(context.data)}`;
     const targetIDs = [...targets] as [string, ...string[]];
     const scopedAreas = [...new Set(scoped.map(source => project.questions.find(q => q.id === source.answerScope!.questionID)?.epicID).filter((id): id is string => !!id))] as [string, ...string[]];
     const pendingOptions = analysisSchema.shape.pendingChanges.unwrap().shape.changes.element.options;
-    const linkedQuestions = project.questions.filter(q => q.epicID !== "project" && scopedAreas.includes(q.epicID)
-      && q.evidenceIDs?.length && q.evidenceIDs.every(id => targets.has(id))).map(q => q.id);
+    const linkedQuestions = project.questions.filter(q => {
+      const links = q.updateTargets?.requirementIDs ?? q.evidenceIDs;
+      return q.epicID !== "project" && scopedAreas.includes(q.epicID) && links?.length && links.every(id => targets.has(id));
+    }).map(q => q.id);
     const questionEvidence = [...new Set([...detailed, ...prior?.questions?.flatMap(q => q.evidenceIDs ?? []) ?? []])] as [string, ...string[]];
     const constrained = scoped.length && targetIDs.length && scopedAreas.length ? draft.extend({
       reviewChanges: z.tuple([]).optional(),
@@ -550,7 +574,7 @@ Working context revision ${project.revision}: ${JSON.stringify(context.data)}`;
     ...(targeted ? { requirements: z.tuple([]), organization: z.tuple([]), assessments: z.tuple([]), retireQuestions: z.tuple([]) } : {}),
     ...(!research ? { researchFindings: z.tuple([]) } : {}),
     ...(context.manifest.epicReview ? { refinements: z.tuple([]), pendingChanges: z.undefined().optional(),
-      questions: maxNew ? z.array(analysisSchema.shape.questions.element.extend({ ...reviewArea, evidenceIDs: z.array(z.string().min(1)).min(1) })).max(Math.min(3, maxNew)) : z.tuple([]) } : {}),
+      questions: maxNew ? z.array(analysisSchema.shape.questions.element.extend({ ...reviewArea, evidenceIDs: z.array(z.string().min(1)).min(1) })).max(Math.min(batchQuestions ? 5 : 3, maxNew)) : z.tuple([]) } : {}),
   });
   // A partial pass cannot apply global interpretation, organization or coverage.
   // Avoid describing those large output structures or asking the model to write
@@ -585,6 +609,8 @@ ${context.manifest.epicReview ? "EPIC WORKFLOW REVIEW: epicWorkflowReview overri
 ${staged ? "STAGED GUARDRAILS OVERRIDE: stagedGuardrailReview is the active phase contract. This request contains only one exact decision batch, not all mandatory decisions at once. Draft proposals are not evidence or human preferences. During discover return only new draft gaps within the remaining displayed capacity. During validate return ONLY guardrailVerdict selecting unchanged draft indexes to retain, or reviewBlocked. No ordinary analysis, new proposals, evidence loads, search, research or changes during validation. Omitted guardrails will be checked separately; never claim a whole-project audit." : ""}
 ${questionIndependencePolicy}
 ${staged?.phase === "validate" ? questionSelectionPolicy : ""}
+EXPLICIT QUESTION UPDATE TARGETS: For a NEW question that only settles existing same-feature requirements, set updateTargets:{format:1,requirementIDs:[exact existing requirement IDs]}. Project-wide questions (epicID "project", including an omitted epicID when the default is "project") MUST OMIT updateTargets, even when citing only project requirements: their answers retain broad scope. Cite each target in evidenceIDs too so its exact motivation/support and decision dependencies remain linked; evidenceIDs may additionally cite original sources or other context without widening the target list. Targets are a restrictive future-answer write boundary, NOT evidence or approval. Name only active, non-rejected requirements whose behavior all offered answers can address within that same non-project feature. Omit updateTargets for genuinely broad/new/shared capabilities, cross-feature decisions or uncertain scope; never narrow a question merely to obtain cheaper processing. Do not modify older questions or answers to add this metadata.
+${batchQuestions && context.manifest.epicReview ? "SHARED CANDIDATE YIELD: Inspect the supplied related targets for up to FIVE genuinely independent high-impact decisions in this one proposal pass. Prefer a grounded set that can share mandatory evidence verification, rather than deliberately stopping after the first useful question. Screen duplicate/answered decisions and dependent follow-ups before proposing. Return fewer or none when justified; the target is never a quota or permission to invent gaps. Every retained candidate still requires every mandatory check." : ""}
 ${context.manifest.epicReview ? "PRODUCT UNCERTAINTY IS A GAP, NOT AUTOMATICALLY AN EVIDENCE BLOCKER: a detailed requirement or rationale explicitly saying intended behavior is unknown can support a focused clarification question citing that record. Ask what should happen, including consequential failure/recovery choices, without asserting what existing code does or inventing an approved workflow. For example, a scene's script attachment proves only attachment; it does not prove startup behavior. Missing script contents prevent claims about current implementation, but do not by themselves prevent asking which startup experience the user intends. Load exact saved evidence when needed to avoid contradicting existing decisions. Use reviewBlocked only when missing factual evidence or decisions prevent a grounded, nonduplicative question or useful review; identify the specific missing evidence. This clarification overrides epicWorkflowReview.evidence's generic insufficient-evidence instruction; unseen records still cannot be cited." : ""}
 ${context.manifest.epicReview ? `Writable proposal epicIDs for this round: ${JSON.stringify(reviewAreas)}. Copy an exact ID from this list or omit epicID to use ${JSON.stringify(context.manifest.focusEpicID ?? "project")}. Epic titles, record IDs, new: aliases and other epicMap/index areas are NOT writable area IDs. This restriction overrides generic advice to use project for general questions: project is permitted only if listed. If a gap belongs to another area, return reviewBlocked explaining the needed focused review; do not silently reassign it.` : ""}
 ${pair ? "This is a requirement overlap resolution task; the pair-specific instructions below override generic discovery/cleanup instructions. Do not perform independent wording cleanup or explore unrelated gaps." : `Before exploring gaps, inspect eligible existing requirements for implementation/tuning leakage, including APPROVED requirements. Return cleanup suggestions in refinements [{requirementID,statement,rationale,acceptance,reason}]. Eligible exact IDs: ${JSON.stringify(refinable)}. Others are omitted, rejected, archived, lack full supporting evidence, or already have a pending/dismissed suggestion for their current wording; do not propose replacements for them as new requirements. Preserve supported intent, constraints and evidence; explain what was abstracted. Suggestions do not edit active requirements or establish human approval. Never combine refinement and reviewChanges for one target. If nothing needs cleanup, refinements is []. ${context.manifest.refinementOnly ? "This is a refinement-only pass: questions, requirements, organization, assessments and retireQuestions must be empty. Preserve project interpretation. If intent is ambiguous, leave that requirement unchanged and explain the need for clarification in summary; targeted questions belong in normal discovery. Inspect only the current bounded working set; never claim whole-project cleanup." : "Refine the detailed working set as part of discovery, then explore remaining gaps."}`}

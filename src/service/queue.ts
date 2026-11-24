@@ -4,7 +4,7 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
-import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup } from "../core/answer-group.js";
+import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup, AnswerGroupCapacityError } from "../core/answer-group.js";
 import { answerIntegrationReasons, type AnswerIntegrationDiagnostic, type AnswerIntegrationCost } from "../core/answer-integration-diagnostics.js";
 import { estimateAnswerIntegrationCost } from "../core/answer-integration-cost.js";
 import { ContextBudgetError } from "../core/context.js";
@@ -1032,11 +1032,14 @@ export class DiscoveryQueue {
           // later in the same explicitly submitted set.
           const groups = new Map<string | undefined, Submission[]>();
           for (const item of candidates) {
-            const epicID = submissionEpic(project, item), group = groups.get(epicID) ?? [];
+            const epicID = JSON.stringify([submissionEpic(project, item), !!item.answerScope]), group = groups.get(epicID) ?? [];
             if (group.length < 5) group.push(item);
             groups.set(epicID, group);
           }
-          const group = [...groups.values()].find(items => items.length >= 2) ?? [];
+          // Preserve the preferred same-feature cohort; otherwise share a bounded
+          // cross-feature evidence pass with per-answer source authority.
+          const cohort = [candidates.filter(s => !!s.answerScope), candidates.filter(s => !s.answerScope)].find(items => items.length >= 2) ?? [];
+          const group = [...groups.values()].find(items => items.length >= 2) ?? cohort.slice(0, 5);
           if (group.length >= 2) {
             try {
               const material = answerGroupMaterials(project, group), plan = planAnswerGroup(material, true);
@@ -1047,7 +1050,7 @@ export class DiscoveryQueue {
             catch (error) {
               // Fit is measured before dispatch. Failed/started groups never use
               // this fallback and can never acquire fresh individual allowances.
-              if (!(error instanceof ContextBudgetError)) throw error;
+              if (!(error instanceof ContextBudgetError) && !(error instanceof AnswerGroupCapacityError && error.kind === "evidence batches")) throw error;
               overflowAnswers = new Set(group.map(s => s.id));
               report("These answers cannot fit a shared evidence schedule. Keeping their individual processing paths; no shared request was started.");
             }
@@ -1094,11 +1097,10 @@ export class DiscoveryQueue {
           const reason: AnswerIntegrationDiagnostic["reason"] = sharedAnswers ? retainedGroup ? "retained-group" : "shared"
             : !coordinated ? "separate-action" : groupResearch ? "research"
               : item.jobID || this.service.store.submissionHasJob(id, item.id) ? "already-started"
-                : item.answerScope ? "scoped-answer"
-                  : item.input.type !== "answer" || item.input.answer.kind !== "answer" ? "other-input"
+                : item.input.type !== "answer" || item.input.answer.kind !== "answer" ? "other-input"
                     : resolutionTaskForAnswer(project, item.input.questionID, resolutionJobs ??= this.service.store.specificationWorkflowJobs(id, "resolution")) ? "resolution"
                       : overflowAnswers?.has(item.id) ? "context-budget" : estimatedCosts.get(item.id)?.selected === "individual" ? "estimated-cost" : !eligibleGroupAnswer(project, item) ? "ineligible"
-                        : saved.length === 1 ? "single-answer" : compatibleAnswers >= 2 ? "different-features" : "single-compatible-answer";
+                        : item.answerScope ? "scoped-answer" : saved.length === 1 ? "single-answer" : compatibleAnswers >= 2 ? "different-features" : "single-compatible-answer";
           answerIntegration = { format: 1, reason, selectedResponses: saved.length, compatibleAnswers,
             groupedAnswers: sharedAnswers ? batch.length : 0,
             ...(estimatedCosts.has(item.id) ? { cost: estimatedCosts.get(item.id)! } : {}) };

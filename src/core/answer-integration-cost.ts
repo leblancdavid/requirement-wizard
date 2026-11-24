@@ -1,7 +1,7 @@
 import type { Project, Submission } from "./model.js";
 import { ContextBudgetError } from "./context.js";
 import { planExactTaskContext } from "./working-set.js";
-import { planSubmissionStages, submissionMaterials } from "./submission-stages.js";
+import { planSubmissionStages, submissionMaterials, submissionTotalSteps } from "./submission-stages.js";
 import { answerGroupMaterials, planAnswerGroupEvidencePages, type AnswerGroupWork, type AnswerGroupMaterials, AnswerGroupCapacityError } from "./answer-group.js";
 import type { AnswerIntegrationCost } from "./answer-integration-diagnostics.js";
 
@@ -28,13 +28,14 @@ export function estimateAnswerIntegrationCost(project: Project, items: Submissio
     const sharedVerificationProxyRequests = work.verificationPolicy ? pages([...new Set(work.batches.flat())]) : sharedReadRequests;
     let individualRequests = 0;
     for (const item of items) {
-      if (item.input.type !== "answer") throw new Error("Only eligible answers may be cost-routed.");
-      const task = { requiredEpicIDs: [material.epicID], recordIDs: [item.appliedSourceID!, item.input.questionID],
+       if (item.input.type !== "answer") throw new Error("Only eligible answers may be cost-routed.");
+       const questionID = item.input.questionID;
+        const task = { requiredEpicIDs: [project.questions.find(q => q.id === questionID)!.epicID], recordIDs: [item.appliedSourceID!, questionID, ...item.answerScope?.requirementIDs ?? []],
         isolatedTask: true, submissionFollowup: true, expandMandatory: true };
       try { planExactTaskContext(project, task); individualRequests++; }
       catch (error) {
         if (!(error instanceof ContextBudgetError)) throw error;
-        individualRequests += planSubmissionStages(submissionMaterials(project, item, task, error)).batches.length * 2;
+        individualRequests += submissionTotalSteps(planSubmissionStages(submissionMaterials(project, item, task, error)));
       }
     }
     // Preserve shared behavior on ties/near ties. Only clearly higher predicted

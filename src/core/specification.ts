@@ -45,7 +45,12 @@ export function applySpecificationUpdates(before: Project, project: Project, res
     const created = !old && result.requirements.some((r) => r.localID === change.requirementID && aliases.get(r.localID!) === id);
     if (!target || (!created && (!old || !included.has(id) || old.sourceIDs.some((id) => !included.has(id))))
       || target.status === "rejected" || !project.epics.some((e) => e.id === target.epicID && !e.archived)) throw new Error("Automatic specification updates need an active detailed target and its complete supporting evidence.");
-    if (batch.some((s) => s.answerScope && !s.answerScope.requirementIDs.includes(id)
+    // A verified scoped group preserves separate source authority, not the old
+    // single-input intersection across unrelated members. Other workflows retain
+    // their original conservative batch rule.
+    const authorityBatch = job.answerGroupWork?.scopePolicy === "per-answer-targets-v1"
+      ? batch.filter(s => !!s.appliedSourceID && change.sourceIDs.includes(s.appliedSourceID)) : batch;
+    if (authorityBatch.some((s) => s.answerScope && !s.answerScope.requirementIDs.includes(id)
       || s.input.type === "review" && s.input.action === "changes-requested" && s.input.requirementID !== id)) throw new Error("Automatic specification update exceeds the human input's exact target scope.");
     if (result.reviewChanges?.some((c) => c.type === "archive-feature" ? c.epicID === target.epicID : c.requirementID === id)
       || result.refinements?.some((p) => p.requirementID === id || p.resolution?.relatedRequirementID === id)

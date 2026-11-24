@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { stageJSON, discardStaged, writePrettyJSON, portableArtifactLimit, portableProjectLimit, type StagedArtifact } from "./staged-json.js";
+import { getHeapStatistics } from "node:v8";
+import { stageJSON, openJSONStage, discardStaged, writePrettyJSON, portableArtifactLimit, portableProjectLimit, type StagedArtifact } from "./staged-json.js";
 import type { Continuation } from "./portable.js";
 
 export type StagedContinuation = StagedArtifact & { parts?: Record<string, StagedArtifact> };
@@ -14,6 +15,18 @@ const indexSchema = z.object({ formatVersion: z.literal(2), parts: z.array(partS
 const entriesSchema = z.object({ formatVersion: z.literal(1), field: fieldSchema,
   entries: z.array(z.tuple([z.string(), z.unknown()])).min(1) }).strict();
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+const hasRecords = (value: Continuation) => value.jobs.length > 0 || value.submissions.length > 0
+  || Object.keys(value.snapshots).length > 0 || Object.keys(value.objects).length > 0;
+
+/** Publication owns this graph. Record counts alone do not bound its size: a
+ * handful of jobs can retain hundreds of MiB of original paid stage receipts.
+ * Under the publisher's 256-MiB cap, reserve headroom before a speculative 64-MiB
+ * whole-file pass. This selects an existing lossless representation, not omission,
+ * a larger heap, a semantic freshness change or permission to repeat model calls.
+ * The explicit numeric argument permits deterministic boundary tests. */
+export function transferPublicationContinuation(value: Continuation, heapUsedBytes = getHeapStatistics().used_heap_size): boolean {
+  return hasRecords(value) && (value.jobs.length >= 128 || Object.keys(value.objects).length >= 8192 || heapUsedBytes >= 128 * 1024 * 1024);
+}
 
 /** Keep small checkpoints byte-identical. Large checkpoints use independently
  * bounded JSON parts, not a giant string concatenated again during import. */
@@ -22,7 +35,7 @@ export function stageContinuation(directory: string, value: Continuation, partLi
   // Publication-private graphs may be consumed. Stage them directly as existing
   // format-2 parts, avoiding the doomed whole-file pass and releasing each batch
   // before walking the rest. Never use this for caller/store-owned evidence.
-  if (!transfer) {
+  if (!transfer || !hasRecords(value)) {
     try { return stageJSON(directory, value, singleLimit, owner); }
     catch (error) { if (!(error instanceof Error) || !error.message.startsWith("Portable artifact exceeds")) throw error; }
   }
@@ -30,38 +43,44 @@ export function stageContinuation(directory: string, value: Continuation, partLi
   const parts: Record<string, StagedArtifact> = {}, descriptors: z.infer<typeof partSchema>[] = [];
   const counts = { jobs: 0, submissions: 0, snapshots: 0, objects: 0 };
   let bytes = 0;
+  let sink: ReturnType<typeof openJSONStage> | undefined;
   try {
     for (const field of fields) {
-      let entries: [string, unknown][] = [], size = 128;
+      let count = 0, size = 128;
       const flush = () => {
-        if (!entries.length) return;
-        const staged = stageJSON(directory, { formatVersion: 1, field, entries }, portableArtifactLimit, owner);
+        if (!count) return;
+        sink!.write("\n  ]\n}\n");
+        const staged = sink!.finish(); sink = undefined;
         const path = `continuation/${staged.hash}.json`;
         parts[path] = staged; bytes += staged.bytes;
         if (bytes > portableProjectLimit) throw new Error("Portable project exceeds supported import size bounds. SQLite work is retained; no managed files were replaced.");
-        descriptors.push({ field, path, hash: staged.hash, count: entries.length }); entries = []; size = 128;
+        descriptors.push({ field, path, hash: staged.hash, count }); count = 0; size = 128;
       };
       // Iterate without duplicating a large object table or serializing all jobs
       // at once. Each individual record must still fit the existing 64 MiB gate.
       for (const key in value[field]) {
         if (!Object.hasOwn(value[field], key)) continue;
         const item = (value[field] as unknown as Record<string, unknown>)[key];
-        let recordBytes = 0, indentation = 0;
-        // Extra indentation in the part envelope is bounded by its line count.
+        let recordBytes = 0;
         writePrettyJSON([key, item], chunk => {
           recordBytes += Buffer.byteLength(chunk, "utf8");
-          for (let at = chunk.indexOf("\n"); at !== -1; at = chunk.indexOf("\n", at + 1)) indentation += 4;
-        });
-        if (entries.length && size + recordBytes + indentation > partLimit) flush();
-         entries.push([key, item]); size += recordBytes + indentation + 8; counts[field]++;
-         if (transfer) delete (value[field] as unknown as Record<string, unknown>)[key];
+        }, 2, false);
+        if (count && size + recordBytes + 8 > partLimit) flush();
+        if (!sink) {
+          sink = openJSONStage(directory, portableArtifactLimit, owner);
+          sink.write(`{\n  "formatVersion": 1,\n  "field": ${JSON.stringify(field)},\n  "entries": [`);
+        }
+        sink.write(count ? ",\n    " : "\n    ");
+        writePrettyJSON([key, item], chunk => sink!.write(chunk), 2, false);
+        count++; size += recordBytes + 8; counts[field]++;
+        if (transfer) delete (value[field] as unknown as Record<string, unknown>)[key];
         if (size >= partLimit) flush();
       }
       flush();
     }
     const index = stageJSON(directory, indexSchema.parse({ formatVersion: 2, parts: descriptors, counts }), portableArtifactLimit, owner);
     return { ...index, parts };
-  } catch (error) { for (const part of Object.values(parts)) discardStaged(part); throw error; }
+  } catch (error) { sink?.discard(); for (const part of Object.values(parts)) discardStaged(part); throw error; }
 }
 
 export function decodeContinuationParts(files: Record<string, string>, value: unknown): unknown {

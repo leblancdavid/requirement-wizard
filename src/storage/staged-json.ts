@@ -10,7 +10,7 @@ export const portableProjectLimit = 256 * 1024 * 1024;
 /** Exact JSON.stringify(value, null, 2) bytes for app-owned JSON graphs, without
  * constructing the whole document string. Shared nodes are emitted each time;
  * only ancestor cycles are rejected. No mutation, replacers or arbitrary toJSON. */
-export function writePrettyJSON(value: unknown, write: (chunk: string) => void) {
+export function writePrettyJSON(value: unknown, write: (chunk: string) => void, depth = 0, trailingNewline = true) {
   const ancestors = new Set<object>();
   let buffer = "";
   const emit = (text: string) => {
@@ -63,17 +63,20 @@ export function writePrettyJSON(value: unknown, write: (chunk: string) => void) 
     if (count) emit(`\n${"  ".repeat(depth)}`);
     emit(array ? "]" : "}"); ancestors.delete(item);
   };
-  visit(value, 0); emit("\n"); if (buffer) write(buffer);
+  visit(value, depth); if (trailingNewline) emit("\n"); if (buffer) write(buffer);
 }
 
-export function stageJSON(directory: string, value: unknown, limit = portableArtifactLimit, owner?: string): StagedArtifact {
+/** Incremental stage sink. A caller must finish or discard it on every path. */
+export function openJSONStage(directory: string, limit = portableArtifactLimit, owner?: string) {
   const prefix = temporaryPrefix(owner);
   mkdirSync(directory, { recursive: true });
   const path = join(directory, `${prefix}${randomUUID()}.tmp`), digest = createHash("sha256");
   let bytes = 0;
   const fd = openSync(path, "wx");
-  try {
-    writePrettyJSON(value, chunk => {
+  let open = true;
+  return {
+    write(chunk: string) {
+      if (!open) throw new Error("Portable stage is already closed.");
       const data = Buffer.from(chunk, "utf8"); bytes += data.length;
       if (bytes > limit) throw new Error("Portable artifact exceeds the supported 64 MiB import size. SQLite work is retained; no managed files were replaced.");
       digest.update(data);
@@ -82,10 +85,19 @@ export function stageJSON(directory: string, value: unknown, limit = portableArt
         if (!written) throw new Error("Portable staging write made no progress; SQLite work is retained.");
         offset += written;
       }
-    });
-    fsyncSync(fd);
-  } catch (error) { closeSync(fd); unlinkSync(path); throw error; }
-  closeSync(fd); return { path, bytes, hash: digest.digest("hex") };
+    },
+    finish(): StagedArtifact {
+      if (!open) throw new Error("Portable stage is already closed.");
+      fsyncSync(fd); closeSync(fd); open = false;
+      return { path, bytes, hash: digest.digest("hex") };
+    },
+    discard() { if (open) { closeSync(fd); open = false; } if (existsSync(path)) unlinkSync(path); },
+  };
+}
+export function stageJSON(directory: string, value: unknown, limit = portableArtifactLimit, owner?: string): StagedArtifact {
+  const stage = openJSONStage(directory, limit, owner);
+  try { writePrettyJSON(value, chunk => stage.write(chunk)); return stage.finish(); }
+  catch (error) { stage.discard(); throw error; }
 }
 export function discardStaged(artifact: StagedArtifact | undefined) {
   if (artifact && existsSync(artifact.path)) unlinkSync(artifact.path);

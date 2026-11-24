@@ -12,7 +12,7 @@ import { cleanWorkspaceTemps, cleanWorkspaceTempsInBackground, startWorkspaceTem
 import { continuationState, decodePortable, portableFiles } from "./portable.js";
 import { emptyExecution } from "../core/execution.js";
 import { publicationFailureClassifier } from "./publication-failure.js";
-import { stageContinuation, discardContinuation, decodeContinuationParts } from "./continuation-parts.js";
+import { stageContinuation, discardContinuation, decodeContinuationParts, transferPublicationContinuation } from "./continuation-parts.js";
 import { hash, renderWorkspace, renderCombinedSpecification, publishWorkspace, checkWorkspace, workspaceFolder, readPortableWorkspace } from "./workspace.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import { migrateDatabase } from "./migrations.js";
@@ -329,6 +329,7 @@ test("private continuation transfer releases staged graphs and preserves exact d
     try {
       assert.deepEqual(state.objects, {}, "Only the private supplied graph is consumed");
       const files = Object.fromEntries(Object.entries(staged.parts!).map(([key, part]) => [key, readFileSync(part.path, "utf8")]));
+      for (const text of Object.values(files)) assert.equal(text, JSON.stringify(JSON.parse(text), null, 2) + "\n", "Streaming part envelopes retain exact pretty JSON bytes");
       assert.deepEqual(decodeContinuationParts(files, JSON.parse(readFileSync(staged.path, "utf8"))), original);
     } finally { discardContinuation(staged); }
     const invalid = structuredClone(original); (invalid.objects.second as any).cycle = invalid.objects.second;
@@ -337,11 +338,57 @@ test("private continuation transfer releases staged graphs and preserves exact d
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("private publication staging preserves small bytes but consumes even low-count ledgers under heap pressure", () => {
+  const state = { formatVersion: 1 as const, jobs: [], submissions: [], snapshots: {}, objects: { exact: { text: "Original evidence é😀" } } };
+  assert.equal(transferPublicationContinuation(state, 128 * 1024 * 1024 - 1), false);
+  assert.equal(transferPublicationContinuation(state, 128 * 1024 * 1024), true);
+  const directory = mkdtempSync(join(parent, "pressure-policy-"));
+  try {
+    const empty = { formatVersion: 1 as const, jobs: [], submissions: [], snapshots: {}, objects: {} };
+    assert.equal(transferPublicationContinuation(empty, 256 * 1024 * 1024), false);
+    const emptyStage = stageContinuation(directory, empty, undefined, undefined, true);
+    try {
+      assert.equal(emptyStage.parts, undefined, "Empty continuations never create an invalid zero-part index, even under pressure");
+      assert.equal(readFileSync(emptyStage.path, "utf8"), JSON.stringify(empty, null, 2) + "\n");
+    } finally { discardContinuation(emptyStage); }
+    const small = stageContinuation(directory, state, undefined, undefined, transferPublicationContinuation(state, 0));
+    try {
+      assert.equal(small.parts, undefined);
+      assert.equal(readFileSync(small.path, "utf8"), JSON.stringify(state, null, 2) + "\n");
+    } finally { discardContinuation(small); }
+    const original = structuredClone(state);
+    const pressured = stageContinuation(directory, state, undefined, undefined, transferPublicationContinuation(state, 128 * 1024 * 1024));
+    try {
+      const files = Object.fromEntries(Object.entries(pressured.parts!).map(([name, part]) => [name, readFileSync(part.path, "utf8")]));
+      assert.deepEqual(decodeContinuationParts(files, JSON.parse(readFileSync(pressured.path, "utf8"))), original);
+      assert.deepEqual(state.objects, {});
+    } finally { discardContinuation(pressured); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("few large paid ledgers use the production pressure policy and stage under the unchanged heap cap", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--import", "tsx", "scripts/check-structured-continuation-memory.ts", "--few-jobs", "--pressure", "--dense", "--publication-policy"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim());
+  assert.equal(report.jobs, 96); assert.equal(report.transfer, true); assert.ok(report.heapBeforeStaging >= 240_000_000);
+  assert.ok(report.bytes > 190_000_000); assert.ok(report.parts > 1);
+  assert.equal(report.verifiedJobs, 96); assert.equal(report.verifiedReceipts, 96 * 232);
+});
+
 test("structured paid-history continuation stages progressively under the production heap cap", { timeout: 60000 }, () => {
   const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--import", "tsx", "scripts/check-structured-continuation-memory.ts"],
     { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   const report = JSON.parse(result.stdout.trim()); assert.equal(report.jobs, 695); assert.ok(report.bytes > 64 * 1024 * 1024);
+});
+
+test("streamed continuation parts retain only one record at a time under near-production staging pressure", { timeout: 60000 }, () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--import", "tsx", "scripts/check-structured-continuation-memory.ts", "--pressure"],
+    { encoding: "utf8", timeout: 55000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout.trim()); assert.equal(report.jobs, 695);
+  assert.ok(report.heapBeforeStaging >= 195_000_000); assert.ok(report.bytes > 64 * 1024 * 1024);
 });
 
 test("continuation above the 64 MiB single-file limit stages bounded parts without dropping evidence", { timeout: 60000 }, () => {

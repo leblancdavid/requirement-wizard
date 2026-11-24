@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { analysisSchema, validateRequirementEvidence, type Analysis, type Job, type Project, type Submission } from "./model.js";
+import { analysisSchema, validateRequirementEvidence, validateQuestionUpdateTargets, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { planExactTaskContext, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure, type ContextTask } from "./working-set.js";
 import { specificationUpdateTargets } from "./specification-permissions.js";
@@ -402,6 +402,7 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
   // Historical paid receipts replay under their original acceptance contract.
   if (live) {
     validateRequirementEvidence(m.project, response.requirements);
+    for (const q of response.questions) validateQuestionUpdateTargets(m.project, q, m.project.questions.find(q => q.id === m.item.answerScope?.questionID)?.epicID);
     assertScopedSubmissionDraft(m, response);
   }
   const loaded = new Set(context.manifest.includedIDs), areas = new Set(m.base.areas.map((e) => e.id));

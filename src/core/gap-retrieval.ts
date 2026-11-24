@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { ContextPack } from "./context.js";
 import type { Project, Job } from "./model.js";
-import { analysisSchema } from "./model.js";
+import { analysisSchema, validateQuestionUpdateTargets } from "./model.js";
 import type { Analysis } from "./model.js";
 import { ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
@@ -225,6 +225,11 @@ export function validateGapFinal(project: Project, context: ContextPack, output:
   output.questions.forEach((q, index) => {
     if (project.scans.length && !q.evidenceIDs?.length) issues.push(`questions[${index}].evidenceIDs: missing required evidence for a scanned project.`);
     unseen(`questions[${index}].evidenceIDs`, q.evidenceIDs ?? []);
+    try { validateQuestionUpdateTargets(project, q, context.manifest.focusEpicID ?? "project"); }
+    catch (error) {
+      if (!(error instanceof Error)) throw error;
+      issues.push(`questions[${index}].updateTargets: ${error.message} Project-wide questions must omit updateTargets; other targets must be cited, active requirements in the question's same non-project feature.`);
+    }
   });
   output.requirements.forEach((r, index) => unseen(`requirements[${index}].sourceIDs`, r.sourceIDs));
   output.retireQuestions.forEach((q, index) => unseen(`retireQuestions[${index}].questionID`, [q.questionID]));

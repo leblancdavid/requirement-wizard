@@ -110,7 +110,7 @@ test("reused owned servers still admit every large request, create fresh denied 
  assert.equal(closes,1);
 });
 
-for (const where of ["catalog", "prompt"] as const) test(`owned discovery transport failure at ${where} never replays a prompt and permits explicit fresh work`, async () => {
+for (const where of ["catalog", "prompt"] as const) test(`owned discovery transport failure at ${where} never replays a prompt; only catalog metadata can reconnect once`, async () => {
  const f=fixture(); let starts=0,closes=0,prompts=0;
  const bootstrap=async()=>{const number=++starts;return {directory:"fixture",close:async()=>{closes++;},client:{
   provider:{list:async()=>{if(number===1&&where==="catalog")throw new ClientError("Transport",{detail:"fetch failed"});return {data:{connected:["openai"],all:[{id:"openai",models:{fixture:{name:"Fixture"}}}]}};}},
@@ -120,10 +120,47 @@ for (const where of ["catalog", "prompt"] as const) test(`owned discovery transp
  }} as never;};
  const adapter=new OpenCodeDiscovery("fixture",bootstrap,10000),options={context:f.context,signal:AbortSignal.timeout(10000),research:false,onSession:()=>{},onTelemetry:()=>{},onResearch:()=>{},onProgress:()=>{}};
  try {
-  await assert.rejects(adapter.analyze(f.project,options),where==="catalog"?/No model prompt was sent/:/may have been accepted/);
-  assert.equal(starts,1);assert.equal(closes,1);assert.equal(prompts,where==="catalog"?0:1);
+   if(where==="catalog") {
+    assert.deepEqual(await adapter.analyze(f.project,options),{});
+    assert.equal(starts,2);assert.equal(closes,1);assert.equal(prompts,1,"The failed catalog lookup sent no prompt");
+   } else {
+    await assert.rejects(adapter.analyze(f.project,options),/may have been accepted/);
+    assert.equal(starts,1);assert.equal(closes,1);assert.equal(prompts,1);
+   }
   assert.deepEqual(await adapter.analyze(f.project,options),{});
-  assert.equal(starts,2);assert.equal(prompts,where==="catalog"?1:2,"Only an explicit new call can send another prompt");
+   assert.equal(starts,2);assert.equal(prompts,2,"Only an explicit new call can send another prompt");
  } finally {await adapter.close();}
  assert.equal(closes,2);
+});
+
+for (const outcome of ["persistent", "rejected", "missing", "cancelled", "cancelled-cleanup", "replacement-startup"] as const)
+test(`catalog reconnection is bounded, cancellation-safe and metadata-only: ${outcome}`, async () => {
+ const f=fixture(),controller=new AbortController();let starts=0,closes=0,lookups=0;
+ const bootstrap=async(selected?:string,workspace?:string,_signal?:AbortSignal,research=false)=>{
+  assert.equal(selected,"openai/fixture");assert.equal(workspace,"fixture");assert.equal(research,false);
+  const number=++starts;
+  if(number===2&&outcome==="replacement-startup")throw new Error("Owned startup failed");
+  return {directory:"fixture",close:async()=>{closes++;if(outcome==="cancelled-cleanup")controller.abort(new Error("Stopped during cleanup"));},client:{
+   provider:{list:async()=>{
+    lookups++;
+    if(outcome==="cancelled")controller.abort(new Error("Stopped during catalog"));
+    if(outcome==="rejected")throw new Error("Catalog rejected");
+    if(outcome==="missing")return {data:undefined};
+    throw new ClientError("Transport",{detail:"private URL/token must not enter diagnostics"});
+   }},
+   session:{create:async()=>{assert.fail("Catalog recovery must never create a session on failure");},prompt:async()=>{assert.fail("No model prompt on catalog failure");}},
+  }} as never;
+ };
+ const adapter=new OpenCodeDiscovery("fixture",bootstrap,10000);
+ try {
+  await assert.rejects(adapter.analyze(f.project,{context:f.context,signal:controller.signal,research:false,onSession:()=>{assert.fail("No session");},onTelemetry:()=>{},onResearch:()=>{},onProgress:()=>{}}),error=>{
+   assert.ok(error instanceof Error);assert.ok(!error.message.includes("private URL/token"));
+   if(outcome==="persistent")assert.match(error.message,/model catalog.*No model prompt was sent/);
+   return true;
+  });
+  const reconnect=outcome==="persistent"||outcome==="replacement-startup";
+  assert.equal(starts,reconnect?2:1);assert.equal(lookups,outcome==="persistent"?2:1);
+  assert.equal(closes,outcome==="persistent"?2:1);
+ }finally{await adapter.close();}
+ assert.equal(closes,outcome==="persistent"?2:1,"Only owned processes are closed, exactly once");
 });

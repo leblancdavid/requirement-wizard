@@ -9,6 +9,8 @@ import { dimensions, epicSchema, initialEpics, organizationSchema, organizationR
 const text = z.string().trim().min(1).max(12000);
 export const answerScopeSchema = z.object({ format: z.literal(1), questionID: z.string().min(1), requirementIDs: z.array(z.string().min(1)).min(1).max(8).refine((ids) => new Set(ids).size === ids.length, "Scoped target IDs must be unique") }).strict();
 export type AnswerScope = z.infer<typeof answerScopeSchema>;
+export const questionUpdateTargetsSchema = z.object({ format: z.literal(1), requirementIDs: z.array(z.string().min(1)).min(1).max(8)
+  .refine(ids => new Set(ids).size === ids.length, "Question update targets must be unique") }).strict();
 export const decisionBasisSchema = z.object({ format: z.literal(1), contextKey: z.string().min(1) }).strict();
 export const reviewUpdatesSchema = z.object({ format: z.literal(1), items: z.array(z.object({
   recordID: z.string().min(1), recordType: z.enum(["requirement", "question", "refinement"]),
@@ -69,6 +71,8 @@ const question = z.object({
   concepts: z.array(conceptSchema).max(8).optional(),
   category: z.enum(dimensions).optional(),
   evidenceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
+  /** Explicit write boundary, distinct from supporting citations. Absent on legacy questions. */
+  updateTargets: questionUpdateTargetsSchema.optional(),
 });
 export const requirementAuthoritySchema = z.object({
   format: z.literal(1), kind: z.literal("answer-derived"), sourceIDs: z.array(z.string().min(1)).min(1).max(8),
@@ -171,7 +175,8 @@ export function reviewFingerprint(item: Project["requirements"][number]): string
 }
 
 export function questionReviewFingerprint(item: Project["questions"][number]): string {
-  return JSON.stringify([item.text, item.whyItMatters, item.options, item.epicID, item.evidenceIDs ?? [], item.status, item.sourceID ?? null]);
+  return JSON.stringify([item.text, item.whyItMatters, item.options, item.epicID, item.evidenceIDs ?? [], item.status, item.sourceID ?? null,
+    ...(item.updateTargets ? [item.updateTargets] : [])]);
 }
 
 // Every field is required so JSON-text output has one unambiguous shape.
@@ -420,6 +425,7 @@ export function validateAnalysisReferences(project: Project, result: Analysis, b
   for (const question of result.questions) {
     validateConcepts(question);
     if (question.evidenceIDs?.some((id) => !knownEvidence.has(id))) throw new Error("Question references missing project evidence.");
+    validateQuestionUpdateTargets(project, question);
   }
   validateRequirementEvidence(project, result.requirements);
   const retired = new Set<string>();
@@ -446,6 +452,16 @@ export function validateAnalysisReferences(project: Project, result: Analysis, b
     if (requirements.has(key)) throw new Error("Analysis repeated an existing requirement instead of preserving its stable ID.");
     requirements.add(key);
   }
+}
+
+/** Targets restrict writes; supporting citations retain the original evidence and
+ * dependency links. Absence preserves every legacy question's original scope. */
+export function validateQuestionUpdateTargets(project: Project, question: Analysis["questions"][number], defaultEpicID?: string) {
+  const epicID = question.epicID ?? defaultEpicID;
+  if (question.updateTargets && (epicID === "project" || question.updateTargets.requirementIDs.some(id =>
+    !question.evidenceIDs?.includes(id) || !project.requirements.some(r => r.id === id && r.epicID === epicID && r.status !== "rejected"
+      && project.epics.some(e => e.id === r.epicID && !e.archived)))))
+    throw new Error("Question update targets must cite existing active requirements in the question's own feature.");
 }
 
 /** Optional presentation metadata must not prevent otherwise valid discovery work. */

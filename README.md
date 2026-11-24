@@ -16,6 +16,27 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Compatible new scoped answers can now share processing without combining their
+target permissions. A two-answer fixture used five shared requests versus a
+twelve-request individual schedule estimate;
+already-started work is unchanged. Local planning also skips provably incompatible
+completed evidence inventories before repacking. Real-project gains remain to be
+measured; see [behavior and limits](docs/browser-workspace.md#scoped-answers-can-share-work).
+
+Local preparation now reuses bounded literal-compression plans without reusing
+model verdicts or stale question context. Workspace tests pass 47/47 after isolating
+artifact-I/O dependencies and making continuation staging heap-aware. A reproduced
+low-count staging abort now passes at the same heap cap; exact production-project
+qualification remains outstanding. See [memory fix and limits](docs/migrations.md#heap-aware-private-continuation-staging-2026-11-23).
+
+New eligible answers can share evidence processing across features while retaining
+separate write permissions. New focused questions can explicitly name requirement
+update targets despite mixed supporting citations; old answers stay unchanged.
+Collection can propose up to five independent questions per pass, and portable
+parts stream one record at a time. Fixture checks show reduced request counts;
+live latency/quality and the production folder-save memory failure remain
+unqualified. See [behavior and limits](docs/browser-workspace.md#sharing-work-without-sharing-permissions-2026-11-23).
+
 Fresh no-research discovery now tries related targets together before splitting
 large shared context into single-target screens. Existing paid work is retained;
 ten remains a soft question target, not a promised yield. Deterministic grouping

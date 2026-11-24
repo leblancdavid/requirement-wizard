@@ -11,6 +11,8 @@ main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height:
 .design-footer-inner { max-width: 1100px; margin-inline: auto; }
 .design-footer .area-filter { flex: 1; min-width: 0; }
 .design-footer select { flex: 1; min-width: 0; max-width: 360px; min-height: 44px; }
+.design-footer .area-filter.question-target { flex: 0 0 auto; }
+.design-footer .question-target select { flex: 0 0 auto; width: 5rem; max-width: 5rem; }
 .design-footer button { min-height: 44px; }
 @media (max-width: 600px) {
   .design-footer { padding-inline: 16px; }

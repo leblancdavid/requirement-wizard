@@ -1,5 +1,376 @@
 # Data migrations and upgrade compatibility
 
+## Scoped answer cohorts and negative planning inventories (SQLite 85 → 86; portable 57)
+
+The latest supplied completed cycle used 113 adapter attempts / 789.5 seconds for
+nine saved answers and 70 attempts / 823.0 seconds for ten design runs. Seven
+answers took the scoped individual path. Design drafted thirteen questions and
+retained six; local planning took 131.2 seconds. These are observed run totals,
+not inference-only timings or a measured benefit from the changes below. Exported
+publication metrics still describe revision 3694, not the current saves.
+
+**New scoped cohorts.** The specification workflow can group two to five fresh
+concrete scoped answers, in one or several features, while keeping scoped and
+unscoped answers in separate cohorts. Every member must have exact applied-source
+scope provenance and still match its original question/target scope. The new
+`answerGroupWork.scopePolicy = "per-answer-targets-v1"` reader capability includes
+each immutable scope in the material/context identity. Existing unscoped material
+and plan identities are unchanged; already-started individual/shared jobs are never
+regrouped, restarted or assigned new attempts. No startup action starts inference.
+
+Reading and frozen verification still cover every mandatory original from every
+member, including full original target support. Each specification/pending change
+must cite its own current answer, and **every** cited member must independently
+permit that action. Two disjoint scopes cannot authorize each other's targets or
+combine into a larger permission. New requirements/retirements/global writes stay
+forbidden; linked clarifications/refinements must fit one original scope. The same
+validation applies to repairs. Publication checks cited answer scopes per action
+only for this marked, verified protocol; older workflows keep their conservative
+batch intersection rule. Broad human clarification/rule-repair scope grants are
+not available for these cohorts. Genuine human conflicts still stop.
+
+Routing compares shared full-reserve reads/union verification with individual
+scoped proposal-first schedules (one proposal plus mandatory checks, not an
+inflated two-pass estimate). Clearly more expensive or unfit fresh groups retain
+individual paths before inference. Actual draft growth, lookups and repairs remain
+unknown. Existing paid work is never repriced. Diagnostic reason selection reports
+fit/cost fallback before a generic scoped-individual explanation.
+
+**Forward migration.** SQLite 86 adds a partial startup-validation index and a
+reader boundary, transactionally with the migration ledger. No project, revision,
+question, source, job, receipt, assessment or allowance is rewritten. Startup
+rejects unsupported scope policies without overwriting them. Portable 57 is emitted
+only when retained continuation contains marked scoped shared work; older exports
+keep their existing minimum format. Downgraded files carrying that capability are
+rejected. Interrupted upgrades roll back; reopening retries after the incompatible
+data or failed operation is addressed. Completed work and stable IDs survive.
+
+**Local planning.** Record-staged historical policy probes now derive the exact
+current mandatory inventory before costly packing. Only completed jobs missing a
+current mandatory original (absent from both its included and omitted ID lists)
+can be rejected early. Omitted IDs are navigation, never evidence read or approved;
+this preserves completed historical last-page manifests. Equal inventories, unfinished
+jobs and other protocols retain normal exact/equivalence validation. This is a
+bounded invocation-local negative prefilter, never a model verdict, positive
+freshness proof or cross-revision context cache. The record-staging evidence
+selector is shared with the packer so both use identical provenance/file-deferral
+rules. No semantic fingerprint, saved layout or scheduling-cache format changes.
+
+Verification so far: scoped same/cross-feature authority checks and a workflow
+fixture used **five actual shared requests versus a twelve-request individual
+schedule estimate**, with every
+mandatory record read/checked. Malformed output, cancellation, stale revisions and
+scope-widening repairs publish nothing; portable clone continuation reuses the paid
+read. The 85→86 regression covers repeated reopen, transactional upgrade failure,
+future-policy rejection and portable downgrade rejection. Paid individual scoped
+work cannot become a fresh shared allowance. The planning fixture used **one**
+inventory preparation versus **nineteen** full historical-policy preparations and
+selected identical next-package bytes, preserving the historical job. A wider
+331-test regression run, 70 specification/portable/migration tests, 321
+planning/repair/submission/runtime checks and ten latest scoped-cohort checks
+passed (these suites overlap). The shared-answer browser smoke and UI build
+passed; the build retains its existing large-chunk warning. Latest planning
+manifest-preservation and paid-individual regressions also passed. The final full
+epic-planning rerun passed 80/80; `npm run check` and `git diff --check` passed
+(Git reported only line-ending conversion warnings).
+No live model calls were made. Production request savings, planning latency and
+design candidate yield remain unqualified; question-generation policy is unchanged.
+
+## Pre-prompt catalog reconnection and owned-check continuation (2026-11-23)
+
+Latest supplied diagnostics show a failed shared-answer job at revision 3918 with
+28 original batches saved, 41 accepted paged replies, one charged attempt on final
+verification and a current 24-page final-check plan. The single selected log entry
+reports `OpenCode connection failed during model catalog` and explicitly confirms
+that this attempt sent no prompt. It does not provide the server-side cause. One
+remaining logical step is **not** a claim that only one model request remains.
+The publication metrics in this export still describe revision 3694 and do not
+qualify any of the newer reported memory aborts as resolved.
+
+**No data/schema, reader-version, fingerprint, semantic assessment or checkpoint
+migration.** Discovery now handles a native V2 `ClientError` with reason `Transport`
+from the initial read-only catalog lookup by retiring that owned runtime and
+trying the catalog once on a fresh owned runtime, within the same cancellation
+signal and already reserved attempt. This occurs strictly before session creation
+or prompt dispatch. It neither refunds nor adds an inference attempt, switches
+model/account/research permissions, caches a failed catalog, nor restarts the user's
+shared OpenCode service. HTTP/authentication/schema/model errors, missing catalogs,
+capacity failures and all post-catalog/session/prompt failures are not retried by
+this branch. A second catalog transport failure stops normally, retaining work.
+Cancellation propagates the cancellation reason instead of leaking a simultaneous
+raw transport diagnostic containing URLs or headers.
+
+For already failed shared work, explicit coordinator Continue can resume its own
+input job when the exact known diagnostic establishes a pre-prompt catalog failure
+and its original stage still has attempts remaining. This is not adoption of a
+separately started/unowned group, a semantic repair, a new group plan, or an
+assessment-only Review changes action. Saved read/verification replies and the
+failed attempt remain intact; nothing restarts on view, startup or polling. Normal
+material/prefix/ownership checks still apply before the next request. Exhaustion
+does not renew through repeated Continue.
+
+Verification: 36 runtime/client/capacity tests and two owned shared-check recovery
+cases passed. They cover successful/persistent catalog transport loss, no retry
+after prompt dispatch, non-transport/missing catalog failures, cancellation during
+lookup/cleanup, replacement startup failure, exact model/profile, owned cleanup,
+no repeated reads, unchanged historical failed jobs and attempt exhaustion. A live
+`npx tsx scripts/check-owned-discovery-health.ts` passed against installed V2 with
+two owned startups, healthy warm reuse and dead-owned-server replacement, **zero
+sessions and zero prompts**. It does not reproduce the intermittent catalog error
+or qualify successful subscription inference. `npm run check` and
+`git diff --check` also passed after these edits (Git reported only line-ending
+conversion warnings). The wider answer-group, workflow, workflow-resilience,
+runtime input-capacity, client and catalog regression run passed **250/250** tests.
+
+## Shared-answer batch overflow and explicit preflight recovery (2026-11-23)
+
+The latest supplied logs show seven retained-input blockers with a raw Zod
+`batches` array maximum of 32. The two latest answer jobs are completed (20 and
+22 requests, about 139 and 151 seconds respectively), not hung in a pending model
+request. A separate latest publication abort reports the `continuation` phase at
+revision 3892; its 108,838,796-byte sample is the last reported measurement, not
+the peak or proof that the eventual allocation was small. An older successful-
+publication metrics payload in the export is revision 3694 and does not qualify
+the current publication. Folder publication remains unresolved.
+
+Reproduced: a fresh shared cohort can require more than 32 packets even though
+each member's complete individual schedule fits the existing bounds. The planner
+previously threw a generic schema error, which escaped the queue's context-size
+fallback and marked waiting responses as needing attention. It now throws a typed
+`evidence batches` capacity stop after trying the existing lossless dense packing.
+Only the fresh-group preflight catches this category and keeps the original
+individual paths. No grouping request was spent, no evidence was removed and the
+32-batch limit is unchanged. Retained paid groups never use this fallback.
+
+**No persisted schema/version, fingerprint, evidence or assessment migration.**
+Existing generic preflight blockers recover only on explicit Continue/Play, not
+startup, polling, view inspection or an assessment-only Review changes action.
+Recovery requires the exact historical single 32-batch array-issue shape, a still-
+eligible current concrete unscoped answer, no conflict/archive/research opt-in and
+no current or historical job for that submission. The normal explicit workflow
+then prepares complete individual packets. Other diagnostics, genuine conflicts,
+stale inputs and all paid/exhausted work retain their existing paths; this does not
+refund attempts, change old schedules or recreate completed model work.
+
+A deterministic five-answer/80-source regression reproduces the shared overflow,
+proves every full individual schedule fits, retains the old blocked inputs, checks
+that two SQLite reopens and inspection start no work, then verifies explicit
+individual dispatch and unchanged answers/requirements. Another regression removes
+the submission's job binding but retains actual paid history: the historical-job
+query still prevents fresh individual work and preserves the original job/attempt.
+Malformed/mixed/unrelated diagnostic cases are rejected by recovery classification.
+Type checking, all three focused regressions, the shared-answer browser check and
+diff checking passed. The wider answer/workflow/resilience run passed 207/207
+tests with no failures or skips. The later paid-history guard and repeated-reopen
+test refinements passed in the focused run. No live model calls were made.
+
+## Project-wide discovery target correction (2026-11-23)
+
+Fresh supplied logs show two discovery failures at revision 3874 with
+`Question update targets must cite existing active requirements in the question's
+own feature.` Both reviews target Project-wide. The validator intentionally forbids
+`updateTargets` on Project-wide questions, but the new authoring instructions only
+said "same-feature" and did not explicitly name that exception. The exact rejected
+model bodies are not in this log export, so additional invalid-target causes cannot
+be ruled out. A separate publication abort's last reported phase is now
+`workspace-render` (228,211,472 measured heap bytes), not continuation staging;
+the earlier staging fix does not qualify this separate failure as resolved.
+
+**No additional persisted format/fingerprint migration.** SQLite 85 / conditional
+portable 56 remain unchanged. Prompt advice now explicitly requires Project-wide
+questions (including the implicit project default) to omit `updateTargets`; other
+targets must still be cited active requirements in the same non-project feature.
+Validation remains strict: never strip targets from a model response, change its
+feature, widen an existing answer or apply an unchecked question automatically.
+
+Invalid target metadata now enters the existing finite staged citation-correction
+path before verification. Rejected bodies are retained as dated rejected history,
+not successful receipts. A replacement uses the same three-attempt step allowance,
+keeps the completed paid prefix and must pass every required evidence check. It
+does not grant another recovery budget. Existing generic failed-target records
+receive dispatch-only warning advice on explicit continuation; where the old body
+was not saved it stays unavailable, and its charged attempt is not refunded.
+Historical valid receipts, semantic checks, package identities and original input
+remain unchanged. Portable round-trip tests retain the rejected metadata and spend,
+and exhaustion tests prevent another continuation from renewing attempts.
+
+Type checking, diff checking, 255 discovery/citation/planning/collection tests and
+both focused legacy-warning cases passed (the second warning case was added after
+the 255-test run). Tests cover replacement, exhausted retries, portable preservation
+and historical failed-job continuation without invented replies or refunded spend.
+These are deterministic fixtures, not live model qualification. The separate
+real-project rendering-memory abort remains open.
+
+## Heap-aware private continuation staging (2026-11-23)
+
+**No schema, reader-version, fingerprint, assessment or freshness migration.**
+The publisher previously selected consuming part staging only at 128 retained jobs
+or 8,192 historical objects. Counts do not bound receipt-graph memory: fewer jobs
+can retain much larger paid ledgers. Below those thresholds it first attempted a
+64-MiB single file and, on overflow, kept the entire graph alive through part
+serialization. The earlier one-record streaming change did not release those
+low-count graphs because the publication call still passed `transfer: false`.
+
+The same existing format-2 consuming path is now selected when measured used heap
+is at least 128 MiB, regardless of counts. This reserves headroom under the unchanged
+256-MiB publisher cap, avoids the speculative whole-file pass under pressure and
+releases each private record after writing. Low-pressure small checkpoints retain
+their exact single-file bytes. This is a compatible representation choice, not new
+authority or permission: current readers already accept both forms, no evidence is
+omitted and completed requests, IDs, attempts, assessments and original inputs are
+unchanged. Existing manifest conflict checks, generation/lease gates and intended-
+hash journals remain in place. Interrupted format transitions can recover through
+the existing journal; SQLite remains authoritative. Retry folder sync explicitly
+after restarting the updated backend; publication starts no model requests.
+
+A synthetic 96-job fixture with 22,272 original structured receipts reproduces a
+V8 abort at continuation staging with the count-only policy and 256-MiB cap. It
+reached about 267 MB measured used heap before staging (used heap includes young
+generation as well as the capped old generation). The same input/cap passed with
+consuming staging, producing about 201 MB in 24 existing-format parts. This is a
+reproduced low-count failure mechanism, **not** an exact replay of the supplied
+revision-3873 database or proof that all publication-memory failures are resolved.
+The regression uses the actual publication selector and verifies hashes plus every
+original question, evidence ID, option and charged receipt in the exported parts.
+Boundary/small-byte/round-trip tests cover representation compatibility. Empty
+continuations keep their single-file form even if consuming staging is explicitly
+requested: a format-2 index must never have zero parts. An initial suite run caught
+that pressure-path edge case; after the fix all 91 workspace/portable/migration
+tests passed (including 47 workspace checks). Type checking, the portable browser
+check, a repeated pressure fixture and `git diff --check` passed. No live inference
+ran; the earlier full 2,252-test/full-browser results predate this final selector
+change and have not been rerun wholesale for it.
+
+## Literal preparation memo and artifact I/O isolation (2026-11-23)
+
+**No additional SQLite, portable, assessment, fingerprint or freshness migration.**
+SQLite 85 / conditional portable 56 introduced by the separate-answer-authority
+work below remain the boundary. This follow-up changes compatible
+computation only: no persisted evidence/receipt is rewritten or invalidated and no
+completed model call or assessment needs repeating.
+
+`shareRepeatedText` now memoizes only the exact literal-substring/phrase dictionary,
+not rendered contexts, record selection, review status, authorization, scores or
+model verdicts. Keys cover the full ordered eligible string inventory, repetition,
+phrase mode and policy; JSON-escaped hashing distinguishes lone surrogates. Every
+call still traverses and renders the current input, including new pending questions
+and current metadata. Cold substring counting aggregates identical full strings
+without changing the historical phrase prefix/ranking, stable ordering, wire bytes
+or saved context identities. Historical-plan oracle tests cover both phrase policies,
+duplicates/substrings, the 250k phrase prefix, ordering and Unicode.
+
+The process-local memo is bounded to 64 plans / two MiB, uses owned flat UTF-16
+copies so short substrings cannot retain huge original JSON graphs, skips oversized
+plans, and safely recomputes evicted entries. It is disposable on restart and never
+exported. Exact planning-context keys still include current project/question inputs;
+cross-revision semantic context/verdict reuse remains deliberately unchanged.
+
+Filesystem-only path validation, artifact reads and streamed hashes now live in
+`src/storage/workspace-artifacts.ts`, with compatible re-exports from `workspace.ts`.
+The 48-MiB large-text microfixture previously imported the complete rendering/model
+graph solely for artifact hashing. Numeric tracing showed about 27 MB loaded before
+its 24-MiB rope flattened during staging. Direct artifact-I/O imports reduced that
+baseline to about eight MB; the unchanged 24-MiB input and 48-MiB cap now pass exact
+stage/hash verification. This isolates the unit fixture, **not** a claim that the
+full application fits in 48 MiB. Full publication/near-pressure tests retain their
+existing 256-MiB cap and path/junction/external-edit/recovery checks.
+
+Verification so far: workspace tests passed 45/45, superseding the 44/45 result below;
+317 working-set/planning/processing/portable/migration tests also passed. Type
+checking and focused literal-plan tests passed. A synthetic 96-source/16-render
+benchmark (`npx tsx scripts/benchmark-literal-sharing.ts`) observed 356.6 ms without
+memo retention versus 86.4 ms with 15 hits/one miss, with identical output digest.
+These timings are not end-to-end discovery or live model performance. The reported
+revision-3873 production save abort remains unqualified; no live inference ran.
+The focused epic browser runner initially failed on obsolete header/discovery
+controls. Updated navigation uses the current Design footer, accessible tooltips,
+target dropdown and explicit Logs → technical Processing & queue path; saved
+discovery summaries are checked under Progress → Last discovery review. The
+updated focused runner now passes. The full `npm test` run completed successfully:
+1,029 pretest, 862 main-suite and 361 posttest checks (2,252 total), with no failures
+or skips. The workspace suite also passed 45/45 again after the final artifact
+allowlist/regex edit. Type checking and UI build passed; production-memory and
+live-model qualification remain outstanding.
+
+The subsequent browser-runner follow-up also keeps the question-target dropdown
+compact (five rem, retaining the 44px touch height). It changes presentation only:
+no SQLite/portable payload, question target preference, fingerprint, assessment or
+saved-job migration is needed. Current assessment refresh can prepare focused
+Design questions; fixture counts distinguish that permission from general gap
+discovery. Linked notes are stageable, so irreducible-size coverage now uses an
+oversized individual requirement, not an obsolete assumption about linked chains.
+Type checking and 56 appearance/queue/review tests passed during this follow-up.
+The full `npm run test:browser` run, including `posttest:browser`, passed with the
+compact target styling. The focused epic runner also passed: it holds a real
+candidate at request seven, verifies unpublished drafts, then completes all checks;
+it also covers explicit Stop/resume with original receipts, above-target fallback,
+empty-screen early completion, diagnostics export/privacy/failure, reload and mobile.
+All browser checks use deterministic adapters, not live inference.
+
+## Separate answer authority and streamed parts (SQLite 84 → 85; portable 56)
+
+**Reader boundary, no historical payload rewrite.** New questions may carry
+`updateTargets:{format:1,requirementIDs:[...]}` independently of additional source
+citations. Every target must be an existing, active, same-feature requirement also
+cited in `evidenceIDs`, retaining existing dependency/evidence closure. This explicit
+subset determines the future answer's write boundary even when citations include
+sources. Missing metadata preserves the legacy capture rule. Never add it to old
+questions or retroactively narrow saved answers. Legacy question fingerprint bytes
+remain unchanged; new fingerprints include the new explicit boundary.
+
+New shared groups can carry `featurePolicy:{format:1,epicIDs:[...]}` for two to five
+fresh, unscoped answers across active features. The complete union of each original
+single-answer evidence inventory is read and checked. Each changed/new requirement
+or source-authorized update must cite its own feature's current answer; another
+member's answer cannot authorize an edit. No new global permission, shared
+clarification-note authority, scope-repair grant, approval or precedence follows
+from membership. Same-feature groups remain preferred; cost/fit checks can select
+individual work before dispatch. Scoped, research, resolution, and already-started
+answers keep their existing separate paths. Historical shared groups retain their
+original hashes, context bytes, attempts and receipts without the new marker.
+
+Version 85 installs partial startup-validation indexes, validates question-target
+and feature-policy formats transactionally, and starts no inference. Unsupported
+future markers roll back the upgrade without replacing evidence. Portable 56 is
+conditional on retained question-target metadata or cross-feature permissions,
+including unfinished drafts/history; claiming an older portable version rejects
+adoption rather than stripping these boundaries. Reopening/retrying compatible
+data does not repeat model calls or require reassessment. Assessment identities and
+concurrency counters are unchanged.
+
+Explicit question collection now advertises up to five independent candidates per
+proposal, rather than three, within the existing five-question response bound.
+Every survivor still needs every mandatory check. This only changes new authoring
+guidance/capacity; old drafts and checks are not invalidated, and useful yield is
+not guaranteed. Exact planning-cache generations have **not** changed: safe reuse
+across changed pending questions needs separate dependency-aware qualification.
+
+Continuation staging now writes each record directly into an open bounded part
+and releases transferred private records immediately, rather than retaining an
+eight-MiB batch of record graphs before serialization. Existing format-2 envelopes,
+exact JSON formatting, hashes, import bounds, cleanup and journal rules remain in
+force; part boundaries may differ, not the decoded evidence. Nontransferred caller
+graphs remain unmodified. No export-format or assessment migration is needed for
+this staging allocation change. Interrupted staging leaves committed SQLite work
+and the prior publication intact; explicit folder-sync retry never repeats inference.
+
+Deterministic initial results: 362 relevant tests passed before additional recovery
+tests were added; focused cross-feature success/failure/upgrade/clone tests passed
+7/7, including cancellation, stale and malformed checks. A two-answer large fixture
+used five shared requests (three reads/two checks), compared with twelve separately
+planned requests, preserving the full mandatory verification union. A five-question
+collection fixture passed with explicit targets and unchanged requirements. Workspace
+tests passed 44/45, including a 695-job, ~201-MB streamed export with at least 195 MB
+of measured heap before staging under the unchanged 256-MiB heap cap. The preexisting
+48-MiB large-single-text fixture still exhausts its heap; it is not marked passing.
+These are fixtures, not qualification of the reported revision-3873 production
+failure or real-model speed/quality. No live model calls were made.
+
+The later 296-test processing/repair/migration run also passed, as did
+`npm run test:browser` (UI build, browser suite and posttest browser checks), type
+checking and diff checks. The workspace failure above remains unresolved;
+this is not an all-tests-passing claim.
+
 ## Scoped saved-answer proposals (SQLite 83 → 84; portable 55)
 
 New multi-batch scoped-answer schedules may carry `proposalRead` with policy

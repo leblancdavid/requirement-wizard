@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { PublicationObjects } from "./publication-objects.js";
 import { portableArtifactLimit, portableProjectLimit } from "./staged-json.js";
-import { stageContinuation, discardContinuation, type StagedContinuation } from "./continuation-parts.js";
+import { stageContinuation, discardContinuation, transferPublicationContinuation, type StagedContinuation } from "./continuation-parts.js";
 import { publicationFailureClassifier } from "./publication-failure.js";
 import { cleanWorkspaceTemps } from "./workspace-temporary.js";
 import { explorationProgress, explorationFingerprinter, type ExplorationRecord } from "../core/exploration.js";
@@ -757,7 +757,7 @@ export class ProjectStore {
       // Format/feature detection needs the intact graph; rendering does not.
       const preparedPortableFiles = portableFiles(project, execution, continuation, true);
       phase("continuation-staging");
-      const transfer = continuation.jobs.length >= 128 || Object.keys(continuation.objects).length >= 8192;
+      const transfer = transferPublicationContinuation(continuation);
       stagedContinuation = stageContinuation(directory, continuation, undefined, undefined, transfer, owner);
       const parts = Object.entries(stagedContinuation.parts ?? {});
       const continuationBytes = stagedContinuation.bytes + parts.reduce((sum, [, part]) => sum + part.bytes, 0);

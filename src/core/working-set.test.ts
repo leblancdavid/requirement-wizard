@@ -16,6 +16,80 @@ import { retrievalEvidenceBasis } from "./gap-retrieval.js";
 import { epicReviewContext, planEpicReview } from "./epic-review.js";
 import { createHash } from "node:crypto";
 import { gapEvidence } from "./gap-backlog.js";
+import { LiteralSharingCache, literalSharingCache } from "./literal-sharing.js";
+
+/** Historical compression-plan oracle. Keep the original traversal and repeated
+ * substring counting independent from the memoized/frequency implementation. */
+function legacyLiteralPlan(strings: string[], sharePhrases: boolean, phrasePolicy?: "joint-v1") {
+  const candidates = new Set(strings.flatMap(text => [text, ...text.split(/\r?\n/).filter(line => line.length >= 80)]));
+  if (sharePhrases) {
+    const phrases = new Map<string, number>(); let scanned = 0;
+    for (const text of strings) {
+      if (scanned >= 250000) break;
+      const available = text.slice(0, 250000 - scanned); scanned += available.length;
+      const words = [...available.matchAll(/\S+/g)];
+      for (let at = 0; at < words.length; at++) for (const width of phrasePolicy ? [8, 16, 32] : [8, 16]) {
+        const last = words[at + width - 1]; if (!last) continue;
+        const start = words[at]!.index!, end = last.index! + last[0].length, length = end - start;
+        if (length < 80 || length > (phrasePolicy ? 1024 : 512)) continue;
+        const phrase = available.slice(start, end), count = phrases.get(phrase);
+        if (count !== undefined || phrases.size < (phrasePolicy ? 16384 : 4096)) phrases.set(phrase, (count ?? 0) + 1);
+      }
+    }
+    const saving = ([text, count]: [string, number]) => count * (text.length - 32) - text.length - 40;
+    for (const [text] of [...phrases].filter(entry => entry[1] >= (phrasePolicy ? 2 : 3) && saving(entry) > 0)
+      .sort((a, b) => saving(b) - saving(a) || (phrasePolicy ? a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0 : a[0].localeCompare(b[0]))).slice(0, phrasePolicy ? 256 : 64)) candidates.add(text);
+  }
+  return [...candidates].filter(text => {
+    let occurrences = 0;
+    for (const value of strings) {
+      let from = 0, at: number;
+      while ((at = value.indexOf(text, from)) !== -1) { if (++occurrences >= 2) return true; from = at + text.length; }
+    }
+    return false;
+  }).sort((a, b) => b.length - a.length);
+}
+
+test("literal compression memo preserves the historical plan for ordered duplicates, substrings, phrase limits and Unicode", () => {
+  const memo = new LiteralSharingCache(), line = "Keep original café, cafe\u0301, 😀 and \\quoted\\ details without guessing intended recovery behavior. ";
+  const cases = [[], [line], [line, line], [line.repeat(2)], [line, `First\r\n${line}\nLast`, line.slice(1)],
+    ["a".repeat(81), "b".repeat(81), "a".repeat(81)], [line + "\ud800", line + "\ud801", line + "\ud800"],
+    Array.from({ length: 4 }, (_, i) => `${i}: ${line.repeat(700)}`)];
+  for (const strings of cases) for (const [phrases, policy] of [[false, undefined], [true, undefined], [true, "joint-v1"]] as const) {
+    const expected = legacyLiteralPlan(strings, phrases, policy), before = memo.profile();
+    assert.deepEqual(memo.plan(strings, phrases, policy), expected);
+    assert.deepEqual(memo.plan([...strings], phrases, policy), expected);
+    assert.equal(memo.profile().hits, before.hits + 1);
+  }
+});
+
+test("literal compression cache keys distinguish exact order, repetition, policy and lone surrogates and enforce both retention bounds", () => {
+  const memo = new LiteralSharingCache({ entries: 2, bytes: 4096 }), text = "x".repeat(100);
+  for (const strings of [[text, text], [text, text, text], [text + "\ud800", text + "\ud800"], [text + "\ud801", text + "\ud801"]]) memo.plan(strings, false);
+  assert.equal(memo.profile().misses, 4); assert.ok(memo.profile().entries <= 2); assert.ok(memo.profile().bytes <= 4096);
+  const before = memo.profile(); memo.plan([text, text], false); assert.equal(memo.profile().misses, before.misses + 1, "Evicted plans are recomputed, not fabricated");
+  const full = memo.profile(); memo.plan([text.repeat(100), text.repeat(100)], false);
+  assert.equal(memo.profile().bytes, full.bytes, "Oversized plans cannot evict/retain an unbounded text graph");
+  assert.ok(Object.isFrozen(memo.plan([text, text], false)), "Callers cannot corrupt a retained plan");
+  const reversed = new LiteralSharingCache(); reversed.plan([text, text + "y"], false); reversed.plan([text + "y", text], false);
+  reversed.plan([text, text + "y"], true); reversed.plan([text, text + "y"], true, "joint-v1");
+  assert.equal(reversed.profile().misses, 4);
+});
+
+test("reusing a literal plan always renders current pending questions and metadata, never a cached context or verdict", () => {
+  const text = "Literal-only fixture that retains each original human decision and exact supporting evidence. ".repeat(3);
+  const first = { revision: 1, sources: [{ id: "literal-source", text }], questions: [{ id: "old-question", text: "Old short choice?", status: "pending" }] };
+  const packed = shareRepeatedText(first), before = literalSharingCache.profile();
+  const next = { revision: 2, sources: [{ id: "literal-source", text }], questions: [{ id: "new-question", text: "New short choice?", status: "answered" }] };
+  const current = shareRepeatedText(next); assert.equal(literalSharingCache.profile().hits, before.hits + 1);
+  assert.deepEqual(decodeContext<typeof next>(current.data).questions, next.questions);
+  assert.equal(decodeContext<typeof next>(current.data).revision, 2);
+  assert.notDeepEqual(current.data, packed.data);
+  const changed = { ...next, questions: [{ ...next.questions[0]!, text: text + "A new foundational choice" }] };
+  const cold = literalSharingCache.profile(); const updated = shareRepeatedText(changed);
+  assert.equal(literalSharingCache.profile().misses, cold.misses + 1);
+  assert.deepEqual(decodeContext<typeof changed>(updated.data).questions, changed.questions);
+});
 
 const empty = (): Analysis => ({ summary: "Updated interpretation", goals: ["Changed goal"], actors: [], assumptions: [],
   questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],

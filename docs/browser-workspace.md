@@ -1,5 +1,97 @@
 # Browser workspace, epics, and estimated completeness
 
+## Scoped answers can share work
+
+New explicitly submitted batches can now group compatible scoped answers, including
+across features. Each answer retains its own exact requirement targets; shared
+reading does not combine permissions. Scoped and broad answers stay in separate
+cohorts. Every mandatory original is still read and checked against the combined
+frozen draft before any changes publish. Started jobs keep their original paths.
+
+Save several answers before submitting to enable grouping. Fit/cost checks can
+still choose individual processing, and no savings are promised for every batch.
+A deterministic two-answer fixture used five shared requests versus a twelve-request
+individual schedule estimate. Local design planning also avoids packing completed historical
+policies already missing a required current original; that is not reuse of an old
+verdict. See [migration, checks and limits](migrations.md#scoped-answer-cohorts-and-negative-planning-inventories-sqlite-85--86-portable-57).
+
+Shared answer preflight now falls back to complete individual schedules when a new
+cohort exceeds the existing 32-batch limit. An older raw `batches` size error is not
+a request still running: eligible responses with no started job can be recovered
+through explicit **Continue specification** after restarting the updated backend.
+Existing paid groups and completed answers are not restarted or regrouped. See
+[compatibility and latest logs](migrations.md#shared-answer-batch-overflow-and-explicit-preflight-recovery-2026-11-23).
+The latest supplied logs also show a separate publication-memory abort during
+`continuation` at revision 3892; that remains open.
+
+Fresh discovery logs exposed Project-wide questions carrying forbidden explicit
+update-target metadata. Authoring advice now names that exception, and malformed
+targets use the existing bounded correction path without replaying completed
+stages or resetting attempts. No targets are silently stripped or published without
+verification. See [compatibility and latest failure evidence](migrations.md#project-wide-discovery-target-correction-2026-11-23).
+An earlier supplied revision-3874 folder-save abort was in workspace rendering,
+not continuation staging; the newer revision-3892 report above is during
+continuation preparation. Neither real-project failure is qualified as resolved.
+
+## Literal preparation reuse and memory-test isolation (2026-11-23)
+
+The focused epic browser runner is aligned with the current workspace:
+discovery and the compact question-target dropdown live in the Design footer;
+saved discovery summaries live under Progress → Last discovery review; diagnostic
+exports and technical queue controls live in Logs. Assessment refresh may prepare
+focused Design questions, but is tested separately from general gap discovery.
+Removed legacy progress widgets are not treated as current UI: exact stage counts,
+unpublished drafts and retained receipts are checked against saved fixture state.
+This navigation/layout follow-up changes no persisted formats or freshness rules.
+The irreducible-size fixture now uses an individually oversized requirement (a
+linked-note chain can legitimately be staged). The long-running staged fixture
+keeps a real candidate through mandatory checks instead of assuming an empty
+candidate must consume the historical full read/check schedule. The target
+dropdown no longer stretches to share the epic selector's available width.
+The focused epic check and full `npm run test:browser` (including posttest checks)
+passed with these changes; these are deterministic fixtures, not live model or
+production-memory qualification.
+
+Repeated local packet preparation now reuses a bounded exact literal-compression
+dictionary. This saves repeated substring/phrase search, not evidence checks or
+model requests. Current questions, metadata and permissions are rendered afresh;
+unchanged text never makes a changed pending decision or project context reusable.
+Whole-context/verdict reuse across changed project inputs remains deferred.
+
+Workspace tests now pass 45/45 after separating lightweight artifact inspection
+from the rendering/model imports in the 48-MiB serializer fixture. Its input/cap
+are unchanged, and full-publication tests still use 256 MiB. This does not establish
+that the reported real-project save abort is fixed. See
+[compatibility and measurements](migrations.md#literal-preparation-memo-and-artifact-io-isolation-2026-11-23).
+
+## Sharing work without sharing permissions (2026-11-23)
+
+The specification workflow can now group up to five eligible **new, unscoped**
+answers across features when no same-feature pair is available. Each answer keeps
+its own feature's write authority; all original evidence still needs reading and
+verification against the combined frozen draft. Cost/fit preflight may keep answers
+separate. At that slice, previously started work, scoped answers, research, and conflict-resolution
+tasks are not silently regrouped. Save several answers before submitting through
+the workflow to make eligible grouping possible; saving alone starts no inference.
+
+New focused questions can declare explicit requirement update targets separately
+from their other source citations. Every target remains cited as supporting evidence
+too, so review blockers and original-support links stay intact. This lets a mixed
+requirement/source citation question keep a narrow answer boundary. Older broad
+questions and answers are never retrospectively narrowed. Broader requested changes
+still need a separately authorized feature/project note; this does not suppress
+genuine conflicts or approve model wording.
+
+Explicit collection advertises up to five independent grounded candidates per
+proposal so they can share verification. Five is a capacity, not a promised yield
+or quota. Dependent follow-ups wait for their foundational answer as before.
+
+A two-answer fixture used five shared requests versus twelve individual requests;
+production savings remain unqualified. The latest supplied cycle used 152 requests
+for nine answers and 86 for nine published discovery questions. Planning-cache
+reuse across changed project/question inputs remains a follow-up, not claimed as
+implemented. See [upgrade and verification](migrations.md#separate-answer-authority-and-streamed-parts-sqlite-84--85-portable-56).
+
 ## Efficient scoped answers and review order (2026-11-23)
 
 For new oversized answers linked to specific requirements, processing can propose

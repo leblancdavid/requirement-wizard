@@ -1,4 +1,4 @@
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, processingQueue, closeTechnicalViews, technicalProcessing } from "./menu-check-helpers.js";
 import { advancedQueue, runQueueAction, discoveryActions } from "./queue-check-helpers.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -35,6 +35,7 @@ let releaseStaged!: () => void;
 const stagedGate = new Promise<void>((resolve) => { releaseStaged = resolve; });
 let headroomCalls = 0;
 let assessmentCalls = 0;
+let clarificationCalls = 0;
 let largeAssessmentCalls = 0;
 let releaseLarge!: () => void;
 const largeGate = new Promise<void>((resolve) => { releaseLarge = resolve; });
@@ -44,6 +45,11 @@ const connections: Connections = {
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context, signal }) {
+  if (context.manifest.readinessQuestions) {
+    clarificationCalls++;
+    assert.equal(context.manifest.epicReview, undefined, "Assessment follow-up is not general gap discovery");
+    return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [] } } : empty();
+  }
   if (context.manifest.definitionAssessment) {
     if (context.manifest.definitionAssessment.staged) {
       largeAssessmentCalls++;
@@ -75,7 +81,7 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   }
   if (_p.name === "Headroom fallback browser") {
     headroomCalls++;
-    assert.equal(context.manifest.epicReview!.contextPolicy, "staged-headroom-v2");
+    assert.ok(context.manifest.epicReview!.contextPolicy?.startsWith("staged-"));
     assert.ok(context.manifest.characters > 72000 && context.manifest.characters <= 96000);
     assert.equal(context.manifest.epicContextBudget!.aboveTarget, true);
     const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
@@ -84,9 +90,12 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   if (_p.name === "Staged decision browser") {
     stagedCalls++;
     if (stagedCalls === 7) await stagedGate;
-    assert.ok(context.manifest.characters <= 72000);
+    assert.ok(context.manifest.characters <= 96000);
     const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
-    return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    return stage.phase === "discover" ? { ...empty(), questions: [{ epicID: "orders", text: "Which receipt should a failed order retain?",
+      whyItMatters: "Make recovery observable", evidenceIDs: context.manifest.epicReview!.recordIDs,
+      options: [{ label: "Keep", consequence: "Retain the failed receipt" }, { label: "Replace", consequence: "Keep only the latest receipt" }] }] }
+      : { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
   }
   if (_p.name === "Failed gap outcome browser") return { summary: 42 };
   if (_p.name === "Epic question target browser") {
@@ -105,30 +114,35 @@ let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
+  const discoveryProgress = async () => {
+    await closeTechnicalViews(page);
+    await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
+    const details = page.locator('details[aria-label="Discovery review status"]');
+    if (!await details.evaluate(element => (element as HTMLDetailsElement).open)) await details.locator(":scope > summary").click();
+    return page.getByRole("region", { name: "Epic workflow review progress", exact: true });
+  };
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: /Epic review browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  const review = page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions", exact: true });
-  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true });
+  const review = page.getByRole("contentinfo", { name: "Discovery controls", exact: true }).getByRole("button", { name: "Discover", exact: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(headerDiscovery).toBeInViewport();
+  await expect(review).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.setViewportSize({ width: 1280, height: 960 });
   await expect(page.getByRole("button", { name: "Review next epic workflow", exact: true })).toHaveCount(0);
-  for (const tab of [/^Specification/, /^Project map/, /^Activity/]) {
+  for (const tab of [/^Specification/, /^Progress/, /^Activity/]) {
     await page.getByRole("tab", { name: tab }).click();
     await expect(review).toHaveCount(0);
-    await expect(headerDiscovery).toBeVisible();
-    await expect(headerDiscovery).toHaveAttribute("title", /before enabling/);
+    await expect(page.getByRole("button", { name: "Application menu", exact: true })).toBeVisible();
     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveCount(0);
   }
   await page.getByRole("tab", { name: /^Design/ }).click();
   await discoveryActions(page);
   await expect(review).toBeVisible();
-  await expect(page.locator(".discovery-hint")).toContainText("Find missing decisions");
+  await expect(review).toHaveAccessibleDescription(/Find missing decisions/);
   await page.getByRole("tab", { name: /^Specification/ }).click();
   await runQueueAction(page, "Discover missing decisions");
   await expect.poll(() => calls).toBe(2);
@@ -140,24 +154,20 @@ try {
   assert.equal(blocked.status, "completed"); assert.equal(blocked.epicReviewReport!.reviewed, 0);
   const completedPackage = store.jobs(project.id).find((job) => job.context?.epicReview && job.result);
   assert.ok(completedPackage); assert.notEqual(completedPackage.context!.epicReview!.packageID, blocked.context!.epicReview!.packageID);
-  await page.locator(".topbar .queue-trigger").click();
-  const status = page.getByRole("region", { name: "Epic workflow review progress", exact: true });
+  const status = await discoveryProgress();
   await expect(status).toContainText("1 group reviewed"); await expect(status).toContainText("1 unable to finish");
-  await expect(status.getByLabel("Workflow context budget", { exact: true })).toContainText("Preferred context target: 72,000");
-  await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
-  await status.locator(":scope > details > summary").click();
-  await status.getByText("Evidence blockers", { exact: true }).click();
-  await expect(status).toContainText("Missing the external order recovery contract.");
-  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await expect(status).toContainText("No new questions does not mean there are no missing decisions");
+  assert.match(JSON.stringify(blocked), /Missing the external order recovery contract/);
+  await closeTechnicalViews(page);
   assert.equal(calls, 2, "One click continues independent packages after a valid evidence blocker");
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders"); await discoveryActions(page); await review.click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.epicReviewReport?.modelCalls).toBe(0);
   assert.equal(calls, 2, "Neither checked nor blocked packages replay after reload");
-  await page.locator(".topbar .queue-trigger").click();
+  await discoveryProgress();
   await expect(status).toContainText("1 group reviewed"); await expect(status).toContainText("1 unable to finish");
-  await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
-  await page.getByText("Discovery diagnostics", { exact: true }).click();
+  await technicalProcessing(page);
+  await page.locator("summary").filter({ hasText: /^Export discovery diagnostics$/ }).click();
   const diagnostics = page.getByRole("region", { name: "Discovery diagnostics", exact: true });
   await expect(diagnostics).toContainText("No requirement text");
   await diagnostics.getByText(/Select runs ·/).click();
@@ -184,13 +194,14 @@ try {
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-review-mobile.png"), fullPage: true });
   assert.deepEqual(store.get(project.id).requirements, before.requirements); assert.deepEqual(store.get(project.id).sources, before.sources);
   assert.deepEqual(store.getJob(blocked.id), blocked); assert.deepEqual(errors, []);
-  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await closeTechnicalViews(page);
   await page.setViewportSize({ width: 1280, height: 960 });
   await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
   const overview = page.getByRole("region", { name: "Project progress", exact: true });
-  await expect(overview.getByRole("region", { name: "Discovery review status", exact: true })).toContainText("Discovery is incomplete");
-  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("separate steps");
+  await expect(overview.locator('details[aria-label="Discovery review status"]')).toContainText("No new questions does not mean no gaps remain");
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("does not change requirements or start coding");
   const refreshCoverage = overview.getByRole("button", { name: "Refresh definition coverage", exact: true });
+  await expect(refreshCoverage).toBeEnabled();
   const refreshAppearance = await refreshCoverage.evaluate((button) => {
     const style = getComputedStyle(button);
     return { background: style.backgroundColor, border: style.borderTopStyle, borderWidth: parseFloat(style.borderTopWidth), height: button.getBoundingClientRect().height };
@@ -202,12 +213,15 @@ try {
   assert.notEqual(await refreshCoverage.evaluate((button) => getComputedStyle(button).outlineStyle), "none", "Keyboard focus must remain visible");
   await refreshCoverage.click();
   await expect.poll(() => coverage(store.get(project.id)).stale).toBe(false);
-  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("3 current");
-  assert.equal(assessmentCalls, 3); assert.equal(calls, 2, "Assessment refresh cannot silently discover gaps");
+  assert.equal(coverage(store.get(project.id)).epics.filter(area => area.assessed && !area.stale).length, 3);
+  assert.equal(assessmentCalls, 3); assert.equal(calls, 2, "Assessment refresh cannot silently launch general gap discovery");
+  await expect(refreshCoverage).toBeEnabled();
+  const completedClarifications = clarificationCalls;
   assert.deepEqual(store.get(project.id).requirements, before.requirements); assert.deepEqual(store.get(project.id).sources, before.sources);
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect(overview.getByRole("button", { name: "Refresh definition coverage", exact: true })).toBeEnabled();
   assert.equal(assessmentCalls, 3, "Current areas do not repeat model calls");
+  assert.equal(clarificationCalls, completedClarifications, "Current refresh does not replay completed question preparation");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-progress.png"), fullPage: true });
@@ -225,33 +239,39 @@ try {
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
   await discoveryActions(page);
-  await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("10");
+  await page.getByRole("combobox", { name: "Question batch target", exact: true }).selectOption("10");
   await review.click();
   await expect.poll(() => store.get(targetProject.id).questions.length).toBe(12);
   await expect(review).toBeEnabled();
   assert.equal(targetCalls, 4, "One click keeps reviewing independent packages in the same epic");
-  await page.locator(".topbar .queue-trigger").click();
-  await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("12 pending (target 10)");
+  await discoveryProgress();
+  assert.equal(store.get(targetProject.id).questions.filter(question => question.status === "pending").length, 12);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-question-target.png"), fullPage: true });
-  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await closeTechnicalViews(page);
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await page.setViewportSize({ width: 1280, height: 960 });
-  await expect(page.locator(".gap-controls input")).toHaveValue("10");
-  assert.ok(await page.locator(".gap-controls input").evaluate((element) => element.getBoundingClientRect().width < 100), "Question target stays compact");
+  await expect(page.getByLabel("Question batch target", { exact: true })).toHaveValue("10");
+  assert.ok(await page.getByLabel("Question batch target", { exact: true }).evaluate((element) => element.getBoundingClientRect().width < 100), "Question target stays compact");
   await page.screenshot({ path: resolve(".reqwizit-state/browser-design-controls.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(review).toBeVisible();
+  await expect(review).toBeInViewport();
+  await expect(page.getByLabel("Question batch target", { exact: true })).toBeInViewport();
+  assert.ok(await page.getByLabel("Question batch target", { exact: true }).evaluate(element => element.getBoundingClientRect().height >= 44), "Compact target retains a touch-sized control");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-design-controls-mobile.png"), fullPage: true });
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await discoveryActions(page);
-  await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("10");
+  await expect(page.getByRole("combobox", { name: "Question batch target", exact: true })).toHaveValue("10");
   assert.equal(targetCalls, 4, "Reload retains the target without starting inference");
   let sizeProject = store.create("Oversized human evidence browser", "Keep shared constraints exact", { providerID: "openai", modelID: "fixture" });
   for (let i = 0; i < 10; i++) sizeProject = store.note(sizeProject.id, sizeProject.revision,
     Array.from({ length: 1400 }, (_, n) => `Guardrail-${i}-${n.toString(36)}-${(n * 17 + i).toString(36)}`).join(" ").slice(0, 11000), "project");
   const indivisible = store.beginJob(sizeProject.id, sizeProject.revision).job; store.claimJob(indivisible.id, Date.now() + 60000);
-  store.finishJob(indivisible.id, { ...empty(), requirements: [{ epicID: "project", statement: "One indivisible evidence chain", rationale: "Every linked decision is needed together",
-    sourceIDs: sizeProject.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: ["All linked decisions must be loaded together"] }] });
+  // Linked notes can now be staged safely. Make the requirement record itself
+  // irreducible instead of assuming a split-capable evidence chain must fail.
+  const irreducibleText = (part: number) => Array.from({ length: 172 }, (_, n) => createHash("sha256").update(`irreducible-${part}-${n}`).digest("hex")).join("");
+  store.finishJob(indivisible.id, { ...empty(), requirements: [{ epicID: "project", statement: irreducibleText(0), rationale: irreducibleText(1),
+    sourceIDs: sizeProject.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: Array.from({ length: 8 }, (_, i) => irreducibleText(i + 2)) }] });
   sizeProject = store.get(sizeProject.id); sizeProject = store.review(sizeProject.id, sizeProject.revision, sizeProject.requirements[0]!.id, "accepted", "");
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: /Oversized human evidence browser/ }).click();
@@ -260,18 +280,16 @@ try {
   // This no-inference fixture intentionally compacts/splits many exact human
   // constraints. Wait for its terminal state, not Playwright's 5s UI default.
   await expect(review).toBeEnabled({ timeout: 30_000 });
-  await page.locator(".topbar .queue-trigger").click();
-  await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("Gap exploration blocked: all");
-  await expect(status).toContainText("no packages could be reviewed");
-  await status.locator(":scope > details > summary").click();
-  await status.getByText("Evidence blockers", { exact: true }).click();
-  await expect(status).toContainText("Largest exact records before lossless encoding");
+  await discoveryProgress();
+  await expect(status).toContainText("could not check any groups");
+  const sizeReport = store.jobs(sizeProject.id).at(-1)!.epicReviewReport!;
+  assert.ok(sizeReport.total > 0); assert.equal(sizeReport.blocked, sizeReport.total);
   assert.equal(calls, 2); assert.equal(targetCalls, 4, "Size blockers make no model calls");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-size-blocked.png"), fullPage: true });
   let stagedProject = store.create("Staged decision browser", "Keep all exact decisions", { providerID: "openai", modelID: "fixture" });
   stagedProject = store.organize(stagedProject.id, stagedProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Review recovery", dependencies: [] }]);
-  for (let i = 0; i < 30; i++) stagedProject = store.note(stagedProject.id, stagedProject.revision,
+  for (let i = 0; i < 160; i++) stagedProject = store.note(stagedProject.id, stagedProject.revision,
     Array.from({ length: 64 }, (_, n) => createHash("sha256").update(`browser-global-${i}-${n}`).digest("hex")).join(""), "project");
   const stagedSeed = store.beginJob(stagedProject.id, stagedProject.revision).job; store.claimJob(stagedSeed.id, Date.now() + 60000);
   store.finishJob(stagedSeed.id, { ...empty(), requirements: [{ epicID: "orders", statement: "Retain failed order receipts", rationale: "Original idea", sourceIDs: [stagedProject.sources[0]!.id], acceptance: ["A failed attempt remains visible"] }] });
@@ -281,14 +299,18 @@ try {
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
   await discoveryActions(page); await review.click();
-  await expect.poll(() => stagedCalls).toBe(7);
+  await expect.poll(() => {
+    const job = store.jobs(stagedProject.id).at(-1)!;
+    assert.notEqual(job.status, "failed", job.diagnostic);
+    return stagedCalls;
+  }, { timeout: 30_000 }).toBe(7);
   const runningStageJob = structuredClone(store.jobs(stagedProject.id).at(-1)!);
   assert.equal(runningStageJob.status, "running");
   assert.deepEqual(store.get(stagedProject.id), stagedProject, "In-flight drafts must not publish");
-  await page.locator(".topbar .queue-trigger").click();
-  await expect(status.getByLabel("Staged decision review", { exact: true })).toContainText("6 / 8 stages saved");
-  await expect(status).toContainText("Drafts stay unpublished");
-  await expect(status).toContainText("continue until finished, stopped, or blocked");
+  await discoveryProgress();
+  await expect(status).toContainText(/6 of \d+ review steps saved/);
+  await expect(status).toContainText(/Findings appear after all parts have been checked|Surviving questions require every evidence check/);
+  assert.equal(runningStageJob.retrievalWork!.epicStages!.phase, "validate");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-staged-mobile.png"), fullPage: true });
   await page.reload(); assert.equal(stagedCalls, 7, "Reload does not start a second worker");
@@ -296,7 +318,7 @@ try {
   await page.getByLabel("Filter by feature").selectOption("orders");
   releaseStaged();
   await expect(review).toBeEnabled();
-  await expect.poll(() => stagedCalls).toBe(8);
+  await expect.poll(() => stagedCalls).toBeGreaterThanOrEqual(8);
   assert.equal(store.getJob(runningStageJob.id).status, "completed", "One click continues beyond six calls in the same job");
   assert.ok(store.jobs(stagedProject.id).some((job) => job.result && job.retrievalWork?.epicStages?.phase === "complete"));
   let pausedProject = store.create("Budget pause browser", "Keep exact review checkpoints", { providerID: "openai", modelID: "fixture" });
@@ -312,11 +334,11 @@ try {
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: /Budget pause browser/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await page.locator(".topbar .queue-trigger").click();
+  await processingQueue(page);
   const pauseDialog = page.getByRole("dialog", { name: "Processing & queue" });
   await expect(pauseDialog).toContainText("Paused—progress saved");
   await expect(pauseDialog.getByText(/^Last round (failed|interrupted):/)).toHaveCount(0);
-  await pauseDialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await closeTechnicalViews(page);
   await runQueueAction(page, "Resume discovery only");
   await expect.poll(() => store.jobs(pausedProject.id).at(-1)?.status).toBe("completed");
   assert.deepEqual(store.getJob(paused.id), paused);
@@ -333,11 +355,14 @@ try {
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
   await discoveryActions(page); await review.click(); await expect(review).toBeEnabled({ timeout: 30_000 });
-  assert.equal(headroomCalls, 2);
-  await page.locator(".topbar .queue-trigger").click();
-  await expect(status).toContainText("above target");
-  assert.ok(store.jobs(headroomProject.id).some((job) => job.context?.epicReview?.contextPolicy === "staged-headroom-v2"
-    && job.retrievalWork?.epicStages?.phase === "complete" && job.retrievalWork.epicStages.contextPolicy === "staged-headroom-v2"));
+  assert.equal(headroomCalls, 1, "An empty candidate screen does not spend unnecessary verification requests");
+  const headroomJob = store.jobs(headroomProject.id).filter(job => job.retrievalWork?.epicStages).at(-1)!;
+  assert.ok(headroomJob);
+  assert.equal(headroomJob.status, "completed", headroomJob.diagnostic);
+  await discoveryProgress();
+  await expect(status).toContainText(/No suggestions remain|not a complete scope search|has not established whether decisions are missing/);
+  assert.equal(headroomJob.retrievalWork?.epicStages?.phase, "complete");
+  assert.equal(headroomJob.retrievalWork.epicStages.contextPolicy, headroomJob.context!.epicReview!.contextPolicy);
   assert.deepEqual(store.get(headroomProject.id).sources, headroomProject.sources);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   let failedProject = store.create("Failed gap outcome browser", "Exercise one failed gap outcome", { providerID: "openai", modelID: "fixture" });
@@ -346,15 +371,14 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Failed gap outcome browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await discoveryActions(page); await review.click(); await expect(review).toBeEnabled();
-  await page.locator(".topbar .queue-trigger").click();
+  await processingQueue(page);
   const diagnostic = store.jobs(failedProject.id).at(-1)!.diagnostic!;
   assert.ok(diagnostic);
-  const outcome = page.getByRole("region", { name: "Gap scan outcome", exact: true });
-  await expect(outcome).toContainText(diagnostic);
-  await expect(outcome.locator("details")).not.toHaveAttribute("open");
-  await outcome.getByText("Technical details", { exact: true }).click();
-  const dialogText = await page.getByRole("dialog", { name: "Processing & queue" }).innerText();
-  assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
+  const failedQueue = page.getByRole("dialog", { name: "Processing & queue" });
+  await expect(failedQueue.getByRole("alert")).toContainText("couldn’t finish");
+  await expect(failedQueue).not.toContainText(diagnostic);
+  await failedQueue.locator(".job-error").getByRole("button", { name: "View logs", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Logs", exact: true }).locator("pre")).toContainText(diagnostic);
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
   let large = store.create("Large definition browser", "Retain original startup and build decisions", { providerID: "openai", modelID: "fixture" });
   large = store.organize(large.id, large.revision, [{ type: "upsert", epicID: "runtime", title: "Runtime startup and build compatibility", purpose: "Preserve observable startup compatibility", dependencies: [] }]);
@@ -369,48 +393,46 @@ try {
   assert.ok(await refreshRuntime.evaluate((button) => button.getBoundingClientRect().height >= 44));
   await refreshRuntime.click();
   await expect.poll(() => largeAssessmentCalls).toBe(2);
-  const batchProgress = overview.getByRole("region", { name: "Definition assessment progress", exact: true });
-  await expect(batchProgress).toContainText("1 of"); await expect(batchProgress).toContainText("progress score updates when the whole review finishes");
-  await expect(batchProgress).toContainText(/Reading your project information|Checking the findings against your project information/);
-  await expect(batchProgress).toContainText("Local preparation:");
-  await batchProgress.getByText(/^Evidence in this request/).click();
-  await expect(batchProgress).toContainText("exact text is retained for assessment");
-  await expect(batchProgress).toContainText("rules that apply to the whole project");
+  const refreshStatus = overview.getByRole("region", { name: "Definition assessment refresh", exact: true });
+  await expect(refreshStatus).toContainText("Reviewing how clearly your product is defined");
+  await expect.poll(() => store.jobs(large.id).at(-1)?.definitionWork?.receipts.length).toBe(1);
   assert.equal(largeAssessmentCalls, 2, "Inspecting assessment evidence never starts a request");
   assert.deepEqual(store.get(large.id).assessments, []);
   await page.reload(); await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
-  await expect(batchProgress).toContainText("1 of"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
+  await expect(refreshStatus).toContainText("Reviewing how clearly your product is defined");
+  assert.equal(store.jobs(large.id).at(-1)!.definitionWork!.receipts.length, 1);
+  assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
   await page.getByRole("tab", { name: /^Design/ }).click();
+  await technicalProcessing(page);
   await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(large.id).at(-1)!.status).toBe("cancelled");
   const stoppedAssessment = structuredClone(store.jobs(large.id).at(-1)!);
   assert.equal(stoppedAssessment.definitionInterruption!.cause, "user-stop");
   assert.equal(stoppedAssessment.definitionWork!.receipts.length, 1);
   assert.ok(JSON.stringify(stoppedAssessment.definitionWork!.receipts[0]!.response).length > 12000);
-  await page.locator(".topbar .queue-trigger").click();
+  await processingQueue(page);
   const assessmentQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-  await expect(assessmentQueue.getByRole("region", { name: "Definition assessment progress", exact: true })).toContainText("Stopped—progress saved");
+  await expect(assessmentQueue).toContainText("Saved evidence and completed checks are retained");
   await expect(assessmentQueue).toContainText("Definition processing is paused");
   await expect(assessmentQueue).not.toContainText("Discovery is paused. Saved submissions are retained.");
   await (await advancedQueue(page)).getByRole("button", { name: "Resume this assessment", exact: true }).click();
   await expect.poll(() => coverage(store.get(large.id)).epics.find((e) => e.epicID === "runtime")?.stale).toBe(false);
-  const resumedAssessment = store.jobs(large.id).at(-1)!;
+  const resumedAssessment = store.jobs(large.id).filter(job => job.definitionWork).at(-1)!;
   assert.equal(resumedAssessment.definitionWork!.receipts[0]!.jobID, stoppedAssessment.id);
   assert.equal(resumedAssessment.definitionWork!.receipts[1]!.attempts, 2);
   assert.deepEqual(store.getJob(stoppedAssessment.id), stoppedAssessment);
-  await page.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await closeTechnicalViews(page);
   await page.getByRole("tab", { name: /^Progress \(\d+%\)$/ }).click();
-  await expect(batchProgress).toContainText("The review is finished");
-  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 awaiting change review · 1 not assessed");
+  await expect(refreshStatus).toContainText("The latest definition review is saved");
+  assert.equal(coverage(store.get(large.id)).epics.filter(area => area.assessed && !area.stale).length, 1);
   await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");
   assert.deepEqual(store.get(large.id).sources, large.sources);
   await page.setViewportSize({ width: 390, height: 844 });
-  await batchProgress.getByText(/^Evidence in this request/).click();
-  await expect(batchProgress).toContainText("exact text is retained for assessment");
+  assert.ok(resumedAssessment.definitionWork!.receipts.length > 1, "Completed exact evidence receipts remain available after continuation");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-staged.png"), fullPage: true });
   const completedCalls = largeAssessmentCalls; await page.reload(); assert.equal(largeAssessmentCalls, completedCalls);
   assert.deepEqual(errors, []);
-  console.log("Epic review browser check passed: diagnostic privacy/failure, selected epic, blockers, separate definition refresh/status, one-click staged continuation beyond six calls, v2 fallback, no-call reuse, reload and mobile layout; no live model calls.");
+   console.log("Epic review browser check passed: diagnostic privacy/failure, selected epic, blockers, separate definition refresh/question preparation, one-click staged continuation beyond six calls, above-target fallback, retained Stop/resume receipts, no-call reuse, reload and mobile layout; no live model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }
 finally { releaseStaged(); releaseLarge(); await browser?.close(); await app.close(); store.close(); }

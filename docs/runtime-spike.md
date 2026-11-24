@@ -1,5 +1,21 @@
 # OpenCode runtime spike
 
+## Catalog transport race before prompt dispatch (2026-11-23)
+
+Discovery can now replace its owned server once and repeat only the initial
+read-only model-catalog lookup after native V2 `ClientError("Transport")`. There
+is no session or prompt yet; the caller's attempt remains charged. Persistent,
+authentication/schema/model and post-catalog/session/prompt failures stop without
+automatic model retry. Cancellation prevents replacement/prompt dispatch and
+preserves its own reason. Explicit Continue can also resume the coordinator's
+retained pre-prompt catalog failure within its remaining stage allowance, without
+replaying reads or adopting an unrelated paid group.
+
+The owned health script passed again with zero sessions/prompts; deterministic
+tests exercise catalog retry bounds, cancellation and paid progress retention.
+This does not identify the intermittent server-side cause or establish live model
+completion. See [compatibility and exact checks](migrations.md#pre-prompt-catalog-reconnection-and-owned-check-continuation-2026-11-23).
+
 ## Owned-server health admission (2026-11-15)
 
 Idle discovery reuse now checks owned-process liveness and a bounded native
@@ -17,7 +33,8 @@ reported 337-ms transport failure. See [compatibility and limits](migrations.md#
 Discovery now reuses a successful owned server for up to ten idle seconds for the
 same workspace/model/research profile, with exclusive leases and at most two idle
 servers. Sessions, prompts and checks are never reused; fresh capacity admission
-still applies. Failed/cancelled requests retire the server without automatic retry.
+still applies. Failed/cancelled model requests retire the server without automatic
+retry; the later pre-prompt catalog-only exception above never replays inference.
 Browser/terminal teardown closes these owned processes, including startup races.
 The shared desktop service is not used. Deterministic lease tests demonstrate
 eleven sequential requests with one startup rather than eleven; they do not

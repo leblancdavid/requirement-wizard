@@ -307,7 +307,7 @@ try {
   const shared = queue.getByRole("region", { name: "Shared answer integration", exact: true });
   await expect(shared).toContainText("Integrating 5 answers together");
   const selection = queue.getByRole("region", { name: "Response integration selection", exact: true });
-  await expect(selection).toContainText("Compatible new answers in this feature share one evidence read/check schedule");
+  await expect(selection).toContainText("Compatible new answers share one evidence read/check schedule");
   await expect(selection).toContainText("5 responses available at selection · 5 answers in this shared task");
   await expect(shared).toContainText("checking the combined draft");
   const flow = queue.getByRole("region", { name: "Project workflow", exact: true });

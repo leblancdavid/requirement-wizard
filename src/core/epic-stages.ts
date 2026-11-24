@@ -146,7 +146,7 @@ export function epicCitationCorrectionContext(project: Project, context: Context
   let problems: string[] = [];
   if (correction) {
     try { validateGapFinal(project, context, correction.response); } catch (error) { if (!(error instanceof GapCitationError)) throw error; problems = error.issues; }
-  } else problems = ["An earlier attempt was rejected for missing or out-of-context evidence. Its response body is unavailable; no rejected receipt or valid proposal is inferred from that diagnostic."];
+  } else problems = ["An earlier attempt was rejected for missing/out-of-context evidence or invalid question update targets. Project-wide questions must omit updateTargets; other targets must be cited, active requirements in the same non-project feature. Its response body is unavailable; no rejected receipt or valid proposal is inferred from that diagnostic."];
   const data = context.data as Record<string, unknown>;
   data.citationCorrection = { ...(correction ? { attempt: correction.attempt } : { legacyWarning: true }), problems: problems.join(" ").slice(0, 1600),
     instruction: "The previous response was rejected and applied nothing. Generate a valid replacement for this same batch. New proposals may cite only exact records detailed in this request; navigation IDs and unseen draft citations are not evidence. Questions in a scanned project require evidenceIDs. Do not guess citations, load records, change the saved draft or treat this diagnostic as a product decision. Return reviewBlocked if the exact displayed evidence cannot support a safe response." };

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readFileSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import type { StagedContinuation } from "./continuation-parts.js";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -10,10 +10,11 @@ import { deliveredRequirement, type ExecutionState } from "../core/execution.js"
 import { emptyExecution } from "../core/execution.js";
 import { portableFiles, type Continuation, type ContinuationProfile } from "./portable.js";
 export { requirementFingerprint } from "../core/implementation.js";
+import { artifactDigest, readArtifact, validateArtifactName, legacyArtifacts } from "./workspace-artifacts.js";
+export { artifactDigest, readArtifact, validateArtifactName } from "./workspace-artifacts.js";
 
 export const workspaceFolder = ".reqwizit";
 export const legacyWorkspaceFolder = ".requirement-wizard";
-const legacyArtifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"];
 export type PublicationProgress = { projectID: string; revision: number; phase: "history" | "continuation" | "continuation-staging" | "workspace-render" | "files"; heapUsedBytes: number };
 export type Workspace = {
   bindingID?: string;
@@ -63,42 +64,6 @@ export function migrateWorkspaceDirectory(path: string) {
   const directory = managedDirectory(path);
   if (directory === join(path, legacyWorkspaceFolder)) renameSync(directory, join(path, workspaceFolder));
   return managedDirectory(path);
-}
-export function readArtifact(directory: string, name: string): string | null {
-  const path = artifactPath(directory, name);
-  return path === null ? null : readFileSync(path, "utf8");
-}
-function artifactPath(directory: string, name: string): string | null {
-  validateArtifactName(name);
-  // Check every ancestor, including junctions, before reading or creating nested output.
-  let parent = directory;
-  for (const segment of name.split("/").slice(0, -1)) {
-    parent = join(parent, segment);
-    try {
-      const stat = lstatSync(parent);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Workspace conflict: ${name} must have regular directories.`);
-    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
-  }
-  const path = join(directory, name);
-  // lstat also catches dangling links, which existsSync deliberately follows.
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Workspace conflict: ${name} must be a regular file.`);
-    return path;
-  } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
-}
-export function artifactDigest(directory: string, name: string): string | null {
-  const path = artifactPath(directory, name); if (path === null) return null;
-  const fd = openSync(path, "r"), digest = createHash("sha256"), buffer = Buffer.allocUnsafe(65536);
-  try { for (;;) { const bytes = readSync(fd, buffer); if (!bytes) break; digest.update(buffer.subarray(0, bytes)); } }
-  finally { closeSync(fd); }
-  return digest.digest("hex");
-}
-export function validateArtifactName(name: string) {
-  const segment = "(?:[a-z0-9_-]{1,80}|~[a-f0-9]{64})";
-  const nested = new RegExp(`^(?:features/${segment}/requirements\\.(?:md|json)|evidence/(?:index\\.json|(?:sources|research|scans)/[a-f0-9]{64}\\.json)|continuation/[a-f0-9]{64}\\.json)$`);
-  if (![...legacyArtifacts, "project.json", "state.json", "execution.json", "continuation.json", ".gitattributes"].includes(name) && !nested.test(name)) throw new Error("Workspace conflict: invalid managed artifact path.");
-  if (name.split("/").some((part) => /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) throw new Error("Workspace conflict: reserved managed artifact path.");
 }
 function featurePath(id: string) {
   // Mixed-case IDs are hashed too, so distinct engine IDs cannot alias on Windows.

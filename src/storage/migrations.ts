@@ -7,6 +7,7 @@ import { validateOrganizationJob } from "../core/organization-check.js";
 import { organizationReviewSchema } from "../core/epics.js";
 import { answerGroupWorkSchema, answerGroupStageSchema } from "../core/answer-group.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
+import { questionUpdateTargetsSchema } from "../core/model.js";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
@@ -32,7 +33,7 @@ import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { epicStagesSchema, epicCollectionBaselineSchema, epicVerificationSchema } from "../core/gap-retrieval.js";
 import { epicReviewSchema } from "../core/epic-review-types.js";
 
-export const databaseSchemaVersion = 84;
+export const databaseSchemaVersion = 86;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -446,6 +447,14 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader capability only; never rewrite original paid receipts or start work.
 } }, { version: 84, name: "scoped-submission-proposal-first", apply() {
   // Reader capability only. Paid all-read schedules retain their original protocol.
+} }, { version: 85, name: "separate-question-targets-and-cross-feature-answers", apply(db: Database.Database) {
+  // Reader boundary only. Never retrofit scope or regroup paid answer schedules.
+  for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_question_targets
+    ON ${table} ((1)) WHERE instr(payload, '"updateTargets"') > 0`);
+  db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_feature_permissions ON jobs ((1)) WHERE instr(payload, '"featurePolicy"') > 0`);
+} }, { version: 86, name: "per-answer-scoped-shared-permissions", apply(db: Database.Database) {
+  // Reader boundary only; preserve all paid individual/shared work and attempts.
+  db.exec(`CREATE INDEX IF NOT EXISTS startup_jobs_scope_permissions ON jobs ((1)) WHERE instr(payload, '"scopePolicy"') > 0`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -512,6 +521,16 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       if (!row.baseline) throw new Error("Unsupported incremental collection provenance. Saved work was not overwritten.");
       epicCollectionBaselineSchema.parse(JSON.parse(row.baseline));
     }
+    for (const table of ["projects", "revisions"]) for (const row of db.prepare(`SELECT json_extract(q.value, '$.updateTargets') AS targets
+      FROM ${table}, json_each(${table}.payload, '$.questions') q WHERE instr(${table}.payload, '"updateTargets"') > 0
+      AND json_type(q.value, '$.updateTargets') IS NOT NULL`).iterate() as Iterable<{ targets: string }>)
+      questionUpdateTargetsSchema.parse(JSON.parse(row.targets));
+    for (const row of db.prepare(`SELECT json_extract(payload, '$.answerGroupWork.featurePolicy') AS policy FROM jobs
+      WHERE instr(payload, '"featurePolicy"') > 0 AND json_type(payload, '$.answerGroupWork.featurePolicy') IS NOT NULL`).iterate() as Iterable<{ policy: string }>)
+      answerGroupWorkSchema.shape.featurePolicy.unwrap().parse(JSON.parse(row.policy));
+    for (const row of db.prepare(`SELECT json_extract(payload, '$.answerGroupWork.scopePolicy') AS policy FROM jobs
+      WHERE instr(payload, '"scopePolicy"') > 0 AND json_type(payload, '$.answerGroupWork.scopePolicy') IS NOT NULL`).iterate() as Iterable<{ policy: unknown }>)
+      answerGroupWorkSchema.shape.scopePolicy.unwrap().parse(row.policy);
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.submissionWork.proposalRead') AS BLOB)) <= 524288
       THEN json_extract(payload, '$.submissionWork.proposalRead') END AS proposal FROM jobs
       WHERE json_type(payload, '$.submissionWork.proposalRead') IS NOT NULL`).iterate() as Iterable<{ proposal: string | null }>) {

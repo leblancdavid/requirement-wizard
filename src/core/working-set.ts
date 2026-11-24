@@ -4,6 +4,7 @@ import { currentDecisionProjection, reviewSnapshot } from "./current-decisions.j
 import { gapInstructions, type GapLens } from "./gap-types.js";
 import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 import { createHash } from "node:crypto";
+import { literalSharingCache, type LiteralSharingCache } from "./literal-sharing.js";
 
 export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
@@ -36,7 +37,7 @@ export type ContextTask = {
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
-export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false, additionalFields: readonly string[] = [], phrasePolicy?: "joint-v1") {
+export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false, additionalFields: readonly string[] = [], phrasePolicy?: "joint-v1", memo: LiteralSharingCache = literalSharingCache) {
   const textFields = new Set(["text", "statement", "rationale", "acceptance", "reviewNote", "whyItMatters", "label", "consequence", ...additionalFields]);
   if (sharePhrases) { textFields.add("addendum"); textFields.add("reason"); }
   // Ordinary review statements are often shorter than 160 characters. They
@@ -51,41 +52,7 @@ export function shareRepeatedText(data: unknown, compactInstructions = false, sh
     else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => visit(item, key));
   };
   visit(data);
-  // Whole fields also occur inside immutable review snapshots. Long individual
-  // lines cover those snapshots without interpreting or rewriting human prose.
-  const candidates = new Set(strings.flatMap((text) => [text, ...text.split(/\r?\n/).filter((line) => line.length >= minimumTextLength)]));
-  if (sharePhrases) {
-    // Bounded, literal substring sharing, not linguistic summarization. Original
-    // punctuation, whitespace and Unicode are preserved by exact slice offsets.
-    const phrases = new Map<string, number>();
-    let scanned = 0;
-    for (const text of strings) {
-      if (scanned >= 250000) break;
-      const available = text.slice(0, 250000 - scanned); scanned += available.length;
-      const words = [...available.matchAll(/\S+/g)];
-      for (let at = 0; at < words.length; at++) for (const width of phrasePolicy ? [8,16,32] : [8, 16]) {
-        const last = words[at + width - 1]; if (!last) continue;
-        const start = words[at]!.index!, end = last.index! + last[0].length, length = end - start;
-        if (length < 80 || length > (phrasePolicy ? 1024 : 512)) continue;
-        const phrase = available.slice(start, end), count = phrases.get(phrase);
-        if (count !== undefined || phrases.size < (phrasePolicy ? 16384 : 4096)) phrases.set(phrase, (count ?? 0) + 1);
-      }
-    }
-    const saving = ([text, count]: [string, number]) => count * (text.length - 32) - text.length - 40;
-    for (const [text] of [...phrases].filter((entry) => entry[1] >= (phrasePolicy ? 2 : 3) && saving(entry) > 0)
-      .sort((a, b) => saving(b) - saving(a) || (phrasePolicy ? a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0 : a[0].localeCompare(b[0]))).slice(0, phrasePolicy ? 256 : 64)) candidates.add(text);
-  }
-  const repeated = [...candidates].filter((text) => {
-    let occurrences = 0;
-    for (const value of strings) {
-      let from = 0, at: number;
-      while ((at = value.indexOf(text, from)) !== -1) {
-        if (++occurrences >= 2) return true;
-        from = at + text.length;
-      }
-    }
-    return false;
-  }).sort((a, b) => b.length - a.length);
+  const repeated = memo.plan(strings, sharePhrases, phrasePolicy);
   const values: Record<string, string> = {};
   let references = 0;
   const encode = (value: unknown, field = ""): unknown => {

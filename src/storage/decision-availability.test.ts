@@ -10,11 +10,65 @@ import { captureAnswerScope } from "../core/input-scope.js";
 import { legacyRefinementContextKey, refinementCheckCurrent } from "../service/refinement-tasks.js";
 import { proposeRefinements, reviewRefinement } from "../core/refinement.js";
 import { planContext } from "../core/working-set.js";
-import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
+import { reviewFingerprint, questionReviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
+import { continuationState, decodePortable } from "./portable.js";
+import { renderWorkspace } from "./workspace.js";
 import { ProjectStore } from "./store.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
+import { submissionMaterials, planSubmissionStages, submissionStageContext, replaySubmissionStages } from "../core/submission-stages.js";
+
+test("explicit question update targets preserve mixed supporting citations and original answer permissions across upgrade and portable roundtrip", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "question-targets-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    let p = seed(store); const target = p.requirements[0]!;
+    const oldFingerprint = questionReviewFingerprint(p.questions[0]!);
+    const create = (targets: string[], epicID = "feature") => ({ summary: "Exact question targets", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+      questions: [{ text: "Which recovery should this exact behavior use?", whyItMatters: "Settle the linked behavior", epicID,
+        evidenceIDs: [p.sources[0]!.id, target.id], updateTargets: { format: 1 as const, requirementIDs: targets },
+        options: [{ label: "Retry", consequence: "Try again" }, { label: "Stop", consequence: "Keep saved data" }] }] });
+    for (const ids of [[p.sources[0]!.id], [p.requirements[2]!.id]]) {
+      const bad = store.beginJob(p.id, p.revision).job; store.claimJob(bad.id, Date.now() + 60000);
+      assert.throws(() => store.finishJob(bad.id, create(ids)), /update targets/); store.failJob(bad.id, "failed", "Invalid target fixture");
+    }
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000); store.finishJob(job.id, create([target.id]));
+    p = store.get(p.id); const q = p.questions.at(-1)!;
+    assert.deepEqual(captureAnswerScope(p, q.id)!.requirementIDs, [target.id]);
+    assert.equal(captureAnswerScope(p, p.questions[0]!.id), undefined, "Legacy broad question remains broad");
+    assert.equal(questionReviewFingerprint(p.questions[0]!), oldFingerprint);
+    const saved = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: q.id,
+      questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Retry" } } });
+    store.applyQueued(p.id, [saved.id]); p = store.get(p.id);
+    const original = store.submissions(p.id).find(s => s.id === saved.id)!;
+    assert.deepEqual(original.answerScope!.requirementIDs, [target.id]);
+    const material = submissionMaterials(p, original, { requiredEpicIDs: [q.epicID], recordIDs: [original.appliedSourceID!, q.id],
+      isolatedTask: true, submissionFollowup: true, expandMandatory: true });
+    const work = planSubmissionStages(material), context = submissionStageContext(material, work, replaySubmissionStages(material, work).draft);
+    const prompt = discoveryPrompt(p, context), schema = JSON.parse(prompt.split("Stage response schema: ")[1]!.split("\nWorking evidence batch:")[0]!);
+    assert.deepEqual(schema.anyOf[0].properties.pendingChanges.properties.changes.items.anyOf[0].properties.questionID.enum, [q.id],
+      "Dispatch permits revising the exactly targeted question despite its additional source citation");
+    const wire = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), r => store.get(p.id, r)));
+    assert.equal(JSON.parse(wire["state.json"]!).formatVersion, 56);
+    assert.deepEqual(decodePortable(wire, p.model).project.questions.at(-1)!.updateTargets, q.updateTargets);
+    assert.throws(() => decodePortable({ ...wire, "state.json": JSON.stringify({ ...JSON.parse(wire["state.json"]!), formatVersion: 55 }) }, p.model), /format 56/);
+    store.close(); const db = new Database(file);
+    db.exec("DELETE FROM migration_history WHERE version>=85; PRAGMA user_version=84");
+    const payload = (db.prepare("SELECT payload FROM projects WHERE id=?").get(p.id) as { payload: string }).payload;
+    const future = JSON.parse(payload); future.questions.at(-1).updateTargets.format = 2;
+    db.prepare("UPDATE projects SET payload=? WHERE id=?").run(JSON.stringify(future), p.id); db.close();
+    assert.throws(() => new ProjectStore(file));
+    const repair = new Database(file); assert.equal(repair.pragma("user_version", { simple: true }), 84);
+    assert.equal((repair.prepare("SELECT payload FROM projects WHERE id=?").get(p.id) as { payload: string }).payload, JSON.stringify(future));
+    repair.prepare("UPDATE projects SET payload=? WHERE id=?").run(payload, p.id); repair.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(file); assert.deepEqual(store.get(p.id), p);
+      assert.deepEqual(store.submissions(p.id).find(s => s.id === saved.id), original); store.close();
+    }
+  } finally { if ((store as unknown as { db: Database.Database }).db.open) store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 function seed(store: ProjectStore) {
   let p = store.create("Decision safety", "Preserve human intent", { providerID: "openai", modelID: "fixture" });

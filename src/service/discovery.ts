@@ -862,7 +862,8 @@ export class DiscoveryService {
             const stageBase = linkedEvidenceStageBase(project, staged, activeBatch(), staged.receipts.length, staged.candidates);
             context = epicCitationCorrectionContext(project, epicStageContext(stageBase, staged), staged,
               staged.receipts.length === prior?.retrievalWork?.epicStages?.receipts.length
-                && !!prior?.diagnostic?.startsWith("Gap proposals require evidence in the current detailed working context"));
+                && !!prior?.diagnostic && (prior.diagnostic.startsWith("Gap proposals require evidence in the current detailed working context")
+                  || prior.diagnostic === "Question update targets must cite existing active requirements in the question's own feature."));
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
             if (staged.discoveryPolicy) report("Candidate-first discovery: one bounded proposal pass, then checks against every mandatory evidence batch for surviving questions. Unrequested discovery reads are not credited; rejected candidates do not complete the scope review.");

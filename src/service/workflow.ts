@@ -19,7 +19,7 @@ import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } 
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
 import { definitionInputKey } from "../core/definition-identity.js";
-import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupPageRecoveryPreview, answerGroupVerificationPreview, answerGroupRuleRepairPreview, answerGroupRequestLimit, canPageAnswerGroup, type AnswerGroupRuleRepairConsent } from "../core/answer-group.js";
+import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupPageRecoveryPreview, answerGroupVerificationPreview, answerGroupRuleRepairPreview, answerGroupRequestLimit, canPageAnswerGroup, eligibleGroupAnswer, legacyAnswerGroupBatchOverflow, type AnswerGroupRuleRepairConsent } from "../core/answer-group.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -182,6 +182,14 @@ export class ProjectWorkflow {
       const pageableGroups = new Map<string, boolean>();
       let resumedInput = action === "play" && this.store.submissions(id).some(s => s.status === "saved");
       for (const item of submissions) {
+        if (action !== "review-changes" && !resolved.has(item.id) && item.status === "needs-attention" && !item.jobID
+          && eligibleGroupAnswer(project, item) && legacyAnswerGroupBatchOverflow(item.diagnostic)
+          && !this.store.submissionHasJob(id, item.id)) {
+          item.status = "saved"; delete item.diagnostic; this.store.saveSubmission(item);
+          if (state.current?.kind === "input") state.current.completed = false;
+          resumedInput = true;
+          continue;
+        }
         if (item.archivedAt || resolved.has(item.id) || item.status !== "needs-attention" || item.conflict || !item.jobID) continue;
         const ownedInput = state.current?.kind === "input" && state.current.jobIDs.includes(item.jobID);
         const job = this.store.getJob(item.jobID);
@@ -190,10 +198,13 @@ export class ProjectWorkflow {
         const repairable = ownedInput && action !== "review-changes" && job.status === "failed" && group && progress?.phase === "repair"
           && progress.repairs < answerGroupLimits.repairs && group.attempts < answerGroupRequestLimit(group)
           && !activeReplies!.some(r => "answerGroupBlocked" in r.response);
+        const catalogRetry = ownedInput && action !== "review-changes" && job.status === "failed" && group
+          && group.attempts < answerGroupRequestLimit(group)
+          && job.diagnostic?.startsWith("OpenCode connection failed during model catalog. No model prompt was sent by this request.");
         if (action !== "review-changes" && !pageableGroups.has(job.id)) {
           pageableGroups.set(job.id, (ownedInput || sharedPackingCandidate(project, submissions, job, resolved)) && canPageAnswerGroup(project, submissions, job));
         }
-        if ((ownedInput && ["interrupted", "cancelled"].includes(job.status) || repairable || pageableGroups.get(job.id)) && job.context?.submissionIDs?.includes(item.id)) {
+        if ((ownedInput && ["interrupted", "cancelled"].includes(job.status) || repairable || catalogRetry || pageableGroups.get(job.id)) && job.context?.submissionIDs?.includes(item.id)) {
           item.status = item.applied ? "saved" : "queued"; this.store.saveSubmission(item);
           // Earlier workers marked an input pass complete even after queue cancellation.
           // Explicit recovery of its unfinished job must not inherit that loop guard.

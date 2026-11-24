@@ -262,7 +262,8 @@ test("citation correction exhausts three attempts without relaxing evidence chec
   } finally { f.cleanup(); }
 });
 
-test("an older failed citation step receives only a warning on explicit retry, preserving its original spend and unavailable reply", async () => {
+for (const diagnostic of ["Gap proposals require evidence in the current detailed working context; unseen navigation links cannot be cited or changed. No proposals applied.",
+  "Question update targets must cite existing active requirements in the question's own feature."]) test(`an older failed proposal receives only a warning on explicit retry, preserving spend and an unavailable reply: ${diagnostic}`, async () => {
   const f = fixture();
   try {
     const controller = new AbortController();
@@ -270,7 +271,7 @@ test("an older failed citation step receives only a warning on explicit retry, p
       .analyze(f.project.id, f.project.revision, { gapMode: "epic", focusEpicID: "orders", research: false, signal: controller.signal,
         onProgress: message => { if (message.includes("Citation validation rejected")) controller.abort(); } });
     const old = structuredClone(stopped); delete old.retrievalWork!.epicStages!.citationCorrections;
-    old.status = "failed"; old.diagnostic = "Gap proposals require evidence in the current detailed working context; unseen navigation links cannot be cited or changed. No proposals applied.";
+    old.status = "failed"; old.diagnostic = diagnostic;
     const db = new Database(f.path);
     try { db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(old), old.id); } finally { db.close(); }
     let calls = 0;
