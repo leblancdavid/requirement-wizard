@@ -60,8 +60,10 @@ export async function compactDatabaseCopy(sourcePath: string, outputPath: string
       } });
       if (fingerprint(source) !== initial) throw new Error("The source changed while copying. Close the app and create a new copy; the original was not changed.");
       staged = new Database(stage);
-      staged.exec("CREATE TABLE compaction_copy_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL)");
-      staged.prepare("INSERT INTO compaction_copy_state VALUES (1, ?)").run(JSON.stringify({ format: 1, source, fingerprint: initial }));
+      // An already-compacted source can carry its previous operation marker.
+      // Replace that disposable marker only in the newly completed staging copy.
+      staged.exec("CREATE TABLE IF NOT EXISTS compaction_copy_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL)");
+      staged.prepare("INSERT OR REPLACE INTO compaction_copy_state VALUES (1, ?)").run(JSON.stringify({ format: 1, source, fingerprint: initial }));
     }
     staged.close(); staged = undefined;
     // Upgrade/validate the COPY through the ordinary reader, without publishing

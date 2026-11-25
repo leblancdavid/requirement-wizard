@@ -195,3 +195,16 @@ test("a staging hardlink to the source is refused before writable staging opens"
     assert.equal(sum(readFileSync(source)), before); assert.equal(existsSync(output), false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("an already-compacted database can be compacted again without changing its source or paid work", async () => {
+  const dir = directory(), source = join(dir, "source.sqlite"), first = join(dir, "first.sqlite"), second = join(dir, "second.sqlite"), f = fixture(source);
+  try {
+    await compactDatabaseCopy(source, first);
+    const original = sum(readFileSync(first));
+    const result = await compactDatabaseCopy(first, second);
+    assert.equal(result.revisions, f.history.length); assert.equal(sum(readFileSync(first)), original);
+    const store = new ProjectStore(second, undefined, { publication: "manual" });
+    try { assert.deepEqual(store.get(f.p.id), f.p); assert.deepEqual(store.jobs(f.p.id), f.jobs); assert.deepEqual(store.submissions(f.p.id), f.submissions); }
+    finally { store.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -117,9 +117,45 @@ workflow against a newly compacted copy (`npm run test:browser:storage`).
 A separate read-only sample of three consecutive real snapshots converted **only
 in an in-memory database**, preserved every snapshot digest, and reduced measured
 payload bytes from 40,270,230 to 15,040,837 (63%, about 926 ms on this machine).
-This is not a whole-store size or conversion-time estimate. The actual database
-was not compacted, migrated by this tool or replaced. No live provider calls were
-made for compaction qualification.
+This sample is not a whole-store size or conversion-time estimate. No live provider
+calls were made for compaction qualification.
+
+### Full local copy qualification (2026-11-24)
+
+On the user's subsequent request, the offline command completed conversion and
+verification of all **4,181 revisions** in the actual local store. The verified
+copy occupies **1,333,219,328 bytes**, versus **24,994,840,576 bytes** originally
+(94.7% smaller). The command checked exact per-row reconstruction, object and
+revision digests, SQLite integrity/foreign keys, and the final reclaimed output.
+This qualifies this local copy, not every possible historical store or platform.
+
+The application storage reader opened the compacted copy and loaded all four
+current projects with matching identities/revisions: about 7.0 seconds for local
+startup validation and 7.3 seconds including project reads on this machine. This
+was manual-publication mode, without workspace writes or provider/model calls;
+it is not a timed end-to-end desktop/browser launch.
+
+The subsequent original-to-copy audit checked every revision digest/reason against
+the original and exact ordered row digests for **26 non-cache state tables**. It
+passed. On the user's explicit apply request, the verified copy was installed at
+the existing app-data path using Windows atomic file replacement with the original
+temporarily retained as backup. The rebuilt schema-92 desktop reader was available
+before the switch. A local verification certificate and apply journal were kept
+outside the repository; no project data or database file was committed.
+
+Post-install validation confirmed the default data-root selection, all four current
+projects, all 4,181 history manifests, foreign keys and the same 26 state-table row
+digests. This used the app reader without model calls or workspace publication.
+After those checks, the user's separate original-file cleanup request was applied:
+the 24,994,840,576-byte pre-compaction backup and its retired sidecars were removed.
+The active database remains 1,333,219,328 bytes. The original raw file is therefore
+**no longer available for rollback**; all verified history remains in shared storage.
+This one-off authorized activation/cleanup does not change the maintenance command's
+default policy of producing a separate copy without replacing/deleting its source.
+
+A follow-up regression also covers compacting an already-compacted database:
+fresh staging replaces its copied prior-operation marker, never the source's marker
+or paid/project state. Interruption/resume keeps the same source-change safeguards.
 
 Follow-on optimizations from the broader design remain **proposed**, not delivered:
 independently shared append-only AI checkpoint receipts across continuation jobs,

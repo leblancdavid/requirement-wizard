@@ -53,7 +53,18 @@ browser checks, including a compacted-copy conflict workflow. Later targeted
 compaction/paid-continuation checks also passed. A bounded real-source sample used
 only an in-memory target and verified all three original revision digests with
 63% less payload storage; it does not establish whole-store savings or timing.
-No production compaction, replacement or live inference was performed.
+Subsequently, the user-authorized full local copy completed: all 4,181 revisions
+passed conversion/verification, reducing 24,994,840,576 bytes to 1,333,219,328 bytes.
+The app reader opened the copy and loaded all four current projects without model
+calls or workspace publication. A separate audit matched every original revision
+digest/reason and 26 state-table row digests; the user-authorized atomic replacement
+then passed the same project/history/state checks at the normal app-data path.
+Only after that verification, the user-requested cleanup removed the retired raw
+backup and its sidecars. All history remains in the active shared store, but the
+original raw-file rollback is no longer available. Fresh-copy maintenance remains
+non-destructive by default and now also tests repeated compaction of schema-92
+sources with prior-operation metadata. See the dated qualification in
+[storage optimization](storage-optimization.md#full-local-copy-qualification-2026-11-24).
 
 ## Explicit saved-response decisions (SQLite 90 → 91; conditional portable 62)
 

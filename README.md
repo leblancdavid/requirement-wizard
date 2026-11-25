@@ -32,8 +32,10 @@ helper diagnostics remain collapsed unless you open them.
 An opt-in [lossless database compaction tool](docs/storage-optimization.md) stores
 historical records once and reconstructs exact revisions. `npm run db:compact --
 --help` describes the offline-copy command; it retains the original and never
-automatically replaces a running app's database. Whole-production-store compaction
-has not yet been qualified. No age-based history deletion or AI replay is introduced.
+automatically replaces a running app's database. The full local 4,181-revision
+store passed verification, was explicitly activated and is 94.7% smaller. The
+retired original was removed only after a separate cleanup request and post-install
+state checks. No age-based history deletion or AI replay is introduced.
 
 Desktop restart recovery now preserves populated legacy project stores even when an
 auxiliary newer folder exists, and remembers the last project/Recents across port
