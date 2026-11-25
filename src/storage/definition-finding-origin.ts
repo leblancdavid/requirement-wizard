@@ -51,7 +51,7 @@ export function previewDefinitionFindingOrigins(db: Database.Database, projectID
     const origin = describeDefinitionFindingOrigin(certificate, dimension);
     if (!origin) return { dimension, state: "unavailable", reason: "finding-not-recorded" };
     if (!guards.has(origin.assessmentRevision)) {
-      const snapshot = db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+      const snapshot = db.prepare("SELECT CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
         .get(definitionDependencyLimits.snapshotBytes, projectID, origin.assessmentRevision) as { payload: string | null } | undefined;
       if (!snapshot?.payload) return { dimension, state: "unavailable", reason: "source-snapshot-unavailable" };
       let original: unknown;

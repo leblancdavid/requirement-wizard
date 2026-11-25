@@ -42,7 +42,7 @@ export class DefinitionMixedReviewStore {
   constructor(private readonly db: Database.Database, private readonly jobs: Jobs, private readonly scopes: DefinitionScopeReviewStore) {}
   private snapshot(projectID: string, revision?: number) {
     const row = (revision === undefined ? this.db.prepare("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload END AS payload FROM projects WHERE id = ?").get(projectID)
-      : this.db.prepare("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { revision: number; payload: string | null } | undefined;
+      : this.db.prepare("SELECT revision, CASE WHEN bytes <= 16777216 THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { revision: number; payload: string | null } | undefined;
     if (!row?.payload) throw new Error("Mixed source snapshot is unavailable or exceeds its bound.");
     const raw = JSON.parse(row.payload), project = projectSchema.parse(raw);
     if (project.id !== projectID || project.revision !== row.revision || digest(project) !== digest(raw)) throw new Error("Mixed snapshot identity changed.");

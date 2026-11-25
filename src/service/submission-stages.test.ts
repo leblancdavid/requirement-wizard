@@ -25,17 +25,49 @@ import { submissionCitationRepair } from "../core/submission-stages.js";
 import { submissionReadSteps, submissionScopedRepair } from "../core/submission-stages.js";
 import { replanUnansweredSubmission } from "../core/submission-stages.js";
 import { submissionOriginalSupportGap } from "../core/submission-stages.js";
-import { currentSavedResponseResolution, type SavedResponseChoice } from "../core/submission-resolution.js";
+import { currentSavedResponseResolution, savedResponseConflict, type SavedResponseChoice } from "../core/submission-resolution.js";
 import { applySpecificationUpdates } from "../core/specification.js";
+import { compactRevisionBatch, enableRevisionStorage, verifyRevisionStorage } from "../storage/revision-storage.js";
 
-async function inlineConflict(file = ":memory:") {
+test("shared historical storage preserves paid staged continuation and portable evidence without repeating reads", async () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/shared-paid-history-")), file = join(directory, "state.sqlite"), f = fixture(file);
+  let store = f.store;
+  try {
+    const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const paused = await runSubmissionStages(store, adapter(f), f.project, job, f.item, f.task,
+      { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(paused.submissionWork!.receipts.length, 1);
+    const originals = store.history(f.project.id).map(r => store.get(f.project.id, r.revision));
+    store.close();
+    const compact = new Database(file);
+    try { while (compactRevisionBatch(compact)) {} enableRevisionStorage(compact); assert.equal(verifyRevisionStorage(compact), originals.length); }
+    finally { compact.close(); }
+    store = new ProjectStore(file);
+    for (const p of originals) assert.deepEqual(store.get(p.id, p.revision), p);
+    assert.deepEqual(store.getJob(paused.id), paused);
+    const materials = submissionMaterials(f.project, f.item, paused.submissionWork!.task, undefined, paused.submissionWork!.supportPolicy);
+    const expected = submissionStageContext(materials, paused.submissionWork!, replaySubmissionStages(materials, paused.submissionWork!).draft).manifest;
+    let first = true;
+    const completed = await new DiscoveryService(store, { async analyze(p, options) {
+      if (first) { first = false; assert.deepEqual(options.context.manifest.includedIDs, expected.includedIDs); assert.equal(options.context.manifest.submissionStage!.step, expected.submissionStage!.step); }
+      return adapter(f).analyze(p, options);
+    } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id], research: false });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.deepEqual(completed.submissionWork!.receipts[0], paused.submissionWork!.receipts[0]);
+    const current = store.get(f.project.id), wire = renderWorkspace(current, undefined, continuationState(current, store.jobs(current.id), store.submissions(current.id), r => store.get(current.id, r)));
+    assert.deepEqual(decodePortable(wire, current.model).continuation.jobs.find(j => j.id === completed.id)!.submissionWork, completed.submissionWork);
+  } finally { try { store.close(); } catch { /* Already closed after a failed reopen. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+async function inlineConflict(file = ":memory:", omitRequirementID = false) {
   const f = fixture(file, "answer");
   f.project = f.store.note(f.project.id, f.project.revision, "Earlier rule: reports require a network connection.", "inbox");
   const earlier = f.project.sources.at(-1)!;
   f.task.recordIDs.push(earlier.id);
   const blocked = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
     return context.manifest.submissionStage!.phase === "check"
-      ? { submissionCheck: { valid: false, reason: `Requirement ${f.project.requirements[0]!.id} and earlier answer ${earlier.id} conflict. Choose which rule applies.` } }
+      ? { submissionCheck: { valid: false, reason: `Requirement ${omitRequirementID ? "acceptance scenario" : f.project.requirements[0]!.id} and earlier answer ${earlier.id} conflict. Choose which rule applies.` } }
       : f.output();
   } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id], research: false });
   assert.equal(blocked.status, "failed", blocked.diagnostic);
@@ -43,6 +75,29 @@ async function inlineConflict(file = ":memory:") {
   const view = f.store.submissionConflictView(f.project, blocked); assert.ok(view, JSON.stringify({ blocked, item: f.item }));
   return { ...f, blocked, view, earlier };
 }
+
+test("a single saved requirement target can be resolved when the blocker cites only the earlier answer UUID", async () => {
+  const f = await inlineConflict(":memory:", true);
+  try {
+    assert.equal(f.view.reason.includes(f.project.requirements[0]!.id), false);
+    assert.deepEqual(f.view.requirements.map(r => r.id), [f.project.requirements[0]!.id]);
+    const original = structuredClone(f.blocked);
+    const withoutCitation = structuredClone(f.blocked);
+    const response = withoutCitation.submissionWork!.receipts.at(-1)!.response;
+    assert.ok("submissionCheck" in response);
+    response.submissionCheck.reason = "Review failed due to a technical error.";
+    assert.equal(savedResponseConflict(f.project, f.item, withoutCitation), undefined);
+    const ambiguous = structuredClone(f.project), job = structuredClone(f.blocked);
+    const extra = { ...structuredClone(ambiguous.requirements[0]!), id: randomUUID() };
+    ambiguous.requirements.push(extra); job.submissionWork!.task.recordIDs.push(extra.id); job.context!.includedIDs.push(extra.id);
+    assert.equal(savedResponseConflict(ambiguous, f.item, job), undefined, "Multiple targets without exact citations cannot be guessed");
+    const saved = f.store.resolveSavedResponse(f.project.id, f.project.revision, randomUUID(), f.blocked.id, f.view.key,
+      { kind: "source", recordID: f.earlier.id });
+    assert.deepEqual(saved.resolution.requirementIDs, [f.project.requirements[0]!.id]);
+    assert.deepEqual(f.store.getJob(f.blocked.id), original);
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+  } finally { f.store.close(); }
+});
 
 for (const kind of ["requirement", "source", "custom"] as const) test(`inline saved-response decision preserves originals and verifies fresh intent: ${kind}`, async () => {
   const f = await inlineConflict(); const store = f.store;

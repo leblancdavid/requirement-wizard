@@ -13,7 +13,7 @@ import { definitionPublicationSchema, definitionPublicationKey as key, definitio
 const fits = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8") <= limits.payloadBytes;
 const includedKey = (ids: string[]) => key([...ids].sort());
 function sourceSnapshot(db: Database.Database, projectID: string, revision: number) {
-  const row = db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+  const row = db.prepare("SELECT CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
     .get(definitionDependencyLimits.snapshotBytes, projectID, revision) as { payload: string | null } | undefined;
   if (!row?.payload) return undefined;
   try { const raw = JSON.parse(row.payload), p = projectSchema.parse(raw);

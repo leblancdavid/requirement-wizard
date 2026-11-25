@@ -35,6 +35,7 @@ import { epicReviewSchema } from "../core/epic-review-types.js";
 import { answerCohortSearchSchema } from "../core/answer-integration-diagnostics.js";
 import { databaseSchemaVersion } from "./schema-version.js";
 import { savedResponseResolutionSchema } from "../core/submission-resolution.js";
+import { createRevisionStorage, assertRevisionStorage } from "./revision-storage.js";
 
 export { databaseSchemaVersion } from "./schema-version.js";
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
@@ -42,7 +43,7 @@ const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payl
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
 /** Keep the SELECT expression and partial predicate identical to migration 26's
  * covering expression indexes. No full historical project payload is needed. */
-export function changeReviewValidationQuery(table: "projects" | "revisions") {
+export function changeReviewValidationQuery(table: "projects" | "revisions" | "revision_checks") {
   return `SELECT CASE WHEN length(CAST((${changeReviewValue}) AS BLOB)) <= 2097152
     THEN (${changeReviewValue}) END AS reviews FROM ${table} INDEXED BY startup_${table}_change_reviews
     WHERE ${changeReviewPredicate}`;
@@ -50,7 +51,7 @@ export function changeReviewValidationQuery(table: "projects" | "revisions") {
 const organizationReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.organizationReviews') END";
 const organizationReviewPredicate = `CASE WHEN json_valid(payload) THEN json_array_length(payload, '$.organizationReviews') > 0
   ELSE instr(payload, '"organizationBasis"') > 0 END`;
-export function organizationReviewValidationQuery(table: "projects" | "revisions") {
+export function organizationReviewValidationQuery(table: "projects" | "revisions" | "revision_checks") {
   return `SELECT (${organizationReviewValue}) AS reviews
     FROM ${table} INDEXED BY startup_${table}_organization_reviews WHERE ${organizationReviewPredicate}`;
 }
@@ -473,6 +474,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE INDEX IF NOT EXISTS startup_submissions_resolutions ON submissions ((1)) WHERE instr(payload, '"resolutions"') > 0;
     CREATE INDEX IF NOT EXISTS startup_jobs_human_resolution ON jobs ((1)) WHERE instr(payload, '"humanResolution"') > 0`);
   for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_response_decisions ON ${table} ((1)) WHERE instr(payload, '"savedResponseResolution"') > 0`);
+} }, { version: 92, name: "lossless-shared-revision-storage", apply() {
+  // Tables/view are installed transactionally before older migration readers run.
+  // Conversion is explicit and offline; startup never rewrites the history.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -481,6 +485,11 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
   db.transaction(() => {
     let version = db.pragma("user_version", { simple: true }) as number;
     if (version > databaseSchemaVersion) throw new Error("Unsupported project database version.");
+    createRevisionStorage(db);
+    db.exec(`CREATE INDEX IF NOT EXISTS startup_revision_checks_change_reviews ON revision_checks ((${changeReviewValue})) WHERE ${changeReviewPredicate};
+      CREATE INDEX IF NOT EXISTS startup_revision_checks_organization_reviews ON revision_checks ((${organizationReviewValue})) WHERE ${organizationReviewPredicate};
+      CREATE INDEX IF NOT EXISTS startup_revision_checks_question_targets ON revision_checks ((1)) WHERE instr(payload, '"updateTargets"') > 0;
+      CREATE INDEX IF NOT EXISTS startup_revision_checks_response_decisions ON revision_checks ((1)) WHERE instr(payload, '"savedResponseResolution"') > 0;`);
     if (version < databaseSchemaVersion) reportStartup(progress, "upgrading-data");
     for (const migration of migrations) if (version < migration.version) {
       if (migration.version === 26) reportStartup(progress, "indexing-review-history");
@@ -496,7 +505,8 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       if (!row.payload) throw new Error("Unsupported or oversized saved organization check. Nothing was overwritten.");
       validateOrganizationJob(JSON.parse(row.payload));
     }
-    for (const table of ["projects", "revisions"] as const) {
+    assertRevisionStorage(db);
+    for (const table of ["projects", "revisions", "revision_checks"] as const) {
       for (const row of db.prepare(organizationReviewValidationQuery(table)).iterate() as Iterable<{ reviews: string | null }>) {
         if (!row.reviews) throw new Error("Unsupported organization-review history. Nothing was overwritten.");
         for (const review of z.array(z.object({ organizationBasis: organizationReviewSchema.shape.organizationBasis })).parse(JSON.parse(row.reviews))) {
@@ -507,7 +517,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     reportStartup(progress, "checking-data");
     reportStartup(progress, "checking-review-history");
     const validatedReviews = new Set<string>();
-    for (const table of ["projects", "revisions"] as const) {
+    for (const table of ["projects", "revisions", "revision_checks"] as const) {
       for (const row of db.prepare(changeReviewValidationQuery(table)).iterate() as Iterable<{ reviews: string | null }>) {
         if (typeof row.reviews !== "string" || !row.reviews) throw new Error("Saved change-review evidence is unsupported or exceeds its supported bound. Nothing was overwritten.");
         const key = createHash("sha256").update(row.reviews).digest("hex");
@@ -539,8 +549,8 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       if (!row.baseline) throw new Error("Unsupported incremental collection provenance. Saved work was not overwritten.");
       epicCollectionBaselineSchema.parse(JSON.parse(row.baseline));
     }
-    for (const table of ["projects", "revisions"]) for (const row of db.prepare(`SELECT json_extract(q.value, '$.updateTargets') AS targets
-      FROM ${table}, json_each(${table}.payload, '$.questions') q WHERE instr(${table}.payload, '"updateTargets"') > 0
+    for (const table of ["projects", "revisions", "revision_checks"]) for (const row of db.prepare(`SELECT json_extract(q.value, '$.updateTargets') AS targets
+      FROM ${table} INDEXED BY startup_${table}_question_targets, json_each(${table}.payload, '$.questions') q WHERE instr(${table}.payload, '"updateTargets"') > 0
       AND json_type(q.value, '$.updateTargets') IS NOT NULL`).iterate() as Iterable<{ targets: string }>)
       questionUpdateTargetsSchema.parse(JSON.parse(row.targets));
     for (const row of db.prepare(`SELECT json_extract(payload, '$.answerGroupWork.featurePolicy') AS policy FROM jobs
@@ -561,7 +571,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       if (!row.search) throw new Error("Unsupported or oversized answer cohort diagnostic. Nothing was overwritten.");
       answerCohortSearchSchema.parse(JSON.parse(row.search));
     }
-    for (const table of ["projects", "revisions"]) for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(s.value, '$.savedResponseResolution') AS BLOB)) <= 4096
+    for (const table of ["projects", "revisions", "revision_checks"]) for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(s.value, '$.savedResponseResolution') AS BLOB)) <= 4096
       THEN json_extract(s.value, '$.savedResponseResolution') END AS marker FROM ${table} INDEXED BY startup_${table}_response_decisions, json_each(${table}.payload, '$.sources') s
       WHERE instr(${table}.payload, '"savedResponseResolution"') > 0 AND json_type(s.value, '$.savedResponseResolution') IS NOT NULL`).iterate() as Iterable<{ marker: string | null }>) {
       if (!row.marker) throw new Error("Unsupported saved-response decision source. Original evidence was retained.");

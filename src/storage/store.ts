@@ -111,6 +111,7 @@ import { submissionWorkSchema, submissionAllowance, submissionMaterials, replayS
 import { submissionTransportRecoveryCandidate } from "../core/submission-stages.js";
 import { submissionSupportRecoveryCandidate, planSubmissionStages } from "../core/submission-stages.js";
 import { savedResponseConflict, savedResponseDecision, savedResponseResolutionSchema, resolutionKey, currentSavedResponseResolution, type SavedResponseChoice } from "../core/submission-resolution.js";
+import { encodeRevision } from "./revision-storage.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
 import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview,adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
 import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-group.js";
@@ -118,7 +119,7 @@ import { refinementStageSchema, refinementWorkSchema, validateRefinementPublicat
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { organizationCheckSchema, validateOrganizationJob, organizationMaterials, organizationStage, organizationOperations, recordOrganizationReply, organizationReviewCurrent, organizationSize, organizationSchedulingKey } from "../core/organization-check.js";
-import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, projectFields, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
@@ -641,7 +642,7 @@ export class ProjectStore {
         submissionSchema.parse({ id: item.id, input: item.input, auto: item.auto, research: item.research, ...(item.replaces ? { replaces: item.replaces } : {}) });
         readStoredSubmission(JSON.stringify(item));
       }
-      const historical = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?");
+      const historical = this.db.prepare("SELECT payload FROM revision_documents WHERE project_id = ? AND revision = ?");
       for (const snapshot of snapshots()) {
         const previous = historical.get(id, snapshot.revision) as { payload: string } | undefined;
         if (previous) {
@@ -660,7 +661,7 @@ export class ProjectStore {
       this.db.prepare("INSERT INTO projects VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload")
         .run(id, imported.project.revision, JSON.stringify(imported.project));
       for (const snapshot of snapshots()) this.db.prepare("INSERT OR IGNORE INTO revisions VALUES (?, ?, ?, ?)")
-        .run(id, snapshot.revision, "Retained portable continuation evidence", JSON.stringify(snapshot));
+        .run(id, snapshot.revision, "Retained portable continuation evidence", encodeRevision(this.db, JSON.stringify(snapshot)));
       imported.execution.version = existing ? this.execution(id).version + 1 : 1;
       if (imported.execution.planning) imported.execution.planning.bindingID = binding.bindingID!;
       for (const source of Object.values(imported.execution.planning?.pendingSources ?? {})) source.bindingID = binding.bindingID!;
@@ -1124,7 +1125,7 @@ export class ProjectStore {
   get(id: string, revision?: number): Project {
     const row = (revision === undefined
       ? this.db.prepare("SELECT payload FROM projects WHERE id = ?").get(id)
-      : this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(id, revision)) as { payload: string } | undefined;
+      : this.db.prepare("SELECT payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(id, revision)) as { payload: string } | undefined;
     if (!row) throw new Error("Project or revision not found.");
     const project = projectSchema.parse(JSON.parse(row.payload));
     // Lazy forward projection from the original saved assessment snapshot. Never
@@ -1133,7 +1134,7 @@ export class ProjectStore {
     // this additive basis. Missing historical snapshots stay conservatively stale.
     for (const assessment of project.assessments) if (!assessment.inputBasis) {
       const original = assessment.atRevision === project.revision ? project : (() => {
-        const saved = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(id, assessment.atRevision) as { payload: string } | undefined;
+        const saved = this.db.prepare("SELECT payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(id, assessment.atRevision) as { payload: string } | undefined;
         return saved ? projectSchema.parse(JSON.parse(saved.payload)) : undefined;
       })();
       const savedAssessment = original?.assessments.find((a) => a.epicID === assessment.epicID);
@@ -1145,13 +1146,16 @@ export class ProjectStore {
   }
 
   list(): Array<{ id: string; name: string; revision: number }> {
-    return (this.db.prepare("SELECT payload FROM projects ORDER BY rowid DESC").all() as Array<{ payload: string }>)
-      .map((row) => { const { id, name, revision } = projectSchema.parse(JSON.parse(row.payload)); return { id, name, revision }; });
+    // Listing projects is navigation metadata, not a request for every project's
+    // requirements/refinements/history. Full validation stays on project reads.
+    const entry = projectFields.pick({ id: true, name: true, revision: true });
+    return this.db.prepare(`SELECT json_extract(payload, '$.id') AS id, json_extract(payload, '$.name') AS name,
+      json_extract(payload, '$.revision') AS revision FROM projects ORDER BY rowid DESC`).all().map(row => entry.parse(row));
   }
 
   private record(project: Project, reason: string) {
-    const previous = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").get(project.id) as { payload: string } | undefined;
-    this.db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(project.id, project.revision, reason, JSON.stringify(project));
+    const previous = this.db.prepare("SELECT payload FROM revision_documents WHERE project_id = ? ORDER BY revision DESC LIMIT 1").get(project.id) as { payload: string } | undefined;
+    this.db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(project.id, project.revision, reason, encodeRevision(this.db, JSON.stringify(project)));
     saveActivity(this.db, project.id, { ...revisionActivity(project, previous ? projectSchema.parse(JSON.parse(previous.payload)) : undefined, reason), at: new Date().toISOString(), atLabel: "Recorded" });
     this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(project.id);
     // Nested queue/job transactions must commit before filesystem publication.
@@ -3336,8 +3340,8 @@ export class ProjectStore {
    * or attributing another queued response's changes to this worker. */
   private completionInputs(job: Job, submissions: Submission[]): AppliedInputChange[] {
     return submissions.filter((s) => s.applied && s.appliedSourceID && job.context?.submissionIDs?.includes(s.id)).flatMap((s) => {
-      const row = s.appliedRevision !== undefined ? { revision: s.appliedRevision } : this.db.prepare(`SELECT revision FROM revisions WHERE project_id = ? AND revision <= ?
-        AND EXISTS (SELECT 1 FROM json_each(revisions.payload, '$.sources') WHERE json_extract(value, '$.id') = ?)
+      const row = s.appliedRevision !== undefined ? { revision: s.appliedRevision } : this.db.prepare(`SELECT revision FROM revision_documents WHERE project_id = ? AND revision <= ?
+        AND EXISTS (SELECT 1 FROM json_each(revision_documents.payload, '$.sources') WHERE json_extract(value, '$.id') = ?)
         ORDER BY revision LIMIT 1`).get(job.projectID, job.expectedRevision, s.appliedSourceID!) as { revision: number } | undefined;
       if (!row || row.revision <= 1) return [];
       if (row.revision > job.expectedRevision) throw new Error("Input application receipt is newer than this worker snapshot; no reconciliation was applied.");
@@ -3784,7 +3788,7 @@ export class ProjectStore {
     // Older serialization can bind the original property order. Prove that exact
     // historical key AND identical guarded values, rather than rehashing today's
     // decisions or recollecting solely because an equivalent representation changed.
-    const row = this.db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+    const row = this.db.prepare("SELECT CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
       .get(definitionBaselineLimits.snapshotBytes, published.id, published.revision - 1) as { payload: string | null } | undefined;
     if (!row?.payload) return false;
     const raw = JSON.parse(row.payload) as Project, parsed = projectSchema.safeParse(raw);
@@ -3795,7 +3799,7 @@ export class ProjectStore {
   }
 
   private definitionBaselineSource(projectID: string, revision: number) {
-    const row = this.db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+    const row = this.db.prepare("SELECT CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
       .get(definitionBaselineLimits.snapshotBytes, projectID, revision) as { payload: string | null } | undefined;
     if (!row?.payload) return;
     const original = projectSchema.safeParse(JSON.parse(row.payload));

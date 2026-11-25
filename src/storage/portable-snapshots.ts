@@ -68,7 +68,7 @@ export function createPortableSnapshotReader(db: Database.Database, projectID: s
     if (saved && /^[a-f0-9]{64}$/.test(saved.digest)) { sourceDigest = saved.digest; profile.sourceDigestHits++; }
     else {
       profile.sourceDigestMisses++;
-      const source = measure("sourceReadMs", () => originals.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { payload: string } | undefined;
+      const source = measure("sourceReadMs", () => originals.prepare("SELECT payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(projectID, revision)) as { payload: string } | undefined;
       if (!source) throw new Error("Project or revision not found.");
       sourceDigest = measure("sourceHashMs", () => digest(source.payload));
       if (db === originals) measure("cacheWriteMs", () => db.prepare("INSERT OR REPLACE INTO portable_source_digests VALUES (?, ?, ?)").run(projectID, revision, sourceDigest));

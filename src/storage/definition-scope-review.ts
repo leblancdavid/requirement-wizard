@@ -107,7 +107,7 @@ export class DefinitionScopeReviewStore {
   private prepare(projectID: string, request: unknown, historicalRevision?: number) {
     const row = historicalRevision === undefined
       ? this.db.prepare("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM projects WHERE id = ?").get(definitionDependencyLimits.snapshotBytes, projectID)
-      : this.db.prepare("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?").get(definitionDependencyLimits.snapshotBytes, projectID, historicalRevision);
+      : this.db.prepare("SELECT revision, CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(definitionDependencyLimits.snapshotBytes, projectID, historicalRevision);
     const saved = row as { revision: number; payload: string | null } | undefined;
     if (!saved?.payload) throw new Error("Scoped review source snapshot is unavailable or exceeds its bound.");
     const raw = JSON.parse(saved.payload), packet = prepareDefinitionReviewScope(raw, request);

@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { resolve, join } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { runSubmissionStages } from "../service/submission-stages.js";
 import { startApp } from "./server.js";
+import { compactDatabaseCopy } from "../storage/compact-copy.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
 await mkdir(resolve(".reqwizit-state"), { recursive: true });
-const store = new ProjectStore(":memory:");
+const compactHistory = process.argv.includes("--compact-history");
+const directory = compactHistory ? await mkdtemp(resolve(".reqwizit-state/compact-browser-")) : undefined;
+let store = new ProjectStore(directory ? join(directory, "source.sqlite") : ":memory:");
 const empty = () => ({ summary: "Fixture", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
 let p = store.create("Saved conflict fixture", "Save reports", { providerID: "openai", modelID: "fixture", connectionID: "fixture-direct" });
 const setup = store.beginJob(p.id, p.revision).job; store.claimJob(setup.id, Date.now() + 60000);
@@ -26,12 +29,18 @@ const task = { recordIDs: [item.appliedSourceID!, p.questions[0]!.id, p.requirem
 const failed = store.beginJob(p.id, p.revision).job; store.claimJob(failed.id, Date.now() + 60000);
 try {
   await runSubmissionStages(store, { async analyze(_p, { context }) {
-    return context.manifest.submissionStage!.phase === "read" ? empty() : { submissionCheck: { valid: false, reason: `Conflicting requirement ${p.requirements[0]!.id} and earlier answer ${earlier.id}. Choose the rule.` } };
+    return context.manifest.submissionStage!.phase === "read" ? empty() : { submissionCheck: { valid: false, reason: `The retained offline acceptance scenario conflicts with earlier answer ${earlier.id}. Choose the rule.` } };
   } }, p, failed, item, task, { signal: new AbortController().signal, research: false });
 } catch { store.failJob(failed.id, "failed", "Fixture product conflict"); }
 item.status = "needs-attention"; item.jobID = failed.id; store.saveSubmission(item);
 const original = store.getJob(failed.id);
 assert.ok(store.submissionConflictView(p, original));
+if (directory) {
+  store.close();
+  await compactDatabaseCopy(join(directory, "source.sqlite"), join(directory, "compact.sqlite"));
+  store = new ProjectStore(join(directory, "compact.sqlite"));
+  assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.getJob(failed.id), original);
+}
 let calls = 0;
 const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("Fixture continuation failure after consent"); } } });
 const browser = await chromium.launch({ headless: true });
@@ -40,6 +49,7 @@ try {
   await page.goto(app.origin);
   const card = page.getByRole("region", { name: "Resolve saved-response conflict", exact: true });
   await expect(card).toBeVisible(); await expect(card.getByRole("radio", { checked: true })).toHaveCount(0);
+  await expect(card.getByRole("region", { name: "Why review stopped", exact: true })).toContainText("The retained offline acceptance scenario conflicts");
   await expect(card).toContainText("Reports can be saved offline."); await expect(card).toContainText(earlier.text); await expect(card).toContainText("Use full report data.");
   const save = card.getByRole("button", { name: "Save decision & continue review", exact: true });
   await expect(save).toBeDisabled(); assert.equal(calls, 0);
@@ -70,4 +80,4 @@ try {
   await page.reload(); await expect(card).toContainText("Your decision is saved"); assert.equal(calls, 1);
   assert.equal(store.get(p.id).sources.at(-1)!.savedResponseResolution?.id, saved.resolutions![0]!.id);
   console.log("Saved-response conflict browser passed: exact evidence, no default/automatic requests, custom draft retention, failed save, mobile, one save-and-review action, retained original history and reload without retry. Synthetic adapter only.");
-} finally { await browser.close(); await app.close(); store.close(); }
+} finally { await browser.close(); await app.close(); store.close(); if (directory) await rm(directory, { recursive: true, force: true }); }

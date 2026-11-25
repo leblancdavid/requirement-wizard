@@ -124,7 +124,7 @@ export async function inspectScopeQualification(runDirectory: string) {
           throw new Error("Qualification model witness does not match its manifest.");
         // Bind the human rubric to its captured scenario, not merely a mutable
         // manifest label. Read one bounded original snapshot, never replay history.
-        const original = db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+        const original = db.prepare("SELECT CASE WHEN bytes <= 65536 THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
           .get(manifest.request.projectID, manifest.request.revision) as { payload: string | null } | undefined;
         if (!original?.payload) throw new Error("Qualification original fixture is unavailable or exceeds its bound.");
         const project = projectSchema.parse(JSON.parse(original.payload));

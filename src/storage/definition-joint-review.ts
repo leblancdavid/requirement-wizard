@@ -34,7 +34,7 @@ export function prepareDefinitionJointReview(db: Database.Database, projectID: s
   for (const finding of selected.preview.findings) {
     const origin = finding.origin!, certificate = certificates.get(origin.assessmentRevision)!;
     if (!snapshots.has(origin.assessmentRevision)) {
-      const original = db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+      const original = db.prepare("SELECT CASE WHEN bytes <= ? THEN payload END AS payload FROM revision_documents WHERE project_id = ? AND revision = ?")
         .get(definitionDependencyLimits.snapshotBytes, projectID, origin.assessmentRevision) as { payload: string | null } | undefined;
       if (!original?.payload) return { status: "unavailable" as const, reason: "source-unavailable" };
       snapshots.set(origin.assessmentRevision, projectSchema.parse(JSON.parse(original.payload)));

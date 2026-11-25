@@ -2,6 +2,15 @@
 
 ## Confirmed product direction
 
+**Lossless storage optimization (2026-11-24).** The user approved committing/pushing
+the preceding changes, then implementing storage optimization without duplicated or
+omitted information. Prefer exact shared records and preserved historical meaning
+over age-based deletion. The first implemented slice is opt-in shared revision
+storage with a verified offline compacted copy; it does not authorize automatic
+replacement of a running user's database, history expiry or resetting paid work.
+Broader receipt sharing/compression and retention controls remain follow-on work.
+See [implemented scope and safeguards](storage-optimization.md).
+
 **Review includes bounded review usage (2026-11-24).** The user explicitly requested
 that clicking Review imply permission for that review, without a separate Allow
 action. Saved-response Review/Continue review now includes an eligible ordinary or

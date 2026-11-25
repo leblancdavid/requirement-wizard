@@ -29,6 +29,12 @@ helper diagnostics remain collapsed unless you open them.
 
 ## Project status
 
+An opt-in [lossless database compaction tool](docs/storage-optimization.md) stores
+historical records once and reconstructs exact revisions. `npm run db:compact --
+--help` describes the offline-copy command; it retains the original and never
+automatically replaces a running app's database. Whole-production-store compaction
+has not yet been qualified. No age-based history deletion or AI replay is introduced.
+
 Desktop restart recovery now preserves populated legacy project stores even when an
 auxiliary newer folder exists, and remembers the last project/Recents across port
 changes. Desktop builds no longer create a circular repository self-dependency or

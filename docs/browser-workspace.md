@@ -1,5 +1,21 @@
 # Browser workspace, epics, and estimated completeness
 
+## Conflict explanation omits the requirement ID (2026-11-24)
+
+An exact single-target saved review can now show **A saved answer needs your
+decision** even when the blocker describes its requirement without repeating the
+requirement UUID. It must still cite an exact earlier human-input record present
+in the retained detailed evidence. Multiple possible targets are not guessed.
+**Why review stopped** is visible above the original records and choices rather
+than hidden in technical details. Choose the requirement, earlier answer, or an
+explicit exception, then **Save decision & continue review**. No choice is defaulted.
+
+Existing published Design clarifications keep their original answer path. Original
+answers and completed work are unchanged; no real project policy was selected.
+Type checking, focused decision regressions and the deterministic conflict browser
+check (including missing requirement UUID, mobile and reload) passed. Live completion
+of this path remains unqualified. See [compatibility](migrations.md#single-target-conflict-navigation-2026-11-24).
+
 ## Resolve a saved-answer conflict inline (2026-11-24)
 
 When a retained failed review identifies both exact conflicting requirements and

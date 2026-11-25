@@ -1,5 +1,12 @@
 # Architecture outline
 
+SQLite 92 adds opt-in lossless shared revision objects, exact ordered manifests and
+a SQL reconstruction view used by historical readers. A separate offline-copy tool
+verifies every revision, retains the source and reclaims space without deleting
+history or replaying AI work. Startup does not auto-convert a real store. Distinct
+compatibility-marker projections remain validated; current project state and portable
+formats stay unchanged. See [design, maintenance and remaining scope](storage-optimization.md).
+
 New scoped no-question saved-answer corrections can use exact target/support-first
 context if reusing a rejected nearly full batch would exceed the input budget after
 adding repair metadata. Original receipts and finite correction limits remain intact;

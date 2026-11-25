@@ -38,6 +38,7 @@ export function SavedResponseConflictCard({ item, conflict, disabled, working, s
         .finally(() => setSaving(false));
     }}>
       <p>The AI flagged a possible conflict. Compare the original records below and choose which rule applies here, or explain how they should work together. Nothing is selected for you.</p>
+      <section aria-label="Why review stopped"><h3>Why review stopped</h3><p className="source-excerpt">{conflict.reason}</p></section>
       <section aria-label="Current saved answer"><h3>Your current answer</h3><strong>{conflict.input.question}</strong><p className="source-excerpt">{conflict.input.text}</p></section>
       <fieldset disabled={disabled || saving}><legend>Which rule should this review follow?</legend>
         {conflict.requirements.map((r, index) => <div className="shared-answer-choice" key={r.id}>
@@ -53,7 +54,6 @@ export function SavedResponseConflictCard({ item, conflict, disabled, working, s
       </fieldset>
       <p>Your choice replaces only the conflicting outcome in the other listed records for this review. It saves a new human decision and uses your selected AI connection to review this response. Original records remain saved; no coding or unrelated discovery starts.</p>
       <button className="primary" disabled={disabled || saving || !decision}>{saving ? "Saving decision…" : "Save decision & continue review"}</button>
-      <details><summary>Technical details</summary><p>{conflict.reason}</p></details>
     </form>}
     {error && <p role="alert">{error}</p>}
   </section>;

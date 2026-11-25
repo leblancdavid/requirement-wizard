@@ -10,9 +10,9 @@ export function inspectDefinitionImpact(db: Database.Database, project: Project,
   const saved = project.assessments.find((a) => a.epicID === epicID);
   if (!saved) return definitionImpact(project, epicID);
   if (Buffer.byteLength(JSON.stringify(project), "utf8") > definitionImpactLimits.snapshotBytes) return definitionImpact(project, epicID, undefined, "read-limit");
-  const row = db.prepare(`SELECT length(CAST(payload AS BLOB)) AS bytes,
-    CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
-    FROM revisions WHERE project_id = ? AND revision = ?`).get(definitionImpactLimits.snapshotBytes, project.id, saved.atRevision) as { bytes: number; payload: string | null } | undefined;
+  const row = db.prepare(`SELECT bytes,
+    CASE WHEN bytes <= ? THEN payload END AS payload
+    FROM revision_documents WHERE project_id = ? AND revision = ?`).get(definitionImpactLimits.snapshotBytes, project.id, saved.atRevision) as { bytes: number; payload: string | null } | undefined;
   if (!row) return definitionImpact(project, epicID);
   if (row.bytes > definitionImpactLimits.snapshotBytes) return definitionImpact(project, epicID, undefined, "read-limit");
   let original: Project;

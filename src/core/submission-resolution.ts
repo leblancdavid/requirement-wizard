@@ -37,14 +37,19 @@ export function savedResponseConflict(project: Project, item: Submission, job: J
   const detailed = new Set(job.context.includedIDs), allowed = new Set(w.task.recordIDs.filter(id => project.requirements.some(r => r.id === id)));
   for (const id of item.answerScope?.requirementIDs ?? []) allowed.add(id);
   if (item.input.type === "review") allowed.add(item.input.requirementID);
-  const requirements = project.requirements.filter(r => allowed.has(r.id) && detailed.has(r.id) && r.id.length >= 8 && reason.includes(r.id)
+  const targets = project.requirements.filter(r => allowed.has(r.id) && detailed.has(r.id) && r.status !== "rejected");
+  // A retained single-target review already identifies its requirement exactly.
+  // Do not make human resolution depend on the model repeating that UUID in prose.
+  // Multiple targets still need exact diagnostic IDs; never guess from wording.
+  const requirements = targets.filter(r => r.id.length >= 8 && (reason.includes(r.id) || targets.length === 1)
     && r.status !== "rejected").map(r => ({ id: r.id, text: r.statement, acceptance: r.acceptance }));
   const superseded = new Set(project.sources.flatMap(s => s.supersedes ? [s.supersedes] : []));
   const sources = project.sources.filter(s => ["answer", "note"].includes(s.kind) && s.id !== item.appliedSourceID && !superseded.has(s.id)
     && detailed.has(s.id) && s.id.length >= 8 && reason.includes(s.id)).map(s => ({ id: s.id, text: s.text,
       question: project.questions.find(q => q.id === s.questionID)?.text ?? "Earlier saved input" }));
   // Do not manufacture a product-conflict card from a technical error or an
-  // incomplete/malformed diagnostic. No original text is silently clipped.
+  // incomplete/malformed diagnostic: an exact earlier source citation is still
+  // mandatory, even for a single target. No original text is silently clipped.
   if (!requirements.length || requirements.length > 8 || !sources.length || sources.length > 8) return;
   const input = project.sources.find(s => s.id === item.appliedSourceID);
   if (!input) return;

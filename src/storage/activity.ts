@@ -19,7 +19,7 @@ export function saveActivity(db: Database.Database, projectID: string, entry: Pr
 }
 
 export function activitySnapshot(db: Database.Database, projectID: string, revision: number): Project | undefined {
-  const row = db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(projectID, revision) as { payload: string } | undefined;
+  const row = db.prepare("SELECT payload FROM revision_documents WHERE project_id = ? AND revision = ?").get(projectID, revision) as { payload: string } | undefined;
   return row ? projectSchema.parse(JSON.parse(row.payload)) : undefined;
 }
 

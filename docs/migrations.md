@@ -1,5 +1,60 @@
 # Data migrations and upgrade compatibility
 
+## Single-target conflict navigation (2026-11-24)
+
+No SQLite/portable version, persisted schema, assessment fingerprint or allowance
+changes. Old saved failed reviews can expose the existing human-resolution action
+when their retained task has exactly one detailed eligible requirement and the
+blocker cites exact earlier human input, even without the requirement UUID in its
+prose. Ambiguous targets, missing source citations, changed originals and unavailable
+historical snapshots remain ineligible. Existing Design clarifications retain their
+original answer path. No startup writes, repeated calls or reassessment are needed
+to display the action; saving still requires explicit revision-bound consent and
+fresh verification under the existing saved-response-decision policy.
+
+Focused tests cover the old-shaped blocker, rejection of ambiguous/no-citation
+cases, unchanged original failed work and requirement records, all three decision
+choices, stale evidence and existing clarification routing. The deterministic browser
+check also covers explanation visibility, mobile, failed saves and reload. No live
+project data was changed or live model call made.
+
+## Lossless shared historical revisions (SQLite 91 → 92; portable unchanged)
+
+Schema 92 installs an immutable exact-fragment object store, distinct historical
+compatibility-marker projections, a trigger-maintained compact-manifest index,
+opt-in write settings and the `revision_documents` SQL reconstruction view. These
+empty structures are installed transactionally before older migration callbacks
+need the compatibility view; unsupported versions still reject before writes.
+There is no new full-history index build or automatic conversion of existing rows.
+Existing rows remain byte-for-byte unchanged on upgrade. Project revision numbers,
+IDs, source provenance, assessment semantics, completed receipts and allowances do
+not change, so no reassessment/model calls are required solely for this upgrade.
+
+Explicit `db:compact` operates only on a consistent staging copy. Each conversion
+preserves original JSON bytes (not merely canonical equivalence), revision/reason
+and stable record identities. Its per-row transaction commits only after exact
+reconstruction. Shared compatibility projections preserve the existing startup
+marker validation, and future manifest/settings/marker formats fail closed.
+Verification authenticates object hashes and whole-revision digests. The original
+database remains untouched; failed conversion/resume never renews AI attempts or
+leases. Only explicitly rebuildable portable caches are discarded in the copy.
+`VACUUM INTO` produces a verified smaller output; no automatic replacement occurs.
+
+Converted copies use shared storage for later app writes and imported historical
+snapshots, while mixed legacy/shared histories remain readable. Historical source
+hashes and all portable output bytes remain equivalent, so the portable format
+does not change. Older app readers reject database 92. Recovery is the retained
+original database or a safe resume from committed staging batches, not a lossy
+downgrade. See [command, disk bounds, interruption and verification](storage-optimization.md).
+
+Checks: the complete `npm test` run passed (1,056 pretests, 875 main tests and 460
+posttests), as did type/UI build and targeted portable/Specification/conflict-card
+browser checks, including a compacted-copy conflict workflow. Later targeted
+compaction/paid-continuation checks also passed. A bounded real-source sample used
+only an in-memory target and verified all three original revision digests with
+63% less payload storage; it does not establish whole-store savings or timing.
+No production compaction, replacement or live inference was performed.
+
 ## Explicit saved-response decisions (SQLite 90 → 91; conditional portable 62)
 
 An eligible saved-answer conflict now accepts an explicit human decision through a

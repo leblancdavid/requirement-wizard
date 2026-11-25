@@ -15,16 +15,16 @@ function decode(db: Database.Database, project: Project, epicID: string, row: Ca
   if (assessment.epicID !== epicID || assessment.atRevision > row.revision) throw new Error("The saved assessment has inconsistent area or revision provenance.");
   let basis: "retained" | "derived" | "unavailable" = assessment.inputBasis ? "retained" : "unavailable";
   if (assessment.inputBasis) {
-    const origin = db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
-      FROM revisions WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
+    const origin = db.prepare(`SELECT CASE WHEN bytes <= ? THEN payload END AS payload
+      FROM revision_documents WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
     let rawOriginal: unknown;
     try { if (origin?.payload) rawOriginal = JSON.parse(origin.payload); } catch { /* Keep an existing retained basis; never substitute another snapshot. */ }
     const proof = definitionStorageOrderProof(project.id, JSON.parse(row.payload), rawOriginal);
     if (proof) { assessment.inputBasis.key = proof.key; basis = "derived"; }
   }
   if (!assessment.inputBasis) {
-    const origin = db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
-      FROM revisions WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
+    const origin = db.prepare(`SELECT CASE WHEN bytes <= ? THEN payload END AS payload
+      FROM revision_documents WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
     if (origin?.payload) {
       const original = projectSchema.parse(JSON.parse(origin.payload));
       if (original.id !== project.id || original.revision !== assessment.atRevision) throw new Error("Original assessment snapshot identity is inconsistent.");
@@ -50,7 +50,7 @@ export function previewAssessmentHistory(db: Database.Database, project: Project
   const result: AssessmentHistoryPreview = { projectID: project.id, revision: project.revision, epicID, title: epic.title,
     status: "empty", reason: "No saved assessment was found in this history window.", blocker, examinedRevisions: 0, nextBefore: null };
   if (project.assessments.some((a) => a.epicID === epicID)) return { ...result, status: "present", reason: "This area already has an assessment. Recovery never replaces an existing result, even when it is outdated." };
-  const rows = db.prepare(`SELECT revision, length(CAST(payload AS BLOB)) AS bytes FROM revisions
+  const rows = db.prepare(`SELECT revision, bytes FROM revision_documents
     WHERE project_id = ? AND revision < ? ORDER BY revision DESC LIMIT ?`).all(project.id, Math.min(before ?? project.revision, project.revision), limits.revisions + 1) as { revision: number; bytes: number }[];
   let bytes = 0;
   const selected: number[] = [];
@@ -64,7 +64,7 @@ export function previewAssessmentHistory(db: Database.Database, project: Project
   result.nextBefore = rows.length > selected.length ? selected.at(-1)! : null;
   const candidates = db.prepare(`SELECT r.revision, length(CAST(a.value AS BLOB)) AS bytes,
     CASE WHEN length(CAST(a.value AS BLOB)) <= ? THEN a.value END AS payload
-    FROM revisions r, json_each(r.payload, '$.assessments') a
+    FROM revision_documents r, json_each(r.payload, '$.assessments') a
     WHERE r.project_id = ? AND r.revision IN (${selected.map(() => "?").join(",")})
       AND json_extract(a.value, '$.epicID') = ? ORDER BY r.revision DESC LIMIT 2`).all(limits.assessmentBytes, project.id, ...selected, epicID) as CandidateRow[];
   if (!candidates.length) return result;
@@ -84,8 +84,8 @@ export function selectedHistoricalAssessment(db: Database.Database, project: Pro
   if (selection.sourceRevision >= project.revision) throw new Error("Recovery requires an earlier saved revision.");
   const rows = db.prepare(`SELECT r.revision, length(CAST(a.value AS BLOB)) AS bytes,
     CASE WHEN length(CAST(a.value AS BLOB)) <= ? THEN a.value END AS payload
-    FROM revisions r, json_each(r.payload, '$.assessments') a WHERE r.project_id = ? AND r.revision = ?
-      AND length(CAST(r.payload AS BLOB)) <= ? AND json_extract(a.value, '$.epicID') = ? LIMIT 2`)
+    FROM revision_documents r, json_each(r.payload, '$.assessments') a WHERE r.project_id = ? AND r.revision = ?
+      AND r.bytes <= ? AND json_extract(a.value, '$.epicID') = ? LIMIT 2`)
     .all(limits.assessmentBytes, project.id, selection.sourceRevision, limits.windowBytes, selection.epicID) as CandidateRow[];
   if (rows.length !== 1) throw new Error("The selected historical assessment is missing, ambiguous or exceeds recovery bounds. Preview again; original history was not changed.");
   const selected = decode(db, project, selection.epicID, rows[0]!);
