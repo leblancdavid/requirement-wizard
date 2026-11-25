@@ -27,6 +27,7 @@ documents relevant to the task:
 - `docs/runtime-spike.md` — tested runtime behavior, commands, and outstanding gaps.
 - `docs/terminal-discovery.md` — persistent terminal commands, storage, and verified flows.
 - `docs/browser-workspace.md` — browser startup, epic organization, scoring, context, and research.
+- `docs/storage-optimization.md` — shared history storage, compaction safeguards, and measured limits.
 
 Distinguish confirmed decisions, proposed architecture, implemented behavior, and
 verified results. Update the relevant documents when those states change.
@@ -96,6 +97,31 @@ dependency on its compiler or experimental runtime.
   changes affecting confirmed information require organization review.
 - Keep context bounded and revision-linked. Do not silently truncate human decisions
   or use omitted evidence to justify new requirements/assessments.
+
+## Processing and storage efficiency
+
+- Treat efficiency as a design requirement for every new feature or substantial
+  change, not a cleanup task for later. Assess CPU/time, peak memory, database and
+  artifact growth, startup/polling overhead, and AI request/token usage as applicable.
+- Consider scaling with project size, revision count, completed jobs and repeated
+  use. Avoid work or storage that repeatedly copies/scans the entire growing history
+  for a small change. Prefer indexed metadata, bounded/paginated reads, incremental
+  updates, exact shared records and reuse of compatible completed work.
+- Keep expensive work off startup and routine UI refresh paths where practical.
+  Bound background work and concurrency; preserve cancellation and explicit consent
+  rather than adding automatic retries or model calls to hide slow operations.
+- Store authoritative evidence once where practical and reference it by stable
+  identity. Separate rebuildable caches from human input, paid results and recovery
+  records; give caches appropriate size limits and explicit invalidation rules.
+- Never gain efficiency by silently truncating evidence, dropping meaningful history,
+  weakening validation/freshness checks, resetting attempts or repeating paid calls.
+  Storage changes must also satisfy the forward-migration requirements below.
+- For affected scaling-sensitive paths, add representative large/repeated-use tests
+  or measurements. Prefer deterministic assertions on work counts, bounds and exact
+  preservation over fragile wall-clock thresholds. Report checks actually run,
+  measured tradeoffs and remaining limits; do not present estimates as verified gains.
+- Use the [architecture efficiency checklist](docs/architecture.md#efficiency-design-checklist)
+  and existing [storage safeguards](docs/storage-optimization.md) when designing changes.
 
 ## Data compatibility and forward migrations
 

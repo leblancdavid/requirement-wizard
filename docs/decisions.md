@@ -2,6 +2,16 @@
 
 ## Confirmed product direction
 
+**Efficiency by design (2026-11-24).** The user requested a standing agent rule to
+consider processing and storage efficiency when adding features. New features and
+substantial changes must assess applicable runtime/memory, startup/polling, AI usage
+and persistent-growth costs, with representative checks for scaling-sensitive paths.
+Prefer bounded incremental work and exact sharing, never omitted evidence or lost
+paid/recovery history. This adds development guidance only; no persisted format,
+assessment semantics or runtime behavior changes. See the
+[architecture checklist](architecture.md#efficiency-design-checklist) and
+[agent rule](../AGENTS.md#processing-and-storage-efficiency).
+
 **Lossless storage optimization (2026-11-24).** The user approved committing/pushing
 the preceding changes, then implementing storage optimization without duplicated or
 omitted information. Prefer exact shared records and preserved historical meaning

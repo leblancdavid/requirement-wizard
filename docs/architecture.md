@@ -1,5 +1,31 @@
 # Architecture outline
 
+## Efficiency design checklist
+
+Processing and storage efficiency are standing design requirements for new features
+and substantial changes, alongside correctness and compatibility. Review:
+
+1. **Growth:** what gets read, copied, parsed, written or exported as projects,
+   revisions and jobs accumulate? Avoid full-history work for small updates.
+2. **Critical paths:** what runs at startup, on each poll or on the UI thread?
+   Prefer small indexed projections and on-demand detail; bound expensive background
+   work, concurrency and peak memory without undermining cancellation.
+3. **AI cost:** can compatible completed work be reused? Keep requests/context
+   bounded and preserve consent, charged attempts and exact verification coverage.
+4. **Persistence:** which data is authoritative, which can be shared by exact
+   identity, and which is a rebuildable cache? Define cache bounds/invalidation and
+   account for database, workspace/export and migration temporary-space growth.
+5. **Proof and safety:** test representative large/repeated-use cases, count work
+   and bytes where practical, and verify exact evidence/recovery preservation.
+   Record measurements and limits rather than assuming an optimization is faster.
+
+This is a development rule, not a claim that every existing path is already
+optimized. It does not authorize lossy retention, weaker checks, automatic AI work
+or incompatible data rewrites. Follow [agent guidance](../AGENTS.md#processing-and-storage-efficiency),
+[migration requirements](migrations.md) and [shared-storage safeguards](storage-optimization.md).
+
+## Implementation notes
+
 SQLite 92 adds opt-in lossless shared revision objects, exact ordered manifests and
 a SQL reconstruction view used by historical readers. A separate offline-copy tool
 verifies every revision, retains the source and reclaims space without deleting
