@@ -673,7 +673,7 @@ export class DiscoveryQueue {
       if (!options.refinementOnly || options.research || options.focusEpicID || options.refreshProposalID || options.gapMode || options.processOnly || options.submissionIDs || options.savedEvidencePolicy
         || !work || job.projectID !== id || latest?.id !== job.id || !["failed", "interrupted", "cancelled"].includes(job.status))
         throw new Error("Choose the latest paused refinement. No new task or request was started.");
-      replayRefinementStages(refinementMaterials(project, work.requirementID, undefined, work.pair), work);
+      replayRefinementStages(refinementMaterials(project, work.requirementID, undefined, work.pair, work.format === 3), work);
     }
     if (options.questionTarget !== undefined && (!Number.isInteger(options.questionTarget) || options.questionTarget < 1 || options.questionTarget > 50 || options.refinementOnly)) throw new Error("Choose a question target from 1 to 50 for gap exploration.");
     if (options.collectQuestionBatch && (options.questionTarget === undefined || options.gapMode !== "epic" || options.processOnly || options.refinementOnly)) throw new Error("Batch collection requires an explicit epic question target.");

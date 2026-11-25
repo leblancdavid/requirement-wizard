@@ -273,6 +273,15 @@ still requires separate explicit authorization. See [continuous specification](c
   and applicable human guardrails. Save each completed check, including no-change
   results, and resume unfinished work on explicit retry without repeating unchanged
   completed checks. Never discard mandatory constraints to fit an individual task.
+- Detect growing requirements with local advisory signals and automatically propose
+  independently testable child requirements within explicitly authorized continuation
+  or refinement work. Preserve all constraints, exceptions, source intent and original
+  scenarios; require exact-evidence verification of the complete frozen decomposition.
+  Size alone is not grounds for splitting. Show original/children/scenario mappings
+  and require approval before atomic publication. Retain original IDs/history and
+  child lineage; do not transfer implementation credit or widen scoped write targets.
+  Reuse unchanged completed/dismissed outcomes and preserve interrupted paid work.
+  Epic splitting remains separately reviewable; a unified approval is future work.
 - Refinement also checks candidate approved-requirement pairs for redundancy/conflicts.
   Propose a reviewed consolidation or coordinated correction when supported; ask a
   targeted clarification when intent is unresolved. Concrete queued clarification

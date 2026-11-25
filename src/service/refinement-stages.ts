@@ -1,14 +1,18 @@
 import { reviewFingerprint, StaleRevisionError, type Job, type Project } from "../core/model.js";
 import type { ContextBudgetError } from "../core/context.js";
-import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, refinementNoChangeComplete, replayRefinementStages, refinementPairContext, sameRefinementTask, type ResolutionStageTask } from "../core/refinement-stages.js";
+import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, refinementNoChangeComplete, replayRefinementStages, refinementPairContext, type ResolutionStageTask } from "../core/refinement-stages.js";
 import { refinementContextKey } from "./refinement-tasks.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
+import { requirementDecompositionCandidate } from "../core/requirement-split.js";
 
 export async function runRefinementStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, requirementID: string,
   options: { signal: AbortSignal; continuous?: boolean; pair?: ResolutionStageTask; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void; onRequest?: () => void }) {
-  const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, options.pair));
-  const m = refinementMaterials(project, requirementID, previous ? undefined : options.overflow, options.pair);
+  const previous = store.latestRefinementJob(project.id, requirementID, options.pair, job.id);
+  // Never reinterpret an already-started paid task under a new policy.
+  const decomposition = previous?.refinementWork && previous.status !== "completed" ? previous.refinementWork.format === 3
+    : !options.pair && requirementDecompositionCandidate(project, project.requirements.find(r => r.id === requirementID)!);
+  const m = refinementMaterials(project, requirementID, previous ? undefined : options.overflow, options.pair, decomposition);
   // Explicit new refinement after genuinely changed evidence starts a new plan;
   // never overwrite or reinterpret the older dated ledger.
   const w = previous?.status !== "completed" && previous?.refinementWork?.materialKey === m.materialKey

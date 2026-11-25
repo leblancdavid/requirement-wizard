@@ -1,5 +1,13 @@
 # Milestone backlog
 
+The 2026-11-24 requirement-decomposition slice adds local size signals, automatic
+checks under new explicit Continue consent, exact staged preservation verification,
+and atomic reviewed child creation under RW-012/DEC-022. Original evidence/lineage
+and interrupted paid work survive upgrade and portable continuation. Deterministic
+and focused browser checks pass; live semantic quality, threshold calibration and
+combined requirement/epic approval remain unqualified. No milestone exit is implied.
+See [requirement decomposition](browser-workspace.md#automatic-requirement-decomposition-2026-11-24).
+
 The 2026-11-24 [helper Settings controls](embedded-helper-auth.md#app-controls-2026-11-24)
 add explicit-consent check/sign-in/stop and safe lifecycle observations in browser and
 desktop backends. Deterministic UI/API/lifecycle checks and a native empty-store API

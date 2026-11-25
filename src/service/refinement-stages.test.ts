@@ -402,7 +402,7 @@ test("pair continuation resumes only the saved pair after reopen and portable ad
     const files = renderWorkspace(f.project, undefined, continuationState(f.project, store.jobs(f.project.id), [], (r) => store.get(f.project.id, r)));
     const decoded = decodePortable(files, f.project.model); assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === first.id)!.refinementWork, first.refinementWork);
     assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === legacy.id)!.refinementWork, legacy.refinementWork);
-    const future = JSON.parse(files["continuation.json"]!); future.jobs.find((j: { id: string }) => j.id === first.id).refinementWork.format = 3;
+    const future = JSON.parse(files["continuation.json"]!); future.jobs.find((j: { id: string }) => j.id === first.id).refinementWork.format = 4;
     assert.throws(() => decodePortable({ ...files, "continuation.json": JSON.stringify(future) }, f.project.model), /Invalid literal/);
     const root = join(dir, "project"); mkdirSync(root); store.connectWorkspace(f.project.id, f.project.revision, root); store.syncWorkspace(f.project.id);
     const clone = new ProjectStore(":memory:");

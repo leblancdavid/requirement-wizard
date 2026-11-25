@@ -5,6 +5,8 @@ import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, w
    workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, targetedCollectionLimits, canCollectMoreQuestions, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
+import { requirementDecompositionCandidate } from "../core/requirement-split.js";
+import { refinementCheckCurrentMatcher } from "../core/refinement-identity.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
 import { auditApprovedRequirements } from "../core/similarity.js";
 import { OperationConflictError } from "../core/operations.js";
@@ -218,6 +220,7 @@ export class ProjectWorkflow {
       // New explicit continuation adopts organization suggestions. Older saved
       // grants/startup and assessment-only Review changes gain no new authority.
       if (action !== "review-changes") state.organizationPolicy = { format: 1 };
+      if (action !== "review-changes") state.decompositionPolicy = { format: 1 };
       // Adopt only on explicit continuous consent. Old bounded/live grants keep
       // their original wake-up behavior; startup never rewrites or arms them.
         if (action === "continue-continuous" || action === "play") {
@@ -622,7 +625,11 @@ export class ProjectWorkflow {
             if (!requirements.length) {
               record("interpret", project); const job = await service.analyze(id, project.revision, { signal: controller.signal, research: false }); if (!check(job)) return;
             } else {
-              const candidate = refinementCandidates(project).find((r) => r.status === "accepted" && !this.requirementProof(project, r, jobs));
+              const currentRefinement = refinementCheckCurrentMatcher(project);
+              const candidate = refinementCandidates(project).find((r) => r.status === "accepted" && (
+                !this.requirementProof(project, r, jobs)
+                || state.decompositionPolicy && !(reviewing && state.reviewCheckpoint!.explicit) && requirementDecompositionCandidate(project, r)
+                  && !jobs.some(j => j.status === "completed" && currentRefinement(r, j, () => this.store.get(id, j.expectedRevision)))));
               if (candidate) {
                 record("refine", project, candidate.id);
                 if (!check(await service.analyze(id, project.revision, { refinementOnly: true, recordIDs: [candidate.id], signal: controller.signal, research: false }))) return;

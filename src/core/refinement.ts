@@ -1,6 +1,7 @@
 import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "./model.js";
 import { refinementIsStale, resolutionContextKey, resolutionContextMatches, validateResolutionEvidence } from "./resolution.js";
 import { decisionContextKey, decisionContextMatches } from "./decision-availability.js";
+import { assertSplitReferences, validateRequirementSplit } from "./requirement-split.js";
 
 /** Volatile run telemetry, not saved evidence or specification completeness. */
 export type RefinementProgress = {
@@ -29,6 +30,7 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     if (!target || target.status === "rejected" || !project.epics.some((e) => e.id === target.epicID && !e.archived)) throw new Error("Refinement targets a missing, rejected or archived requirement.");
     if (seen.has(target.id)) throw new Error("Refinement repeats a target.");
     seen.add(target.id);
+    validateRequirementSplit(target, proposal);
     const fingerprint = reviewFingerprint(target);
     const decisionKey = decisionContextKey(project, [target.id]);
     // A dismissed suggestion is not permission to try the same cleanup again.
@@ -43,7 +45,7 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     if (project.refinements.some((r) => proposal.resolution
       ? r.resolution && !!r.resolutionContextKey && resolutionContextMatches(project, [target.id, proposal.resolution.relatedRequirementID], r.resolutionContextKey, triggerSourceIDs)
       : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint && (!r.decisionBasis || decisionContextMatches(project, [target.id], r.decisionBasis.contextKey)))) continue;
-    if (!proposal.resolution && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
+    if (!proposal.resolution && !proposal.split && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
     project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1,
       ...(!related ? { decisionBasis: { format: 1 as const, contextKey: decisionKey } } : {}),
       ...(related ? { relatedOriginal: structuredClone(related), resolutionContextKey: contextKey,
@@ -58,6 +60,35 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
   if (!accept) { proposal.status = "dismissed"; return; }
   const target = project.requirements.find((r) => r.id === proposal.requirementID);
   if (!target || refinementIsStale(project, proposal)) throw new StaleRevisionError();
+  if (proposal.split) {
+    validateRequirementSplit(target, proposal);
+    assertSplitReferences(project, target.id);
+    // Allocate all identities before mutating. The store publishes the complete
+    // revision transactionally; a failed approval cannot leave partial children.
+    const children = proposal.split.children.map(child => ({ id: newID(), sourceID: newID(), child }));
+    const retirementID = newID();
+    const childIDs = children.map(c => c.id);
+    for (const { id: childID, sourceID, child } of children) {
+      project.sources.push({ id: sourceID, kind: "confirmation", requirementID: childID, epicID: target.epicID,
+        text: `Human approved requirement split ${proposal.id}. Parent: ${target.id}. Original snapshot and scenario mapping are retained in the reviewed proposal. Child: ${JSON.stringify(child)}` });
+      project.requirements.push({ id: childID, epicID: target.epicID, statement: child.statement, rationale: child.rationale,
+        acceptance: [...child.acceptance], sourceIDs: [...new Set([...target.sourceIDs, sourceID])], status: "accepted", reviewNote: `Split from ${target.id}. ${proposal.reason}` });
+    }
+    project.sources.push({ id: retirementID, kind: "rejection", requirementID: target.id, epicID: target.epicID,
+      text: `Human approved decomposition ${proposal.id}, not removal of behavior. Superseded by requirements: ${childIDs.join(", ")}. Original wording, sources and historical references are retained.` });
+    target.status = "rejected";
+    target.reviewNote = `Split into ${childIDs.join(", ")}. ${proposal.reason}`;
+    target.sourceIDs.push(retirementID);
+    delete target.authority;
+    proposal.splitRequirementIDs = childIDs;
+    proposal.status = "accepted";
+    // References deliberately keep the original ID as dated evidence. Neither
+    // old implementation credit nor scoped write permissions transfer to children.
+    for (const other of project.refinements) if (other.id !== proposal.id && other.status === "pending"
+      && (other.requirementID === target.id || other.resolution?.relatedRequirementID === target.id)) other.status = "dismissed";
+    project.roundChanges = [`Approved requirement split: ${target.id} → ${childIDs.join(", ")}. Original evidence retained; new requirements need their own implementation checks.`];
+    return;
+  }
   if (proposal.resolution) {
     const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID)!;
     const changes = JSON.stringify({ requirementID: target.id, statement: proposal.statement, rationale: proposal.rationale, acceptance: proposal.acceptance, reason: proposal.reason, resolution: proposal.resolution });

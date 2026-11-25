@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requirementDecompositionCandidate } from "../core/requirement-split.js";
 import { runOrganizationCheck } from "./organization-check.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
 import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Submission, type Telemetry, type ResearchEvidence } from "../core/model.js";
@@ -35,7 +36,7 @@ import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { refinementContextKey } from "./refinement-tasks.js";
 import { runRefinementStages } from "./refinement-stages.js";
-import { refinementPairContext, sameRefinementTask } from "../core/refinement-stages.js";
+import { refinementPairContext } from "../core/refinement-stages.js";
 import { refinementEvidenceRecords, assertRefinementEvidence } from "../core/refinement-context.js";
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
@@ -660,7 +661,7 @@ export class DiscoveryService {
       if (refinementTarget || pair) {
         const requirementID = pair?.[0] ?? refinementTarget!.id;
         const stagedPair = pair ? { requirementIDs: pair, includeUnapproved: !!options.includeUnapproved, triggerSourceIDs } : undefined;
-        const previous = [...this.store.jobs(projectID)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, stagedPair));
+        const previous = this.store.latestRefinementJob(projectID, requirementID, stagedPair, job.id);
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
           if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
@@ -668,6 +669,7 @@ export class DiscoveryService {
             { signal: controller.signal, continuous: this.navigation.workflow?.continuous, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, onRequest: options.onRefinementRequest });
         };
         if (previous?.refinementWork && previous.status !== "completed") return await run();
+        if (refinementTarget && requirementDecompositionCandidate(project, refinementTarget)) return await run();
         try { ordinaryContext = taskPlanner(project, ordinaryTask); }
         catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return await run(error); }
       }

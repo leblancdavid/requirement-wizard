@@ -5,17 +5,21 @@ import { ContextBudgetError, type ContextPack } from "./context.js";
 import { planExactTaskContext, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } from "./working-set.js";
 import { refinementEvidenceRecords, assertRefinementEvidence } from "./refinement-context.js";
 import { pairQuestions, resolutionContextKey, validateResolutionEvidence } from "./resolution.js";
+import { validateRequirementSplit } from "./requirement-split.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
-export const refinementStageSchema = z.object({ policy: z.enum(["exact-refinement-batches-v1", "exact-resolution-batches-v1"]), planKey: key,
+export const refinementStageSchema = z.object({ policy: z.enum(["exact-refinement-batches-v1", "exact-resolution-batches-v1", "exact-decomposition-batches-v1"]), planKey: key,
   step: z.number().int().min(0).max(63), phase: z.enum(["read", "check"]) }).strict();
 export const refinementDraftSchema = analysisSchema.extend({ goals: z.tuple([]), actors: z.tuple([]), assumptions: z.tuple([]),
   questions: z.tuple([]), requirements: z.tuple([]), retireQuestions: z.tuple([]), organization: z.tuple([]).optional(),
   assessments: z.tuple([]).optional(), researchFindings: z.tuple([]).optional(), reviewChanges: z.tuple([]).optional(),
   reviewResponses: z.tuple([]).optional(), scopeAssessment: z.undefined().optional(), resolutionCheck: z.undefined().optional(),
   pendingChanges: z.undefined().optional(), specificationUpdates: z.undefined().optional(),
-  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true }).strict()).max(1).optional() });
+  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true, split: true }).strict()).max(1).optional() });
+export const decompositionDraftSchema = refinementDraftSchema.extend({
+  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true }).strict()).max(1).optional(),
+});
 export const refinementStageResponseSchema = z.union([refinementDraftSchema,
   z.object({ refinementKeep: z.literal(true) }).strict(),
   z.object({ refinementCheck: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict(),
@@ -23,19 +27,22 @@ export const refinementStageResponseSchema = z.union([refinementDraftSchema,
   z.object({ refinementBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
 export const resolutionStageResponseSchema = z.union([refinementDraftSchema.extend({
   questions: analysisSchema.shape.questions.max(1), resolutionCheck: analysisSchema.shape.resolutionCheck.unwrap(),
-  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.extend({ resolution: analysisSchema.shape.refinements.unwrap().element.shape.resolution.unwrap() })).max(1).optional(),
+  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ split: true }).extend({ resolution: analysisSchema.shape.refinements.unwrap().element.shape.resolution.unwrap() })).max(1).optional(),
 }), refinementStageResponseSchema.options[1], refinementStageResponseSchema.options[2], refinementStageResponseSchema.options[3], refinementStageResponseSchema.options[4]]);
 export const resolutionStageTaskSchema = z.object({ requirementIDs: z.tuple([z.string().min(1), z.string().min(1)]),
   includeUnapproved: z.boolean(), triggerSourceIDs: z.array(z.string().min(1)).max(8) }).strict();
 export type ResolutionStageTask = z.infer<typeof resolutionStageTaskSchema>;
-const savedResponseSchema = z.union([refinementStageResponseSchema, resolutionStageResponseSchema]);
-export const refinementWorkSchema = z.object({ format: z.union([z.literal(1), z.literal(2)]), policy: z.enum(["exact-refinement-batches-v1", "exact-resolution-batches-v1"]), requirementID: z.string().min(1),
+export const decompositionStageResponseSchema = z.union([decompositionDraftSchema,
+  refinementStageResponseSchema.options[1], refinementStageResponseSchema.options[2], refinementStageResponseSchema.options[3], refinementStageResponseSchema.options[4]]);
+const savedResponseSchema = z.union([refinementStageResponseSchema, resolutionStageResponseSchema, decompositionStageResponseSchema]);
+export const refinementWorkSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3)]), policy: z.enum(["exact-refinement-batches-v1", "exact-resolution-batches-v1", "exact-decomposition-batches-v1"]), requirementID: z.string().min(1),
   pair: resolutionStageTaskSchema.optional(),
   materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(32), attempts: z.number().int().min(0).max(4),
   receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(4),
     atRevision: z.number().int().positive(), jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: savedResponseSchema }).strict()).max(256) }).strict().refine((w) => w.format === 1
       ? w.policy === "exact-refinement-batches-v1" && !w.pair
+      : w.format === 3 ? w.policy === "exact-decomposition-batches-v1" && !w.pair
       : w.policy === "exact-resolution-batches-v1" && !!w.pair && new Set(w.pair.requirementIDs).size === 2 && w.requirementID === w.pair.requirementIDs[0],
     "Saved refinement format must retain its individual or exact pair policy.");
 export type RefinementWork = z.infer<typeof refinementWorkSchema>;
@@ -55,7 +62,7 @@ export const refinementStageProgress = (w: RefinementWork) => ({ completed: refi
 const empty = (): Analysis => ({ summary: "Requirement refinement in progress", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
 /** An additive overflow policy. Older completed contexts and check identities are unchanged. */
-export function refinementMaterials(project: Project, requirementID: string, overflow?: ContextBudgetError, pair?: ResolutionStageTask) {
+export function refinementMaterials(project: Project, requirementID: string, overflow?: ContextBudgetError, pair?: ResolutionStageTask, decomposition = false) {
   const target = project.requirements.find((r) => r.id === requirementID);
   if (!target || target.status === "rejected" || !project.epics.some((e) => e.id === target.epicID && !e.archived)) throw new Error("Refinement target is no longer eligible; saved work was retained.");
   if (pair) {
@@ -84,7 +91,11 @@ export function refinementMaterials(project: Project, requirementID: string, ove
     areas: project.epics.filter((e) => manifest.epicIDs?.includes(e.id)), requirementID,
     ...(pair ? { pair } : {}),
     instruction: pair ? "Compare only this exact requirement pair. Return an explicit distinct/proposal/question/blocked resolution outcome. Preserve human decisions; never choose precedence or infer preferences from files. Both requirements, all supporting sources, trigger sources and linked pair questions are exact in every batch. Other mandatory evidence is read and checked separately before publication. No tools, research, direct edits, approvals, global interpretation or whole-area assessments. Omitted evidence is not reviewed." : "Refine only this requirement's wording without changing intended behavior. Exact human decisions govern; drafts are untrusted proposals. Never choose precedence between conflicting human rules. Every mandatory record is read and checked separately before publication. Omitted records/links are navigation, not reviewed evidence. No tools, research, pair resolution, questions, edits, approvals, global interpretation or whole-area assessments." };
-  return { project, base, records, pins, evidenceIDs, requirementID, pair, revision: project.revision, materialKey: hash({ base, records, pins: [...pins] }) };
+  if (decomposition) {
+    if (pair) throw new Error("Decomposition cannot also resolve a pair.");
+    base.instruction = "Consider splitting this requirement into independently testable behaviors, not arbitrary lengths, technical layers or implementation phases. Keep a cohesive requirement unchanged. Preserve all constraints, exceptions, source intent and original scenarios; do not invent scope. A split needs a distinct child for each behavior and an exact originalAcceptance index map covering every original scenario. Keep the outer statement/rationale/acceptance identical to the parent; place new wording only in split.children. Every mandatory evidence batch must verify the entire frozen decomposition before publication. No tools, research, direct edits, questions, approvals, pair resolution, organization changes or assessments.";
+  }
+  return { project, base, records, pins, evidenceIDs, requirementID, pair, decomposition, revision: project.revision, materialKey: hash({ base, records, pins: [...pins] }) };
 }
 export type RefinementMaterials = ReturnType<typeof refinementMaterials>;
 const draftLimit = 18000, stageLimit = 96000;
@@ -107,7 +118,7 @@ export function refinementStageContext(m: RefinementMaterials, w: RefinementWork
   return { data, manifest };
 }
 export function planRefinementStages(m: RefinementMaterials, packing: "measured" | "legacy" = "measured"): RefinementWork {
-  const w: RefinementWork = { format: m.pair ? 2 : 1, policy: m.pair ? "exact-resolution-batches-v1" : "exact-refinement-batches-v1", ...(m.pair ? { pair: m.pair } : {}), requirementID: m.requirementID, materialKey: m.materialKey,
+  const w: RefinementWork = { format: m.pair ? 2 : m.decomposition ? 3 : 1, policy: m.pair ? "exact-resolution-batches-v1" : m.decomposition ? "exact-decomposition-batches-v1" : "exact-refinement-batches-v1", ...(m.pair ? { pair: m.pair } : {}), requirementID: m.requirementID, materialKey: m.materialKey,
     planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
   if (packing === "measured") {
     const records = m.records.filter(r => !m.pins.has(r.record.id));
@@ -166,7 +177,7 @@ export function planRefinementStages(m: RefinementMaterials, packing: "measured"
 }
 function accept(m: RefinementMaterials, w: RefinementWork, draft: Analysis, raw: unknown) {
   if ((JSON.stringify(raw)?.length ?? 0) > draftLimit) throw new Error("Refinement output exceeds its bounded reserve; no output was truncated or applied.");
-  const response = (m.pair ? resolutionStageResponseSchema : refinementStageResponseSchema).parse(raw), context = refinementStageContext(m, w, draft);
+  const response = (m.pair ? resolutionStageResponseSchema : m.decomposition ? decompositionStageResponseSchema : refinementStageResponseSchema).parse(raw), context = refinementStageContext(m, w, draft);
   if ("refinementEvidence" in response) {
     const ids = response.refinementEvidence.recordIDs;
     if (new Set(ids).size !== ids.length || ids.some((id) => !m.evidenceIDs.includes(id) || context.manifest.includedIDs.includes(id))) throw new Error("Refinement retrieval contains unknown, duplicate or already loaded evidence.");
@@ -181,6 +192,7 @@ function accept(m: RefinementMaterials, w: RefinementWork, draft: Analysis, raw:
   if (!("questions" in response)) throw new Error("Refinement reading requires a draft or exact retention.");
   for (const proposal of response.refinements ?? []) {
     if (!(m.pair?.requirementIDs ?? [m.requirementID]).includes(proposal.requirementID)) throw new Error("Refinement cannot change a requirement outside its individual task or exact pair.");
+    validateRequirementSplit(m.project.requirements.find(r => r.id === proposal.requirementID)!, proposal);
     if (draft.refinements?.some((old) => JSON.stringify(old) === JSON.stringify(proposal))) continue;
     assertRefinementEvidence(m.project, m.pair?.requirementIDs ?? [m.requirementID], context.manifest.includedIDs);
     if (m.pair) validateResolutionEvidence(m.project, proposal, context.manifest.includedIDs);
@@ -202,6 +214,7 @@ function validatePairDraft(m: RefinementMaterials, output: Analysis) {
 export function replayRefinementStages(m: RefinementMaterials, w: RefinementWork) {
   refinementWorkSchema.parse(w);
   const mismatches = [JSON.stringify(w.pair) !== JSON.stringify(m.pair) ? "pair task" : undefined,
+    (w.format === 3) !== m.decomposition ? "decomposition policy" : undefined,
     w.materialKey !== m.materialKey ? "exact material" : undefined, w.requirementID !== m.requirementID ? "target" : undefined,
     w.planKey !== hash([w.policy, w.materialKey, w.batches]) ? "batch plan" : undefined].filter(Boolean);
   if (mismatches.length) throw new Error(`Refinement evidence or stage plan changed (${mismatches.join(", ")}); completed calls were retained, not repeated.`);
@@ -227,7 +240,7 @@ export function acceptRefinementStage(m: RefinementMaterials, w: RefinementWork,
   return next;
 }
 export function validateRefinementPublication(project: Project, job: Job, result: Analysis) {
-  const w = job.refinementWork!, m = refinementMaterials(project, w.requirementID, undefined, w.pair), verified = replayRefinementStages(m, w);
+  const w = job.refinementWork!, m = refinementMaterials(project, w.requirementID, undefined, w.pair, w.format === 3), verified = replayRefinementStages(m, w);
   const target = project.requirements.find((r) => r.id === w.requirementID)!;
   if (verified.blocked || !(refinementNoChangeComplete(w) || refinementStep(w) === w.batches.length * 2) || JSON.stringify(result) !== JSON.stringify(verified.draft)
     || job.context?.refinementStage?.planKey !== w.planKey || job.context.refinementStage.policy !== w.policy

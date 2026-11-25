@@ -1925,6 +1925,22 @@ export class ProjectStore {
     return limit === undefined ? jobs : jobs.reverse();
   }
 
+  /** Read only the latest exact task, not every growing job/evidence payload. */
+  latestRefinementJob(projectID: string, requirementID: string, pair?: NonNullable<RefinementWork["pair"]>, excludeID = ""): Job | undefined {
+    const row = pair ? this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND id != ?
+      AND json_type(payload, '$.context.refinementPair') = 'object'
+      AND json_extract(payload, '$.context.refinementPair.requirementIDs') = ?
+      AND COALESCE(json_extract(payload, '$.context.refinementPair.includeUnapproved'), 0) = ?
+      AND COALESCE(json_extract(payload, '$.context.refinementPair.triggerSourceIDs'), '[]') = ?
+      AND json_type(payload, '$.context.refinementTarget') IS NULL ORDER BY rowid DESC LIMIT 1`)
+      .get(projectID, excludeID, JSON.stringify(pair.requirementIDs), Number(pair.includeUnapproved), JSON.stringify(pair.triggerSourceIDs))
+      : this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND id != ?
+        AND json_type(payload, '$.context.refinementTarget') = 'object'
+        AND json_extract(payload, '$.context.refinementTarget.requirementID') = ?
+        AND json_type(payload, '$.context.refinementPair') IS NULL ORDER BY rowid DESC LIMIT 1`).get(projectID, excludeID, requirementID);
+    return row ? readStoredJob((row as { payload: string }).payload) : undefined;
+  }
+
   /** Publication-private ownership: omitted fields were never portable. Project
    * them in SQLite before decoding, then transfer these disposable objects to the
    * serializer rather than cloning the entire paid archive a second time. */
@@ -3501,6 +3517,8 @@ export class ProjectStore {
             if (result.questions.some((q) => pair.some((id) => !q.evidenceIDs?.includes(id)))) throw new Error("Resolution clarification must link both requirements.");
           }
           for (const proposal of result.refinements ?? []) {
+            if (proposal.split && (job.refinementWork?.format !== 3 || job.context?.refinementStage?.policy !== "exact-decomposition-batches-v1"))
+              throw new Error("Requirement splits require a fully verified exact decomposition task. No unverified split was published.");
             if (proposal.resolution && (!pair || !pair.includes(proposal.requirementID) || proposal.resolution.relatedRequirementID !== pair.find((id) => id !== proposal.requirementID))) throw new Error("Resolution cannot change requirements outside its exact pair task.");
             if (pair && !proposal.resolution) throw new Error("Pair tasks must propose an explicit resolution, not independent cleanup.");
             validateResolutionEvidence(project, proposal, job.context?.includedIDs);

@@ -460,6 +460,15 @@ future work. See [implementation-workspace.md](implementation-workspace.md).
 
 ## Requirement refinement (DEC-022)
 
+Confirmed extension (2026-11-24): automate candidate detection, drafting and
+preservation verification for overly broad requirements, alongside the existing
+growing-epic organization workflow. Split by independently testable behavior, not
+text length alone. Require review before changing agreed scope/structure; retain
+original evidence, scenario mappings, stable lineage and compatible completed work.
+The first implementation adds verified requirement splits to refinement review and
+new explicit Continue consent. Epic splits remain separate decisions rather than
+a combined preview/approval. See [implemented behavior and remaining limits](browser-workspace.md#automatic-requirement-decomposition-2026-11-24).
+
 Confirmed October 20, 2026: integrate duplicate/conflict candidates into Refine, with
 AI-prepared fixes requiring human approval. Consolidate true duplicates while preserving
 scenarios/evidence, propose coordinated corrections when explicit current human decisions

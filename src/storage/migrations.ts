@@ -477,6 +477,12 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 92, name: "lossless-shared-revision-storage", apply() {
   // Tables/view are installed transactionally before older migration readers run.
   // Conversion is explicit and offline; startup never rewrites the history.
+} }, { version: 93, name: "verified-requirement-decomposition", apply(db: Database.Database) {
+  // Reader fence and target-local continuation lookup, never a payload rewrite.
+  db.exec(`CREATE INDEX IF NOT EXISTS jobs_refinement_target ON jobs (project_id, json_extract(payload, '$.context.refinementTarget.requirementID'))
+      WHERE json_type(payload, '$.context.refinementTarget') = 'object';
+    CREATE INDEX IF NOT EXISTS jobs_refinement_pair ON jobs (project_id, json_extract(payload, '$.context.refinementPair.requirementIDs'))
+      WHERE json_type(payload, '$.context.refinementPair') = 'object'`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

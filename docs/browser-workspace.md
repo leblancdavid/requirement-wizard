@@ -186,6 +186,25 @@ afterward; a saved account can remain connected while its helper is stopped. Mer
 opening Settings never launches it or reads credentials. Existing project AI choices
 and coding routes are unchanged. See [setup, storage, lifecycle and limits](embedded-helper-auth.md#app-controls-2026-11-24).
 
+## Support-unit answer verification (2026-11-25)
+
+New shared answer groups check each requirement beside its complete original
+question/answer/source support. Covered non-pinned support originals are explicitly
+named among that page's checked units, so they do not need another stand-alone
+page; pinned originals remain detailed throughout. Shared support still accompanies
+other requirements that need it; indispensable
+joint comparisons remain atomic. All originals must pass against the full frozen
+draft, and a correction restarts every check without repeating paid reads.
+
+A same-project portable fixture used **17 actual adapter requests instead of 22**
+(14 reads unchanged; checks 8 → 3). A 502-original core fixture used 6 checks instead
+of 13. These are synthetic request-count checks, not real-model speed/quality claims.
+Restart the backend/rebuild the desktop app to load this change. Already-started
+groups keep their old policy, pages, receipts and spent attempts; a current 68-page
+group is not silently repacked. No reset or repeated model call is required for
+the upgrade. See [upgrade boundaries](migrations.md#support-unit-answer-verification-sqlite-93--94-conditional-portable-64)
+and [remaining performance work](discovery-performance.md).
+
 ## Direct scoped proposal admission
 
 Fresh scoped groups can now start from their exact permitted targets/support
@@ -4668,6 +4687,60 @@ batches, and corrected scope reuses the existing human source. Saved human input
 preserved. Direct service jobs still retain attempted manifests for oversized contexts.
 
 ## Epic organization
+
+### Automatic requirement decomposition (2026-11-24)
+
+New **Continue specification / Continue / Play** consent includes checks for large
+accepted requirements, even when their wording already has human approval. Manual
+**Improve requirements** also considers eligible proposed/accepted requirements.
+Opening/upgrading a project, polling, and assessment-only **Review changes** do not
+enable decomposition. Pending decisions/input still take priority. Existing completed
+compatible refinement checks and dismissed proposals are reused, not repeated merely
+because the workflow gained this capability.
+
+Local advisory signals are 4,000 combined statement/rationale/scenario characters,
+a 1,600-character statement, or at least six acceptance scenarios. These signals
+invite semantic consideration, not mandatory splitting. A cohesive requirement may
+remain intact. Split only independently testable behaviors, not implementation phases,
+technical layers or arbitrary text lengths. Small compound requirements below these
+signals are not automatically sent through decomposition in this slice.
+
+Candidates use format-3 exact refinement batches with the full target and all its
+supporting sources pinned. Every mandatory batch reads the draft and checks the
+entire frozen proposal before publication. All original scenarios must have explicit
+child mappings; the map alone does not establish semantic preservation. Missing or
+oversized evidence blocks rather than being truncated. The existing 18,000-character
+draft, 96,000-character request, 32-batch and cumulative four-attempt-per-step bounds
+remain. Calls consume the current workflow's allowance. Completed empty outcomes need
+no verification call; Stop/restart/portable adoption retain reads and spent attempts.
+
+**Specification → Review** shows the original and 2–5 proposed children, their
+scenarios and original-scenario mappings, with **Approve split** or **Keep current
+wording**. All splits require approval, including unapproved originals. Approval
+creates all children as accepted requirements in the same feature in one revision;
+the original ID/body remains retained with a superseded explanation (internally its
+status is `rejected`, as for consolidation), and the reviewed proposal records child
+IDs. Every child inherits the parent's original source links and its own explicit
+approval evidence. Historical references stay on the original rather than being
+silently rebound to narrower behavior. Unresolved questions with explicit parent
+write targets block approval; their permissions are never expanded to children.
+Stale or pending-input approvals fail without partial changes.
+
+Original implementation/check/delivery evidence is not copied as credit for children.
+Dated definition findings stay saved; normal input fingerprints mark affected
+assessments/plans outdated. Unchanged accepted children do not immediately enter
+another decomposition pass; edits or added source evidence can make them eligible.
+Existing epic checks can subsequently propose new features; combined requirement/epic
+approval and editable child allocations are not implemented.
+
+`npm run test:splitting` covers automatic/shared-budget scheduling, scenario/ledger
+validation, atomic approval/history, anti-churn, cancellation/retry, pending input,
+reader upgrade/rollback, multi-batch preservation, indexed archive exclusion and
+portable continuation. `npm run test:browser:splitting` passed
+preview, reload-without-calls, mobile layout and approval using a deterministic adapter.
+Screenshot: `.reqwizit-state/browser-requirement-split-mobile.png`. Live semantic
+quality and real-project threshold calibration remain unqualified. Decomposition is
+not a guarantee that shared evidence will fit a smaller AI context.
 
 ### Automatic feature organization checks (2026-11-15)
 

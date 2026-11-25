@@ -451,6 +451,16 @@ function requiresSeparateAnswerAuthority(project: Project, continuation?: Contin
   return project.questions.some(q => !!q.updateTargets) || !!continuation &&
     (continuation.jobs.some(j => !!j.answerGroupWork?.featurePolicy) || targets(continuation));
 }
+function requiresRequirementSplits(project: Project, continuation?: Continuation): boolean {
+  const marked = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") return false;
+    const record = value as Record<string, unknown>;
+    if (record.split || record.splitRequirementIDs || record.policy === "exact-decomposition-batches-v1") return true;
+    for (const key in record) if (Object.hasOwn(record, key) && marked(record[key])) return true;
+    return false;
+  };
+  return project.refinements.some(p => !!p.split) || !!continuation && marked(continuation);
+}
 export function portableFiles(project: Project, execution: ExecutionState, continuation?: Continuation, stagedContinuation = false) {
   const { model: _model, sources: _sources, questions: _questions, requirements: _requirements, research: _research, scans: _scans, epics: _epics,
     ...state } = project;
@@ -463,7 +473,8 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = project.sources.some(s => !!s.savedResponseResolution) || continuation?.submissions.some(s => !!s.resolutions?.length) || continuation?.jobs.some(j => !!j.submissionWork?.humanResolution) ? 62
+  const sharedFormat = requiresRequirementSplits(project, continuation) ? 63
+    : project.sources.some(s => !!s.savedResponseResolution) || continuation?.submissions.some(s => !!s.resolutions?.length) || continuation?.jobs.some(j => !!j.submissionWork?.humanResolution) ? 62
     : continuation?.jobs.some(j => !!j.submissionWork?.draftRepair?.contextPolicy) ? 61
     : continuation?.jobs.some(j => !!j.submissionWork?.supportPolicy || !!j.submissionWork?.supportRecovery) ? 60
     : continuation?.jobs.some(j => !!j.submissionWork?.transportRecovery) ? 59
@@ -613,8 +624,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.number().int().min(1).max(62), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–62 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.number().int().min(1).max(63), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–63 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -656,6 +667,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(decodeContinuationParts(files, rawContinuation)) as Continuation;
+  if (state.formatVersion < 63 && requiresRequirementSplits(project, continuation))
+    throw new Error("Requirement decomposition requires portable state format 63. Saved work was not overwritten.");
   if (state.formatVersion < 56 && requiresSeparateAnswerAuthority(project, continuation))
     throw new Error("Separate question targets and cross-feature answer permissions require portable state format 56. Saved work was not overwritten.");
   if (state.formatVersion < 57 && continuation?.jobs.some(j => !!j.answerGroupWork?.scopePolicy))

@@ -1712,6 +1712,20 @@ and the [migration ledger](migrations.md).
 
 ## Epic organization, assessment, and context
 
+Requirement decomposition reuses the individual refinement service and review
+boundary. `src/core/requirement-split.ts` supplies local advisory size signals,
+scenario-map validation, unchanged-child suppression and scoped-question guards.
+Fresh eligible tasks use format-3 `exact-decomposition-batches-v1` work in
+`src/core/refinement-stages.ts`; every original mandatory batch checks the complete
+frozen set of children before the store publishes a proposal. Ordinary discovery,
+legacy refinement and pair tasks cannot publish unverified splits. New coordinator
+consent has a separate optional `decompositionPolicy`; saved grants and compatible
+paid checks remain unchanged. Atomic review records children and lineage, retaining
+the original ID/evidence and leaving old implementation credit on that original.
+Epic creation remains the separate existing organization path. SQLite 93 and
+conditional portable 63 fence the new reader capabilities. See
+[upgrade preservation](migrations.md#verified-requirement-decomposition-2026-11-24).
+
 `src/core/organization-check.ts` adds an explicit organization-only task separate from
 ordinary discovery's partial-context permissions. Its versioned exact-input identity
 binds current feature/dependency evidence, full active feature definitions and complete

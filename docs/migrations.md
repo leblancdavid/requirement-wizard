@@ -1,5 +1,49 @@
 # Data migrations and upgrade compatibility
 
+## Verified requirement decomposition (2026-11-24)
+
+SQLite **92 → 93** is an ordered transactional reader fence and adds partial
+target/pair continuation indexes, not a historical payload rewrite. Index creation
+reads existing job metadata once in SQLite; warm task lookup decodes only the latest
+exact matching task, not the unrelated archive. Optional refinement `split` format 1 retains 2–5 child drafts and
+their original-scenario mappings; approved proposals additionally retain distinct
+`splitRequirementIDs`. Format-3 refinement work uses
+`exact-decomposition-batches-v1` and the existing exact read/frozen-check ledger.
+Old format-1 wording and format-2 pair work retain their exact instructions, context
+identities, receipts, attempts and continuation behavior. Compatible completed
+checks are not invalidated just to add splitting. There is no automatic AI replay,
+history copy, progress transfer, or assessment fingerprint change on upgrade.
+
+The optional workflow `decompositionPolicy:{format:1}` is adopted only by new
+explicit non-assessment continuation consent. Old grants remain unchanged. Opening
+a store never arms the worker or opts those grants into additional work.
+
+Conditional portable **63** is emitted for split proposals/lineage or format-3 work,
+including retained historical objects. Projects without this capability retain
+their prior minimum format. The reader rejects future formats and split-bearing
+packages claiming older formats rather than dropping unknown fields. Approval keeps
+the parent record and historical links, creates children with original source links
+and new approval sources atomically, and retains implementation evidence only under
+its original ID. Saved assessments are retained and ordinary exact-input freshness
+detects the changed requirement set. Live scoped question permissions are not widened.
+
+Executed fixtures cover 92-to-93 repeated reopen with byte-identical job rows,
+failed index-creation rollback/retry without consent changes, old
+wording-task continuation without policy conversion, format-3 read reuse after
+portable clone/adoption, cumulative cancellation attempts, malformed/incomplete
+verification, stale/pending-input approval and atomic lineage publication. A repeated
+no-change fixture performs one read and zero additional calls/jobs over 25 more
+explicit sweeps. A fitting split uses one read plus one verification; this is an
+additional semantic check, not a measured speed gain. No new recurring startup/history
+scan or background timer is introduced. Existing revision/portable storage carries the
+bounded child drafts and references sources instead of duplicating their bodies.
+A 2,000-job archive fixture confirms the target expression index is used without a
+temporary sort and forbids full archive loading during fitting decomposition.
+The full `npm test` and `npm run test:browser` suites completed successfully; the
+focused splitting/browser checks, type check, CLI help and diff check also passed.
+Live quality, real-project thresholds and combined requirement/epic review remain
+unqualified; see [behavior and limits](browser-workspace.md#automatic-requirement-decomposition-2026-11-24).
+
 ## Single-target conflict navigation (2026-11-24)
 
 No SQLite/portable version, persisted schema, assessment fingerprint or allowance

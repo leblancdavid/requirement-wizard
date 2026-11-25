@@ -29,6 +29,12 @@ helper diagnostics remain collapsed unless you open them.
 
 ## Project status
 
+Growing requirements can now receive **reviewable split proposals** through Continue
+specification or Improve requirements. Exact evidence checks precede publication;
+approval preserves the original and creates independently testable children together.
+Existing feature-organization checks can separately propose new epics. See
+[requirement decomposition](docs/browser-workspace.md#automatic-requirement-decomposition-2026-11-24).
+
 An opt-in [lossless database compaction tool](docs/storage-optimization.md) stores
 historical records once and reconstructs exact revisions. `npm run db:compact --
 --help` describes the offline-copy command; it retains the original and never

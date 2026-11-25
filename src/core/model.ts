@@ -4,6 +4,7 @@ import type { GapReport, gapCheckSchema } from "./gap-types.js";
 import { wordingKey } from "./similarity.js";
 import { definitionFindingIdentityKey } from "./definition-finding-identity.js";
 import { definitionChangeReceiptSchema } from "./definition-change-schema.js";
+import { validateRequirementSplit } from "./requirement-split.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal, accumulatedAssessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
@@ -99,9 +100,14 @@ export const researchEvidenceSchema = z.object({
 });
 export type ResearchEvidence = z.infer<typeof researchEvidenceSchema>;
 
+export const requirementSplitSchema = z.object({ format: z.literal(1), children: z.array(z.object({
+  statement: text, rationale: text, acceptance: z.array(text).min(1).max(8),
+  originalAcceptance: z.array(z.number().int().min(0).max(7)).min(1).max(8),
+}).strict()).min(2).max(5) }).strict();
 export const refinementProposalSchema = z.object({
   requirementID: z.string().min(1), statement: text, rationale: text,
   acceptance: z.array(text).min(1).max(8), reason: text,
+  split: requirementSplitSchema.optional(),
   resolution: z.object({
     format: z.literal(1), relatedRequirementID: z.string().min(1),
     basis: z.enum(["duplicate", "human-decision"]), evidenceIDs: z.array(z.string().min(1)).min(1).max(20),
@@ -115,9 +121,17 @@ const refinementSchema = refinementProposalSchema.extend({
   id: z.string(), fingerprint: z.string(), original: requirement,
   relatedOriginal: requirement.optional(), resolutionContextKey: z.string().optional(), decisionBasis: decisionBasisSchema.optional(),
   resolutionTriggerSourceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
+  splitRequirementIDs: z.array(z.string().min(1)).min(2).max(5).optional(),
   status: z.enum(["pending", "accepted", "dismissed"]), createdAtRevision: z.number().int(),
 }).superRefine((value, ctx) => {
   if (value.resolution && (!value.relatedOriginal || value.relatedOriginal.id !== value.resolution.relatedRequirementID || !value.resolutionContextKey)) ctx.addIssue({ code: "custom", message: "Resolution provenance is incomplete." });
+  if (value.split) {
+    try { validateRequirementSplit(value.original, value); }
+    catch (error) { ctx.addIssue({ code: "custom", message: error instanceof Error ? error.message : "Invalid requirement split." }); }
+    if (value.status === "accepted" && (!value.splitRequirementIDs || value.splitRequirementIDs.length !== value.split.children.length
+      || new Set(value.splitRequirementIDs).size !== value.splitRequirementIDs.length)) ctx.addIssue({ code: "custom", message: "Approved splits require distinct durable child identities." });
+  }
+  if (value.splitRequirementIDs && (!value.split || value.status !== "accepted")) ctx.addIssue({ code: "custom", message: "Split lineage requires an approved decomposition." });
 });
 
 /** Schema composition only; persisted/imported projects must use projectSchema. */
@@ -152,6 +166,11 @@ export const projectFields = z.object({
   })).default([]),
 });
 export const projectSchema = projectFields.superRefine((project, ctx) => {
+  if (project.refinements.some(p => !!p.splitRequirementIDs)) {
+    const requirements = new Set(project.requirements.map(r => r.id));
+    if (project.refinements.some(p => p.splitRequirementIDs?.some(id => id === p.requirementID || !requirements.has(id))))
+      ctx.addIssue({ code: "custom", message: "Split lineage must reference retained child requirements, never the parent or missing records." });
+  }
   if (new Set(project.definitionChangeReviews?.map((r) => r.epicID)).size !== (project.definitionChangeReviews?.length ?? 0)
     || project.definitionChangeReviews?.some((r) => r.projectID !== project.id || r.reviewedRevision > project.revision))
     ctx.addIssue({ code: "custom", message: "Change reviews require distinct area identities and original dated revisions." });
@@ -345,7 +364,7 @@ export type Job = {
     readinessStage?: { policy: "exact-readiness-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };
     refinementOnly?: boolean;
-    refinementStage?: { policy: "exact-refinement-batches-v1" | "exact-resolution-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
+    refinementStage?: { policy: "exact-refinement-batches-v1" | "exact-resolution-batches-v1" | "exact-decomposition-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     /** Soft stopping target; a completed package may exceed it. */
     questionTarget?: number;
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };

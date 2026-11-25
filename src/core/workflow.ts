@@ -47,6 +47,7 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   readiness: workflowReadinessSchema.optional(),
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   organizationPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  decompositionPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]),
     collection: z.object({ format: z.literal(1), target: z.number().int().min(1).max(50),
